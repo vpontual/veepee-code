@@ -603,40 +603,54 @@ export class Benchmarker {
 
     onProgress?.('filter', `${candidates.length} models with tool support out of ${allModels.length} total`);
 
-    // Phase 2: Quick responsiveness check — send a simple prompt, measure TTFT
+    // Phase 2: Speed check — send a prompt, allow up to 60s for model loading,
+    // then measure GENERATION SPEED (tok/s). Cold start doesn't matter —
+    // models only load once per session. What matters is how fast they generate.
     const responsive: ModelProfile[] = [];
     for (const model of candidates) {
-      onProgress?.('speed-check', `Testing ${model.name} (${model.parameterSize}) responsiveness...`);
+      onProgress?.('speed-check', `Testing ${model.name} (${model.parameterSize})...`);
 
       try {
         const start = Date.now();
         let ttft = 0;
+        let tokenCount = 0;
+        let genStart = 0;
 
         const stream = await this.ollama.chat({
           model: model.name,
-          messages: [{ role: 'user', content: 'Say OK' }],
+          messages: [{ role: 'user', content: 'Count from 1 to 10, one number per line.' }],
           stream: true,
-          options: { num_predict: 5, temperature: 0 },
+          options: { num_predict: 50, temperature: 0 },
         });
 
         for await (const chunk of stream) {
-          if (ttft === 0 && chunk.message.content) {
-            ttft = Date.now() - start;
+          if (chunk.message.content) {
+            if (ttft === 0) {
+              ttft = Date.now() - start;
+              genStart = Date.now();
+            }
+            tokenCount++;
           }
+          // Abort if model takes >60s to start generating (truly broken/huge)
+          if (ttft === 0 && Date.now() - start > 60000) break;
         }
 
-        if (ttft > 0 && ttft < 15000) {
+        const genTime = genStart > 0 ? Date.now() - genStart : 0;
+        const tokPerSec = genTime > 0 ? Math.round((tokenCount / genTime) * 1000) : 0;
+        const loadTime = ttft > 0 ? (ttft / 1000).toFixed(1) : 'timeout';
+
+        if (tokPerSec >= 1) {
           responsive.push(model);
-          onProgress?.('speed-check', `  ✓ ${model.name}: ${ttft}ms TTFT — fast enough`);
+          onProgress?.('speed-check', `  ✓ ${model.name}: ${tokPerSec} tok/s (${loadTime}s load) — usable`);
         } else {
-          onProgress?.('speed-check', `  ✗ ${model.name}: ${ttft || 'timeout'}ms TTFT — too slow, skipping`);
+          onProgress?.('speed-check', `  ✗ ${model.name}: ${tokPerSec} tok/s (${loadTime}s load) — too slow`);
         }
       } catch {
-        onProgress?.('speed-check', `  ✗ ${model.name}: failed to respond, skipping`);
+        onProgress?.('speed-check', `  ✗ ${model.name}: failed to respond`);
       }
     }
 
-    onProgress?.('speed-check', `${responsive.length} models passed responsiveness check`);
+    onProgress?.('speed-check', `${responsive.length}/${candidates.length} models passed speed check`);
 
     if (responsive.length === 0) {
       return { results: [], roster: { act: null, plan: null, chat: null, code: null, search: null } };
