@@ -183,6 +183,11 @@ export class TUI {
     this.addMessage({ role: 'user', content, timestamp: Date.now() });
     this.state = 'waiting';
 
+    // Clear the input box immediately
+    this.input.text = '';
+    this.input.cursor = 0;
+    this.commandMenuVisible = false;
+
     // Start turn tracker (agent tree view)
     this.turnTracker = {
       startTime: Date.now(),
@@ -361,17 +366,36 @@ export class TUI {
     } else {
       this.renderConversation(rows, cols);
     }
+
+    // ALWAYS position cursor in the input box as the final step
+    this.positionCursorInInput(rows, cols);
+  }
+
+  /** Position the cursor inside the input box — must be called LAST after all rendering */
+  private positionCursorInInput(rows: number, cols: number): void {
+    if (!this.resolveInput) {
+      hideCursor();
+      return;
+    }
+
+    const boxWidth = Math.min(cols - 4, 90);
+    const leftPad = Math.max(2, Math.floor((cols - boxWidth) / 2));
+    const statusBarHeight = 1;
+    const inputAreaHeight = 4;
+    const inputRow = rows - statusBarHeight - inputAreaHeight;
+
+    showCursor();
+    moveTo(inputRow + 1, leftPad + 2 + this.input.cursor);
   }
 
   private renderWelcome(rows: number, cols: number): void {
     clearScreen();
-    hideCursor();
 
     const logo = getLogo(cols);
     const logoHeight = logo.length;
 
     // Calculate vertical position — logo centered in upper half
-    const inputBoxHeight = 5; // box + model line + hints + tip + spacer
+    const inputBoxHeight = 5;
     const contentHeight = logoHeight + 4 + inputBoxHeight;
     const startRow = Math.max(2, Math.floor((rows - contentHeight) / 2) - 2);
 
@@ -647,30 +671,11 @@ export class TUI {
     // Keyboard hints below box
     const hints = `${theme.textBold('tab')} ${theme.dim('tools')}  ${theme.textBold('ctrl+p')} ${theme.dim('commands')}  ${theme.textBold('/help')} ${theme.dim('help')}`;
     writeAt(topRow + 4, leftPad + 2, center(hints, boxWidth - 4));
-
-    // Show cursor in input
-    if (this.resolveInput) {
-      showCursor();
-      moveTo(topRow + 1, leftPad + 2 + this.input.cursor);
-    }
   }
 
   private renderStreamArea(): void {
-    // Quick update of just the message area during streaming
-    // Instead of full re-render, just update the bottom of messages
-    const { rows, cols } = getSize();
-    const statusBarHeight = 1;
-    const inputAreaHeight = 4;
-    const messagesEndRow = rows - statusBarHeight - inputAreaHeight - 1;
-
-    this.renderMessages(1, messagesEndRow, cols);
-
-    // Re-show cursor in input area
-    if (this.resolveInput) {
-      const inputRow = rows - statusBarHeight - inputAreaHeight;
-      showCursor();
-      moveTo(inputRow + 1, Math.max(2, Math.floor((cols - Math.min(cols - 4, 90)) / 2)) + 2 + this.input.cursor);
-    }
+    // Full re-render during streaming to keep everything in sync
+    this.render();
   }
 
   private renderStatusBar(row: number, cols: number): void {
