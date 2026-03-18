@@ -110,44 +110,55 @@ async function main() {
     return tui.promptPermission(toolName, args, reason);
   });
 
-  // Run first-launch benchmark INSIDE the TUI so the user sees progress
+  // Run first-launch benchmark — blocking but with visible progress in TUI
   const benchmarker = new Benchmarker(config.proxyUrl);
   const existingBenchmarks = await benchmarker.loadLatest();
   if (!existingBenchmarks) {
-    tui.showInfo(`${theme.accent('First launch')} — benchmarking your models to find the best defaults...`);
-    tui.showInfo(theme.dim('This only runs once. Use /benchmark to re-run anytime.'));
+    // Switch from welcome to conversation view so progress messages are visible
+    tui.showInfo(`${theme.accent('⚡ First launch')} — ranking your models to find the best defaults.`);
+    tui.showInfo(theme.dim('Testing 3 models × 11 tests. This takes ~2 minutes and only runs once.'));
+    tui.showInfo('');
 
-    // Benchmark standard-tier models (6-25B) — fast and practical for coding
     const standardModels = allModels
       .filter(m => m.tier === 'standard' && m.capabilities.includes('tools'))
-      .slice(0, 5);
+      .slice(0, 3);
 
     if (standardModels.length > 0) {
       try {
         const results = await benchmarker.benchmarkAll(standardModels, {
           onProgress: (model, test, mi, mt, ti, tt) => {
-            tui.showInfo(theme.dim(`[${mi}/${mt}] ${model} — ${test} (${ti}/${tt})`));
+            // Overwrite last message with progress update
+            const msgs = tui['messages'] as Array<{ role: string; content: string }>;
+            const lastIdx = msgs.length - 1;
+            if (lastIdx >= 0 && msgs[lastIdx].content.startsWith('[')) {
+              msgs[lastIdx].content = `[${mi}/${mt}] ${model} — ${test} (${ti}/${tt})`;
+            } else {
+              tui.showInfo(`[${mi}/${mt}] ${model} — ${test} (${ti}/${tt})`);
+            }
+            tui.render();
           },
         });
 
-        tui.showInfo(`${theme.success('Benchmark complete')} — ${results.length} models ranked.`);
-
-        // Show top result
-        if (results.length > 0) {
-          tui.showInfo(`${theme.accent('Best model:')} ${results[0].model} (score: ${results[0].overall}/100, ${results[0].performance.tokensPerSecond} tok/s)`);
+        tui.showInfo('');
+        tui.showInfo(`${theme.success('✓ Benchmark complete')} — ${results.length} models ranked:`);
+        for (const r of results) {
+          tui.showInfo(`  ${theme.accent(r.model.padEnd(25))} score: ${r.overall}/100  ${r.performance.tokensPerSecond} tok/s`);
         }
 
-        // Re-select default model using benchmark data
+        // Re-select default model
         defaultModel = modelManager.selectDefault();
         defaultProfile = modelManager.getProfile(defaultModel);
         agent.setModel(defaultModel);
         tui.updateModel(defaultModel, defaultProfile?.parameterSize);
-      } catch {
-        tui.showInfo(theme.dim('Benchmark skipped (proxy busy). Run /benchmark later.'));
+        tui.showInfo('');
+        tui.showInfo(`${theme.accent('Selected:')} ${defaultModel}`);
+      } catch (err) {
+        tui.showInfo(theme.dim(`Benchmark failed: ${(err as Error).message}. Run /benchmark later.`));
       }
     } else {
-      tui.showInfo(theme.dim('No standard-tier models with tool support found. Skipping benchmark.'));
+      tui.showInfo(theme.dim('No standard-tier models found. Skipping benchmark.'));
     }
+    tui.showInfo('');
   }
 
   // Handle --resume CLI argument
