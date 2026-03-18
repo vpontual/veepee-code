@@ -22,6 +22,32 @@ import { registerNewsTools } from './tools/news.js';
 
 const VERSION = '0.1.0';
 
+const INIT_PROMPT = `Analyze this codebase and create a LLAMA.md file in the project root. This file will be automatically loaded into your system prompt on every session, so it must be high-quality and useful.
+
+The file should contain (~150 lines):
+
+1. **Project overview** — What this project does, in 2-3 sentences.
+
+2. **Tech stack** — Language, framework, key libraries/dependencies.
+
+3. **Build/lint/test commands** — The exact commands to build, lint, typecheck, and test this project. Especially include how to run a SINGLE test file or test case (this is critical for agent workflows).
+
+4. **Code style guidelines** — Import ordering, formatting rules, naming conventions (camelCase vs snake_case, etc.), type usage, error handling patterns. Infer these from the existing code — don't guess.
+
+5. **Architecture notes** — Key directories, where to find what, important patterns (e.g., "all API routes are in src/routes/", "we use repository pattern for DB access").
+
+6. **Common gotchas** — Things an agent might get wrong (e.g., "always run migrations before tests", "this project uses pnpm not npm", "env vars must be in both .env and docker-compose.yml").
+
+To create this file:
+- Use glob and list_files to understand the project structure
+- Read package.json, Cargo.toml, requirements.txt, pyproject.toml, or equivalent for dependencies and scripts
+- Read a few representative source files to understand code style
+- Check for existing config files: .eslintrc, .prettierrc, tsconfig.json, ruff.toml, .editorconfig, etc.
+- Check for existing instruction files: .cursor/rules/, .cursorrules, .github/copilot-instructions.md, CLAUDE.md, AGENTS.md, OpenCode.md, GEMINI.md — incorporate relevant content
+- Check README.md for project description and setup instructions
+
+Write the LLAMA.md file using write_file. Be specific and actionable — vague guidelines are useless. Every line should help an agent write better code in this specific project.`;
+
 async function main() {
   const config = loadConfig();
 
@@ -206,7 +232,7 @@ async function handleCommand(
         `  ${theme.accent('/model auto')}       Auto-switch on     ${theme.accent('/tools')}      List all tools`,
         `  ${theme.accent('/clear')}            Clear history      ${theme.accent('/compact')}    Free context space`,
         `  ${theme.accent('/status')}           Session info       ${theme.accent('/quit')}       Exit`,
-        `  ${theme.accent('/setup')}            Validate tools     ${theme.accent('/permissions')} Permission settings`,
+        `  ${theme.accent('/init')}             Create LLAMA.md    ${theme.accent('/setup')}       Validate tools`,
         '',
         `${theme.textBold('Modes:')}`,
         `  ${theme.accent('/plan')}   Plan mode — thinking ON, heavy model, clarifying questions first`,
@@ -410,6 +436,65 @@ async function handleCommand(
       tui.showInfo('Validating integrations...');
       const results = await validateIntegrations(config);
       tui.showInfo(formatSetupReport(results));
+      return false;
+    }
+
+    case '/init': {
+      const llamaMdPath = `${process.cwd()}/LLAMA.md`;
+      const exists = await import('fs').then(fs => fs.existsSync(llamaMdPath));
+
+      tui.showInfo(`Analyzing project to ${exists ? 'improve' : 'create'} LLAMA.md...`);
+      tui.addUserMessage(INIT_PROMPT + (exists ? '\n\nThere is already a LLAMA.md in this directory. Read it and improve it — keep what\'s good, add what\'s missing, fix what\'s wrong.' : ''));
+
+      // Run through the agent to let the model analyze and create LLAMA.md
+      tui.startStream();
+      const turnStart = Date.now();
+
+      for await (const event of agent.run(INIT_PROMPT + (exists ? '\n\nThere is already a LLAMA.md in this directory. Read it and improve it.' : ''))) {
+        switch (event.type) {
+          case 'text':
+            if (event.content) tui.appendStream(event.content);
+            break;
+          case 'tool_call':
+            tui.endStream();
+            tui.showToolCall(event.name!, event.args || {});
+            break;
+          case 'tool_result':
+            tui.showToolResult(event.name!, event.success!, event.content || event.error || '');
+            tui.startStream();
+            break;
+          case 'done':
+            tui.endStream();
+            tui.showCompletionBadge(modelManager.getCurrentModel(), Date.now() - turnStart);
+
+            // Auto-add LLAMA.md to .gitignore if it's a git repo and not already ignored
+            try {
+              const { execSync } = await import('child_process');
+              const isGit = await import('fs').then(fs => fs.existsSync(`${process.cwd()}/.git`));
+              if (isGit) {
+                const gitignorePath = `${process.cwd()}/.gitignore`;
+                const fs = await import('fs');
+                if (fs.existsSync(gitignorePath)) {
+                  const content = fs.readFileSync(gitignorePath, 'utf-8');
+                  if (!content.includes('LLAMA.md')) {
+                    fs.appendFileSync(gitignorePath, '\n# Llama Code project instructions\nLLAMA.md\n');
+                    tui.showInfo(`${theme.success('Added LLAMA.md to .gitignore')}`);
+                  }
+                } else {
+                  fs.writeFileSync(gitignorePath, '# Llama Code project instructions\nLLAMA.md\n');
+                  tui.showInfo(`${theme.success('Created .gitignore with LLAMA.md')}`);
+                }
+              }
+            } catch { /* non-critical */ }
+            break;
+          case 'error':
+            tui.endStream();
+            tui.showError(event.error || 'Failed to analyze project');
+            break;
+          default:
+            break;
+        }
+      }
       return false;
     }
 

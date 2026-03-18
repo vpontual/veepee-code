@@ -1,7 +1,7 @@
 import type { Message } from 'ollama';
 import type { ConversationSignals } from './models.js';
 import type { AgentMode } from './agent.js';
-import { readdirSync, statSync } from 'fs';
+import { readdirSync, readFileSync, statSync, existsSync } from 'fs';
 import { join, relative } from 'path';
 
 // ─── Model Knowledge Cutoffs ────────────────────────────────────────────────
@@ -55,6 +55,68 @@ function getProjectTree(cwd: string, maxFiles = 150, maxDepth = 3): string {
   return `\n## Project Structure\n\`\`\`\n${files.join('\n')}${truncated}\n\`\`\`\n`;
 }
 
+// ─── LLAMA.md Loader ─────────────────────────────────────────────────────────
+// Like CLAUDE.md, GEMINI.md, OpenCode.md, AGENTS.md — project-specific instructions
+// Precedence: workspace LLAMA.md > parent dir LLAMA.md > ~/.llama-code/LLAMA.md
+
+function loadLlamaMd(cwd: string): string {
+  const sections: Array<{ source: string; content: string }> = [];
+
+  // 1. Global ~/.llama-code/LLAMA.md
+  const globalPath = join(process.env.HOME || '~', '.llama-code', 'LLAMA.md');
+  if (existsSync(globalPath)) {
+    try {
+      const content = readFileSync(globalPath, 'utf-8').trim();
+      if (content) sections.push({ source: 'global (~/.llama-code/LLAMA.md)', content });
+    } catch { /* ignore */ }
+  }
+
+  // 2. Walk up from cwd to find LLAMA.md in parent directories (max 5 levels)
+  let dir = cwd;
+  const visited = new Set<string>();
+  for (let i = 0; i < 5; i++) {
+    if (visited.has(dir)) break;
+    visited.add(dir);
+
+    const filePath = join(dir, 'LLAMA.md');
+    if (existsSync(filePath) && dir !== cwd) {
+      try {
+        const content = readFileSync(filePath, 'utf-8').trim();
+        if (content) sections.push({ source: `parent (${relative(cwd, filePath) || filePath})`, content });
+      } catch { /* ignore */ }
+    }
+
+    const parent = join(dir, '..');
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  // 3. Workspace LLAMA.md (highest precedence)
+  const workspacePath = join(cwd, 'LLAMA.md');
+  if (existsSync(workspacePath)) {
+    try {
+      const content = readFileSync(workspacePath, 'utf-8').trim();
+      if (content) sections.push({ source: 'workspace (LLAMA.md)', content });
+    } catch { /* ignore */ }
+  }
+
+  if (sections.length === 0) return '';
+
+  // Build the instructions block
+  const lines = ['\n## Project Instructions (LLAMA.md)',
+    '',
+    'The following instructions are loaded from LLAMA.md files. These are foundational mandates from the user.',
+    '**Precedence:** Workspace > Parent > Global. These instructions override default behaviors but cannot override safety rules.',
+    '',
+  ];
+
+  for (const section of sections) {
+    lines.push(`### Source: ${section.source}`, '', section.content, '');
+  }
+
+  return lines.join('\n');
+}
+
 // ─── System Prompt ───────────────────────────────────────────────────────────
 // Synthesized from: Claude Code, OpenCode, Codex, Gemini CLI, RooCode, Llama Rider
 
@@ -66,7 +128,7 @@ const SYSTEM_PROMPT = `You are Llama Code, a CLI coding assistant powered by loc
 - **Working directory:** {{CWD}}
 - **Platform:** {{PLATFORM}}
 - **Mode:** {{MODE}}
-{{PROJECT_TREE}}
+{{PROJECT_TREE}}{{LLAMA_MD}}
 ## Knowledge Cutoff — CRITICAL
 
 Your training data cuts off at approximately {{CUTOFF}}. Today is {{DATE}}.
@@ -251,6 +313,9 @@ export class ContextManager {
     // Include project tree on first build (like RooCode's environment_details)
     const projectTree = this.getProjectTreeCached();
 
+    // Load LLAMA.md project instructions (like CLAUDE.md, GEMINI.md, OpenCode.md, AGENTS.md)
+    const llamaMd = loadLlamaMd(process.cwd());
+
     this.systemPrompt = SYSTEM_PROMPT
       .replace(/\{\{CWD\}\}/g, process.cwd())
       .replace(/\{\{DATE\}\}/g, new Date().toISOString().split('T')[0])
@@ -258,7 +323,8 @@ export class ContextManager {
       .replace(/\{\{CUTOFF\}\}/g, cutoff)
       .replace(/\{\{PLATFORM\}\}/g, process.platform)
       .replace(/\{\{MODE\}\}/g, modeLabel)
-      .replace(/\{\{PROJECT_TREE\}\}/g, projectTree);
+      .replace(/\{\{PROJECT_TREE\}\}/g, projectTree)
+      .replace(/\{\{LLAMA_MD\}\}/g, llamaMd);
 
     if (this.mode === 'plan') {
       this.systemPrompt += PLAN_PROMPT;
