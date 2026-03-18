@@ -434,6 +434,10 @@ export class TUI {
 
     let row = startRow;
 
+    // DEBUG: write message count and roles to top-right corner
+    const debugInfo = `[msgs:${this.messages.length} roles:${this.messages.map(m => m.role[0]).join(',')} vis:${endRow - startRow}]`;
+    writeAt(1, cols - debugInfo.length - 1, theme.error(debugInfo));
+
     // Combine committed messages + current stream
     const allMessages = [...this.messages];
 
