@@ -196,7 +196,7 @@ export class ModelManager {
     this.models.sort((a, b) => b.score - a.score);
   }
 
-  /** Pick the best default model */
+  /** Pick the best default model, respecting size limits and benchmark data */
   selectDefault(): string {
     // User override takes priority
     if (this.preferredModel) {
@@ -207,20 +207,66 @@ export class ModelManager {
       }
     }
 
-    // Best model with tool calling support
+    // If benchmark results exist, use the top-ranked model that fits size limits
+    const benchDefault = this.selectFromBenchmarks();
+    if (benchDefault) {
+      this.currentModel = benchDefault;
+      return benchDefault;
+    }
+
+    // Filter: tool support + within size limits (no 80B slugs, no 3B toys)
+    const candidates = this.models.filter(m =>
+      m.capabilities.includes('tools') &&
+      m.parameterCount <= this.config.maxModelSize &&
+      m.parameterCount >= this.config.minModelSize
+    );
+
+    if (candidates.length > 0) {
+      this.currentModel = candidates[0].name;
+      return candidates[0].name;
+    }
+
+    // Relax: just tool support, any size
     const withTools = this.models.filter(m => m.capabilities.includes('tools'));
     if (withTools.length > 0) {
       this.currentModel = withTools[0].name;
       return withTools[0].name;
     }
 
-    // Fallback to highest scored model
     if (this.models.length > 0) {
       this.currentModel = this.models[0].name;
       return this.models[0].name;
     }
 
     throw new Error('No models available on the proxy');
+  }
+
+  /** Select default model from benchmark results — best overall that's fast enough */
+  private selectFromBenchmarks(): string | null {
+    try {
+      const { readFileSync, existsSync } = require('fs') as typeof import('fs');
+      const { resolve } = require('path') as typeof import('path');
+      const latestPath = resolve(process.env.HOME || '~', '.veepee-code', 'benchmarks', 'latest.json');
+      if (!existsSync(latestPath)) return null;
+
+      const results = JSON.parse(readFileSync(latestPath, 'utf-8')) as Array<{
+        model: string; overall: number; performance: { tokensPerSecond: number; timeToFirstToken: number };
+      }>;
+
+      // Find highest-scoring model with reasonable speed (>2 tok/s) and within size limits
+      for (const r of results) {
+        const profile = this.getProfile(r.model);
+        if (!profile) continue;
+        if (profile.parameterCount > this.config.maxModelSize) continue;
+        if (profile.parameterCount < this.config.minModelSize) continue;
+        if (r.performance.tokensPerSecond < 2) continue; // too slow
+        if (!profile.capabilities.includes('tools')) continue;
+        return r.model;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   /** Evaluate if we should switch models based on conversation signals */
@@ -236,34 +282,25 @@ export class ModelManager {
 
     const complexity = this.computeComplexity(signals);
 
-    // Determine target tier
+    // Determine target tier — but NEVER go below minModelSize or above maxModelSize
     let targetTier: 'heavy' | 'standard' | 'light';
     if (complexity >= 8) targetTier = 'heavy';
     else if (complexity >= 3) targetTier = 'standard';
-    else targetTier = 'light';
+    else targetTier = 'standard'; // NEVER auto-downgrade to light — too unreliable for coding
 
     // Don't switch if already at the right tier
     if (current.tier === targetTier) return null;
 
-    // Find best model in target tier with tool support
+    // Find best model in target tier with tool support + within size limits
     const candidates = this.models
-      .filter(m => m.tier === targetTier && m.capabilities.includes('tools'))
+      .filter(m => m.tier === targetTier &&
+        m.capabilities.includes('tools') &&
+        m.parameterCount >= this.config.minModelSize &&
+        m.parameterCount <= this.config.maxModelSize)
       .sort((a, b) => b.score - a.score);
 
-    // Fallback: if no tool-capable model in target tier, try adjacent tier
-    if (candidates.length === 0) {
-      if (targetTier === 'heavy') return null; // stay on current
-      if (targetTier === 'light') {
-        // Try standard tier instead
-        const stdCandidates = this.models
-          .filter(m => m.tier === 'standard' && m.capabilities.includes('tools'));
-        if (stdCandidates.length > 0) {
-          this.switchTo(stdCandidates[0].name);
-          return stdCandidates[0].name;
-        }
-      }
-      return null;
-    }
+    // Fallback: if no suitable model in target tier, stay on current
+    if (candidates.length === 0) return null;
 
     const selected = candidates[0];
     if (selected.name === this.currentModel) return null;

@@ -8,6 +8,8 @@ export interface Config {
   model: string | null;
   autoSwitch: boolean;
   maxTurns: number;
+  maxModelSize: number;  // max parameter count in billions (default 40)
+  minModelSize: number;  // min for act mode — skip tiny models (default 6)
   ha: { url: string; token: string } | null;
   mastodon: { url: string; token: string } | null;
   spotify: { clientId: string; clientSecret: string; refreshToken: string } | null;
@@ -35,6 +37,8 @@ export function loadConfig(): Config {
     model: env.VEEPEE_CODE_MODEL || null,
     autoSwitch: env.VEEPEE_CODE_AUTO_SWITCH !== 'false',
     maxTurns: parseInt(env.VEEPEE_CODE_MAX_TURNS || '50', 10),
+    maxModelSize: parseFloat(env.VEEPEE_CODE_MAX_MODEL_SIZE || '40'),
+    minModelSize: parseFloat(env.VEEPEE_CODE_MIN_MODEL_SIZE || '6'),
     ha: env.HA_URL && env.HA_TOKEN
       ? { url: env.HA_URL, token: env.HA_TOKEN } : null,
     mastodon: env.MASTODON_URL && env.MASTODON_TOKEN
