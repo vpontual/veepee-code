@@ -413,10 +413,15 @@ export class TUI {
     clearScreen();
 
     // Layout: turn tracker (if active), messages area, input box, status bar
+    // Input box = 4 rows: border + text + model + border
+    // Below box = 1 row: hints
+    // Below hints = 1 row: status bar
     const statusBarHeight = 1;
-    const inputAreaHeight = 4;
+    const hintsHeight = 1;
+    const inputBoxHeight = 4;  // ╭ border + text + model + ╰ border
+    const totalBottomHeight = inputBoxHeight + hintsHeight + statusBarHeight;
     const trackerHeight = this.turnTracker?.active ? Math.min(this.turnTracker.toolCalls.length + 2, 8) : 0;
-    const messagesEndRow = rows - statusBarHeight - inputAreaHeight - trackerHeight - 1;
+    const messagesEndRow = rows - totalBottomHeight - trackerHeight - 1;
 
     // Render messages
     this.renderMessages(1, messagesEndRow, cols);
@@ -426,11 +431,11 @@ export class TUI {
       this.renderTurnTracker(messagesEndRow + 1, cols);
     }
 
-    // Input box at bottom
-    const inputRow = rows - statusBarHeight - inputAreaHeight;
+    // Input box at bottom (above hints + status bar)
+    const inputRow = rows - totalBottomHeight;
     this.renderInputBox(inputRow, cols);
 
-    // Status bar
+    // Status bar at very bottom
     this.renderStatusBar(rows, cols);
   }
 
