@@ -351,6 +351,10 @@ export class TUI {
   /** Show an info/system message */
   showInfo(msg: string): void {
     this.addMessage({ role: 'system', content: msg });
+    // Switch to conversation view if we have messages (e.g., benchmark progress)
+    if (this.state === 'welcome' && this.messages.length > 0) {
+      this.state = 'conversation';
+    }
     this.render();
   }
 
