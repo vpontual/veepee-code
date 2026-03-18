@@ -1,5 +1,4 @@
 import chalk from 'chalk';
-import { appendFileSync } from 'fs';
 import { theme, box, icons } from './theme.js';
 import {
   enterAltScreen, exitAltScreen, showCursor, hideCursor,
@@ -400,12 +399,13 @@ export class TUI {
   }
 
   private renderConversation(rows: number, cols: number): void {
-    // Don't use clearScreen() — it causes blank flashes between redraws.
-    // Instead, overwrite every line in place. Blank unused lines with spaces.
+    // Clear by overwriting each line
     hideCursor();
     for (let r = 1; r <= rows; r++) {
-      writeAt(r, 1, ' '.repeat(cols));
+      moveTo(r, 1);
+      process.stdout.write(' '.repeat(cols));
     }
+
 
     // Layout: turn tracker (if active), messages area, input box, status bar
     // Input box = 4 rows: border + text + model + border
@@ -418,8 +418,8 @@ export class TUI {
     const trackerHeight = this.turnTracker?.active ? Math.min(this.turnTracker.toolCalls.length + 2, 8) : 0;
     const messagesEndRow = rows - totalBottomHeight - trackerHeight - 1;
 
-    // Render messages
-    this.renderMessages(1, messagesEndRow, cols);
+    // Render messages (start at row 3 — rows 1-2 can be clipped by terminal title/tab bar)
+    this.renderMessages(3, messagesEndRow, cols);
 
     // Render turn tracker (agent tree view) above input box
     if (this.turnTracker?.active && trackerHeight > 0) {
@@ -439,14 +439,6 @@ export class TUI {
     const leftPad = Math.max(2, Math.floor((cols - maxWidth) / 2));
 
     let row = startRow;
-
-    // Debug: write to file to trace the message array
-    appendFileSync('/tmp/vcode-debug.log',
-      `RENDER t=${Date.now()} msgs=${this.messages.length} ` +
-      `roles=[${this.messages.map(m => m.role).join(',')}] ` +
-      `first=${this.messages[0]?.content?.slice(0, 30) || 'NONE'} ` +
-      `startRow=${startRow} endRow=${endRow} vis=${endRow - startRow}\n`
-    );
 
     // Combine committed messages + current stream
     const allMessages = [...this.messages];
@@ -497,9 +489,14 @@ export class TUI {
   private formatMessage(msg: Message, maxWidth: number): string[] {
     switch (msg.role) {
       case 'user': {
-        // Simple, guaranteed-visible format: blue arrow + bold white text
-        const wrapped = wordWrap(msg.content, maxWidth - 4);
-        return wrapped.map(wl => chalk.blue('  > ') + chalk.bold(wl));
+        // Full-width highlighted block with colored left border (like OpenCode)
+        const contentWidth = maxWidth - 3;
+        const wrapped = wordWrap(msg.content, contentWidth);
+        const bg = chalk.bgHex('#2A2A4A');
+        return wrapped.map(wl => {
+          const padded = wl + ' '.repeat(Math.max(0, contentWidth - stripAnsi(wl).length));
+          return bg(chalk.hex('#85C7F2')('│') + ' ' + chalk.white.bold(padded));
+        });
       }
 
       case 'assistant': {
