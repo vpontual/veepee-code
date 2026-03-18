@@ -70,6 +70,8 @@ export class TUI {
   private commandMenuVisible = false;
   private commandMenuSelection = 0;
   private filteredCommands: typeof COMMANDS = [];
+  private lastInputBoxRow = 0;   // track where the input box was actually rendered
+  private lastInputBoxLeftPad = 0;
   private scrollOffset = 0;
   private state: 'welcome' | 'conversation' | 'waiting' = 'welcome';
   private modelName = '';
@@ -372,20 +374,15 @@ export class TUI {
   }
 
   /** Position the cursor inside the input box — must be called LAST after all rendering */
-  private positionCursorInInput(rows: number, cols: number): void {
+  private positionCursorInInput(_rows: number, _cols: number): void {
     if (!this.resolveInput) {
       hideCursor();
       return;
     }
 
-    const boxWidth = Math.min(cols - 4, 90);
-    const leftPad = Math.max(2, Math.floor((cols - boxWidth) / 2));
-    const statusBarHeight = 1;
-    const inputAreaHeight = 4;
-    const inputRow = rows - statusBarHeight - inputAreaHeight;
-
+    // Use the actual rendered position of the input box (row + 1 for the text line inside the border)
     showCursor();
-    moveTo(inputRow + 1, leftPad + 2 + this.input.cursor);
+    moveTo(this.lastInputBoxRow + 1, this.lastInputBoxLeftPad + 2 + this.input.cursor);
   }
 
   private renderWelcome(rows: number, cols: number): void {
@@ -598,6 +595,10 @@ export class TUI {
   private renderInputBox(topRow: number, cols: number): void {
     const boxWidth = Math.min(cols - 4, 90);
     const leftPad = Math.max(2, Math.floor((cols - boxWidth) / 2));
+
+    // Store position for cursor placement
+    this.lastInputBoxRow = topRow;
+    this.lastInputBoxLeftPad = leftPad;
 
     // Top border
     const topBorder = theme.borderFocused(
