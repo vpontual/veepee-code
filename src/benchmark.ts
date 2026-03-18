@@ -378,6 +378,7 @@ export class Benchmarker {
           messages: [{ role: 'user', content: test.prompt }],
           tools: test.tools as never,
           stream: true,
+          keep_alive: '30m',
           options: {
             num_predict: 512,
             temperature: 0.1, // low temp for reproducibility
@@ -505,6 +506,7 @@ export class Benchmarker {
             { role: 'user', content: probe },
           ],
           stream: true,
+          keep_alive: '30m',
           options: {
             num_ctx: ctxSize,
             num_predict: 64,
@@ -620,6 +622,7 @@ export class Benchmarker {
           model: model.name,
           messages: [{ role: 'user', content: 'Count from 1 to 10, one number per line.' }],
           stream: true,
+          keep_alive: '30m',
           options: { num_predict: 50, temperature: 0 },
         });
 

@@ -150,6 +150,7 @@ export class MoeEngine {
           model: model.name,
           messages,
           stream: true,
+          keep_alive: '30m',
           options: { num_predict: 1024 },
         });
 
@@ -213,6 +214,7 @@ ${responses.map(r => `--- ${r.role} (${r.model}, ${(r.elapsed / 1000).toFixed(1)
           { role: 'user', content: synthesisPrompt },
         ],
         stream: true,
+          keep_alive: '30m',
         options: { num_predict: 1024 },
       });
 
@@ -265,6 +267,7 @@ Briefly note what each got right and wrong. Then give your improved final answer
             { role: 'user', content: critiquePrompt(model.name, others) },
           ],
           stream: true,
+          keep_alive: '30m',
           options: { num_predict: 1024 },
         });
 

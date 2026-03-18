@@ -259,6 +259,7 @@ export class Agent {
           ...(tools.length > 0 ? { tools } : {}),
           stream: true,
           think: useThinking,
+          keep_alive: '30m', // keep model loaded during multi-step tool calls
           ...(numCtx ? { options: { num_ctx: numCtx } } : {}),
         } as never);
 
