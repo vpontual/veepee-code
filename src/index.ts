@@ -502,17 +502,19 @@ async function handleCommand(
       return false;
     }
 
-    case '/act': {
+    case '/act':
+    case '/code': {
       if (agent.getMode() === 'act') {
-        tui.showInfo('Already in act mode.');
+        tui.showInfo('Already in act/code mode.');
         return false;
       }
       agent.exitPlanMode();
       tui.updateModel(modelManager.getCurrentModel());
       tui.showInfo([
-        `${theme.accent('Act mode activated')}`,
+        `${theme.accent('Act mode activated')} (all tools, coding-ready)`,
+        `  ${theme.dim('Model:')} ${modelManager.getCurrentModel()}`,
         `  ${theme.dim('Thinking:')} OFF — fast execution`,
-        `  ${theme.dim('Auto-switch:')} ON — model adapts to task complexity`,
+        `  ${theme.dim('Tools:')} All 25 tools available`,
       ].join('\n'));
       return false;
     }
