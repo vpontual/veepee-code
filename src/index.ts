@@ -623,59 +623,93 @@ async function handleCommand(
 
     case '/init': {
       const llamaMdPath = `${process.cwd()}/VEEPEE.md`;
-      const exists = await import('fs').then(fs => fs.existsSync(llamaMdPath));
+      const fs = await import('fs');
+      const exists = fs.existsSync(llamaMdPath);
+      const { Ollama } = await import('ollama');
+      const ollama = new Ollama({ host: config.proxyUrl });
 
+      const initMsg = INIT_PROMPT + (exists ? '\n\nThere is already a VEEPEE.md. Read it and improve it.' : '');
       tui.showInfo(`Analyzing project to ${exists ? 'improve' : 'create'} VEEPEE.md...`);
-      tui.addUserMessage(INIT_PROMPT + (exists ? '\n\nThere is already a VEEPEE.md in this directory. Read it and improve it — keep what\'s good, add what\'s missing, fix what\'s wrong.' : ''));
 
-      // Run through the agent to let the model analyze and create VEEPEE.md
-      tui.startStream();
+      // Direct Ollama call — ONLY the init prompt, no system prompt, no history
       const turnStart = Date.now();
+      let fullContent = '';
+      let turnToolCalls = 0;
 
-      for await (const event of agent.run(INIT_PROMPT + (exists ? '\n\nThere is already a VEEPEE.md in this directory. Read it and improve it.' : ''))) {
-        switch (event.type) {
-          case 'text':
-            if (event.content) tui.appendStream(event.content);
-            break;
-          case 'tool_call':
-            tui.endStream();
-            tui.showToolCall(event.name!, event.args || {});
-            break;
-          case 'tool_result':
-            tui.showToolResult(event.name!, event.success!, event.content || event.error || '');
-            tui.startStream();
-            break;
-          case 'done':
-            tui.endStream();
-            tui.showCompletionBadge(modelManager.getCurrentModel(), Date.now() - turnStart);
+      // Simple agent loop: send prompt → model calls tools → feed results → repeat
+      const messages: Array<{role: string; content: string; tool_calls?: unknown[]}> = [
+        { role: 'user', content: initMsg },
+      ];
 
-            // Auto-add VEEPEE.md to .gitignore if it's a git repo and not already ignored
-            try {
-              const { execSync } = await import('child_process');
-              const isGit = await import('fs').then(fs => fs.existsSync(`${process.cwd()}/.git`));
-              if (isGit) {
-                const gitignorePath = `${process.cwd()}/.gitignore`;
-                const fs = await import('fs');
-                if (fs.existsSync(gitignorePath)) {
-                  const content = fs.readFileSync(gitignorePath, 'utf-8');
-                  if (!content.includes('VEEPEE.md')) {
-                    fs.appendFileSync(gitignorePath, '\n# VEEPEE Code project instructions\nVEEPEE.md\n');
-                    tui.showInfo(`${theme.success('Added VEEPEE.md to .gitignore')}`);
-                  }
-                } else {
-                  fs.writeFileSync(gitignorePath, '# VEEPEE Code project instructions\nVEEPEE.md\n');
-                  tui.showInfo(`${theme.success('Created .gitignore with VEEPEE.md')}`);
-                }
-              }
-            } catch { /* non-critical */ }
-            break;
-          case 'error':
-            tui.endStream();
-            tui.showError(event.error || 'Failed to analyze project');
-            break;
-          default:
-            break;
+      for (let turn = 0; turn < 15; turn++) {
+        tui.showInfo(theme.dim(`Turn ${turn + 1}...`));
+
+        const stream = await ollama.chat({
+          model: modelManager.getCurrentModel(),
+          messages: messages as never,
+          tools: registry.toOllamaTools(),
+          stream: true,
+          keep_alive: '30m',
+        } as never);
+
+        let turnContent = '';
+        let toolCalls: Array<{function: {name: string; arguments: Record<string, unknown>}}> = [];
+
+        for await (const chunk of stream) {
+          if (chunk.message.content) {
+            turnContent += chunk.message.content;
+            // Don't stream init text to TUI — just show tool calls
+          }
+          if (chunk.message.tool_calls?.length) {
+            toolCalls = chunk.message.tool_calls as typeof toolCalls;
+          }
         }
+
+        messages.push({ role: 'assistant', content: turnContent, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) });
+
+        if (toolCalls.length === 0) {
+          fullContent = turnContent;
+          break; // no more tool calls — done
+        }
+
+        // Execute tool calls
+        for (const call of toolCalls) {
+          const toolName = call.function.name;
+          const toolArgs = (call.function.arguments || {}) as Record<string, unknown>;
+          turnToolCalls++;
+
+          tui.showToolCall(toolName, toolArgs);
+          const result = await registry.execute(toolName, toolArgs);
+          tui.showToolResult(toolName, result.success, result.success ? result.output : (result.error || ''));
+
+          messages.push({ role: 'tool' as string, content: result.success ? result.output : `Error: ${result.error}` });
+        }
+      }
+
+      const elapsed = Date.now() - turnStart;
+      tui.showCompletionBadge(modelManager.getCurrentModel(), elapsed);
+
+      if (fullContent) {
+        tui.showInfo(fullContent.slice(0, 200) + '...');
+      }
+
+      // Auto-add VEEPEE.md to .gitignore
+      try {
+        const isGit = fs.existsSync(`${process.cwd()}/.git`);
+        if (isGit) {
+          const gitignorePath = `${process.cwd()}/.gitignore`;
+          if (fs.existsSync(gitignorePath)) {
+            const content = fs.readFileSync(gitignorePath, 'utf-8');
+            if (!content.includes('VEEPEE.md')) {
+              fs.appendFileSync(gitignorePath, '\n# VEEPEE Code project instructions\nVEEPEE.md\n');
+              tui.showInfo(`${theme.success('Added VEEPEE.md to .gitignore')}`);
+            }
+          } else {
+            fs.writeFileSync(gitignorePath, '# VEEPEE Code project instructions\nVEEPEE.md\n');
+            tui.showInfo(`${theme.success('Created .gitignore with VEEPEE.md')}`);
+          }
+        }
+      } catch { /* non-critical */ }
       }
       return false;
     }
