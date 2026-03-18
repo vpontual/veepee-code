@@ -60,6 +60,7 @@ const COMMANDS = [
   { name: '/compact', args: '', description: 'Compact conversation to free context' },
   { name: '/help', args: '', description: 'Show all commands' },
   { name: '/quit', args: '', description: 'Exit VEEPEE Code' },
+  { name: '/exit', args: '', description: 'Exit VEEPEE Code' },
 ];
 
 // ─── TUI Class ───────────────────────────────────────────────────────────────
@@ -380,9 +381,9 @@ export class TUI {
       return;
     }
 
-    // Use the actual rendered position of the input box (row + 1 for the text line inside the border)
+    // Use the stored text line row directly
     showCursor();
-    moveTo(this.lastInputBoxRow + 1, this.lastInputBoxLeftPad + 2 + this.input.cursor);
+    moveTo(this.lastInputBoxRow, this.lastInputBoxLeftPad + 2 + this.input.cursor);
   }
 
   private renderWelcome(rows: number, cols: number): void {
@@ -601,8 +602,9 @@ export class TUI {
     const boxWidth = Math.min(cols - 4, 90);
     const leftPad = Math.max(2, Math.floor((cols - boxWidth) / 2));
 
-    // Store position for cursor placement
-    this.lastInputBoxRow = topRow;
+    // Store the EXACT text input line position for cursor placement
+    // topRow+0 = top border, topRow+1 = TEXT LINE, topRow+2 = model info, topRow+3 = bottom border
+    this.lastInputBoxRow = topRow + 1;  // the text line, not the border
     this.lastInputBoxLeftPad = leftPad;
 
     // Top border
@@ -755,13 +757,14 @@ export class TUI {
 
     // ─── Command menu navigation ─────────────────────────────────────
     if (this.commandMenuVisible) {
-      // Enter — select highlighted command
+      // Enter — select highlighted command or submit raw text if no match
       if (key === '\r' || key === '\n') {
+        this.commandMenuVisible = false;
+
         if (this.filteredCommands.length > 0) {
           const selected = this.filteredCommands[this.commandMenuSelection];
           this.input.text = selected.name + (selected.args ? ' ' : '');
           this.input.cursor = this.input.text.length;
-          this.commandMenuVisible = false;
 
           // If command takes no args, submit immediately
           if (!selected.args) {
@@ -772,6 +775,19 @@ export class TUI {
             this.resolveInput = null;
             this.rejectInput = null;
             resolve(this.input.text.trim());
+            return;
+          }
+        } else {
+          // No matching commands — submit whatever the user typed as-is
+          const text = this.input.text.trim();
+          if (text) {
+            this.input.history.unshift(text);
+            if (this.input.history.length > 100) this.input.history.pop();
+            this.input.historyIdx = -1;
+            const resolve = this.resolveInput;
+            this.resolveInput = null;
+            this.rejectInput = null;
+            resolve(text);
             return;
           }
         }
