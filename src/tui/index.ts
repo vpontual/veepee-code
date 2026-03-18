@@ -472,17 +472,17 @@ export class TUI {
   }
 
   private formatMessage(msg: Message, maxWidth: number): string[] {
+    const bgHighlight = chalk.bgHex('#1E2030');  // dark highlighted background for user msgs
+
     switch (msg.role) {
       case 'user': {
+        // Full-width highlighted block with colored left border (like OpenCode/Claude Code)
+        const contentWidth = maxWidth - 3; // 2 for "│ " border + 1 padding
+        const wrapped = wordWrap(msg.content, contentWidth);
         const lines: string[] = [];
-        // User messages in a subtle highlighted block
-        lines.push(theme.user.bold('▎ ') + theme.text(truncate(msg.content, maxWidth - 2)));
-        const wrapped = wordWrap(msg.content, maxWidth - 2);
-        if (wrapped.length > 1) {
-          lines.length = 0; // clear the truncated version
-          for (const wl of wrapped) {
-            lines.push(theme.user('▎ ') + theme.text(wl));
-          }
+        for (const wl of wrapped) {
+          const padded = wl + ' '.repeat(Math.max(0, contentWidth - stripAnsi(wl).length));
+          lines.push(bgHighlight(theme.accent('│') + ' ' + theme.textBold(padded)));
         }
         return lines;
       }
