@@ -710,7 +710,6 @@ async function handleCommand(
           }
         }
       } catch { /* non-critical */ }
-      }
       return false;
     }
 
