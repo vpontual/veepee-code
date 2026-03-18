@@ -4,6 +4,7 @@
   "description": "AI coding assistant powered by your own Ollama fleet — Claude Code style CLI with 30+ tools",
   "type": "module",
   "bin": {
+    "vcode": "./dist/index.js",
     "veepee-code": "./dist/index.js"
   },
   "scripts": {
