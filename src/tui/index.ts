@@ -400,7 +400,12 @@ export class TUI {
   }
 
   private renderConversation(rows: number, cols: number): void {
-    clearScreen();
+    // Don't use clearScreen() — it causes blank flashes between redraws.
+    // Instead, overwrite every line in place. Blank unused lines with spaces.
+    hideCursor();
+    for (let r = 1; r <= rows; r++) {
+      writeAt(r, 1, ' '.repeat(cols));
+    }
 
     // Layout: turn tracker (if active), messages area, input box, status bar
     // Input box = 4 rows: border + text + model + border
@@ -490,19 +495,11 @@ export class TUI {
   }
 
   private formatMessage(msg: Message, maxWidth: number): string[] {
-    const bgHighlight = chalk.bgHex('#2A2A4A');  // visible dark highlight for user messages
-
     switch (msg.role) {
       case 'user': {
-        // Full-width highlighted block with colored left border (like OpenCode/Claude Code)
-        const contentWidth = maxWidth - 3; // 2 for "│ " border + 1 padding
-        const wrapped = wordWrap(msg.content, contentWidth);
-        const lines: string[] = [];
-        for (const wl of wrapped) {
-          const padded = wl + ' '.repeat(Math.max(0, contentWidth - stripAnsi(wl).length));
-          lines.push(bgHighlight(chalk.hex('#85C7F2')('│') + ' ' + chalk.white.bold(padded)));
-        }
-        return lines;
+        // Simple, guaranteed-visible format: blue arrow + bold white text
+        const wrapped = wordWrap(msg.content, maxWidth - 4);
+        return wrapped.map(wl => chalk.blue('  > ') + chalk.bold(wl));
       }
 
       case 'assistant': {
