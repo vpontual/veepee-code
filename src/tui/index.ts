@@ -434,34 +434,45 @@ export class TUI {
 
     let row = startRow;
 
-    // DEBUG: write message count and roles to top-right corner
-    const debugInfo = `[msgs:${this.messages.length} roles:${this.messages.map(m => m.role[0]).join(',')} vis:${endRow - startRow}]`;
-    writeAt(1, cols - debugInfo.length - 1, theme.error(debugInfo));
-
     // Combine committed messages + current stream
     const allMessages = [...this.messages];
 
-    // Auto-scroll to bottom
     const renderedLines: { line: string; role: string }[] = [];
-    for (const msg of allMessages) {
+    for (let mi = 0; mi < allMessages.length; mi++) {
+      const msg = allMessages[mi];
       const lines = this.formatMessage(msg, maxWidth);
       for (const line of lines) {
         renderedLines.push({ line, role: msg.role });
       }
-      renderedLines.push({ line: '', role: 'spacer' });
+      // Add spacer between messages (but not after the last one)
+      if (mi < allMessages.length - 1) {
+        renderedLines.push({ line: '', role: 'spacer' });
+      }
     }
 
     // Add stream buffer if active
     if (this.streamActive && this.streamBuffer) {
+      renderedLines.push({ line: '', role: 'spacer' });
       const wrapped = wordWrap(this.streamBuffer, maxWidth);
       for (const line of wrapped) {
         renderedLines.push({ line, role: 'assistant' });
       }
     }
 
-    // Calculate visible window
+    // Scroll: show from top when content fits. Auto-scroll to bottom only
+    // when content truly overflows. Never cut off the first user message
+    // for short conversations (< 20 messages).
     const visibleRows = endRow - startRow;
-    const startLine = Math.max(0, renderedLines.length - visibleRows);
+    let startLine = 0;
+    if (renderedLines.length > visibleRows) {
+      if (allMessages.length <= 8) {
+        // Short conversation — keep first message visible, clip at bottom
+        startLine = 0;
+      } else {
+        // Long conversation — auto-scroll to show latest
+        startLine = renderedLines.length - visibleRows;
+      }
+    }
 
     for (let i = startLine; i < renderedLines.length && row <= endRow; i++) {
       writeAt(row, leftPad, renderedLines[i].line);
