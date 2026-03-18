@@ -6,6 +6,7 @@ import type { PermissionManager } from './permissions.js';
 import type { BenchmarkResult } from './benchmark.js';
 import { ContextManager } from './context.js';
 import { ModelManager } from './models.js';
+import type { ModelRoster } from './benchmark.js';
 import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
@@ -44,7 +45,8 @@ export class Agent {
   private maxTurns: number;
   private optimalContextSizes = new Map<string, number>();
   private mode: AgentMode = 'act';
-  private previousModel: string | null = null; // to restore after plan mode
+  private previousModel: string | null = null;
+  private roster: ModelRoster | null = null;
 
   constructor(config: Config, registry: ToolRegistry, modelManager: ModelManager, permissions: PermissionManager) {
     this.ollama = new Ollama({ host: config.proxyUrl });
@@ -54,59 +56,87 @@ export class Agent {
     this.permissions = permissions;
     this.maxTurns = config.maxTurns;
 
-    // Load benchmark results for optimal context sizes
     this.loadBenchmarkContextSizes();
+    this.loadRoster();
+  }
+
+  /** Load the model roster from benchmark results */
+  private async loadRoster(): Promise<void> {
+    const rosterPath = resolve(process.env.HOME || '~', '.veepee-code', 'benchmarks', 'roster.json');
+    if (!existsSync(rosterPath)) return;
+    try {
+      const data = await readFile(rosterPath, 'utf-8');
+      this.roster = JSON.parse(data) as ModelRoster;
+    } catch { /* ignore */ }
   }
 
   getMode(): AgentMode {
     return this.mode;
   }
 
-  /** Enter plan mode — thinking ON, heavy model, no auto-switch */
+  getRoster(): ModelRoster | null {
+    return this.roster;
+  }
+
+  /** Enter plan mode — thinking ON, best reasoning model from roster */
   enterPlanMode(): { model: string } {
     this.mode = 'plan';
     this.previousModel = this.modelManager.getCurrentModel();
 
-    // Switch to the best heavy model with thinking support
-    const heavyModels = this.modelManager.getModelsByTier('heavy')
-      .filter(m => m.capabilities.includes('tools'))
-      .sort((a, b) => b.score - a.score);
-
-    // Prefer models with thinking capability
-    const thinker = heavyModels.find(m => m.capabilities.includes('thinking'));
-    const best = thinker || heavyModels[0];
-
-    if (best && best.name !== this.modelManager.getCurrentModel()) {
-      this.modelManager.switchTo(best.name);
-      this.modelManager.setAutoSwitch(false); // lock model during planning
-      this.context.setSystemPrompt(best.name);
+    // Use roster's plan model if available
+    const planModel = this.roster?.plan;
+    if (planModel && this.modelManager.getProfile(planModel)) {
+      this.modelManager.switchTo(planModel);
+    } else {
+      // Fallback: best heavy model with thinking
+      const heavyModels = this.modelManager.getModelsByTier('heavy')
+        .filter(m => m.capabilities.includes('tools'))
+        .sort((a, b) => b.score - a.score);
+      const thinker = heavyModels.find(m => m.capabilities.includes('thinking'));
+      const best = thinker || heavyModels[0];
+      if (best) this.modelManager.switchTo(best.name);
     }
 
+    this.modelManager.setAutoSwitch(false);
+    this.context.setSystemPrompt(this.modelManager.getCurrentModel());
     this.context.setMode('plan');
 
     return { model: this.modelManager.getCurrentModel() };
   }
 
-  /** Exit plan/chat mode — restore previous model and settings */
+  /** Exit plan/chat mode — restore act model from roster */
   exitPlanMode(): void {
     this.mode = 'act';
     this.context.setMode('act');
 
-    if (this.previousModel) {
+    // Use roster's act model, or restore previous
+    const actModel = this.roster?.act;
+    if (actModel && this.modelManager.getProfile(actModel)) {
+      this.modelManager.switchTo(actModel);
+    } else if (this.previousModel) {
       this.modelManager.switchTo(this.previousModel);
-      this.previousModel = null;
     }
+    this.previousModel = null;
     this.modelManager.setAutoSwitch(true);
     this.context.setSystemPrompt(this.modelManager.getCurrentModel());
   }
 
-  /** Enter chat mode — web tools only, lighter model, fast conversation */
+  /** Enter chat mode — web tools only, fastest conversational model from roster */
   enterChatMode(): { model: string } {
     this.mode = 'chat';
     this.previousModel = this.modelManager.getCurrentModel();
     this.context.setMode('chat');
 
-    // Pick a fast standard-tier model
+    // Use roster's chat model if available
+    const chatModel = this.roster?.chat;
+    if (chatModel && this.modelManager.getProfile(chatModel)) {
+      this.modelManager.switchTo(chatModel);
+      this.modelManager.setAutoSwitch(false);
+      this.context.setSystemPrompt(chatModel);
+      return { model: chatModel };
+    }
+
+    // Fallback: pick a fast standard-tier model
     const standardModels = this.modelManager.getModelsByTier('standard')
       .sort((a, b) => b.score - a.score);
     const lightModels = this.modelManager.getModelsByTier('light')

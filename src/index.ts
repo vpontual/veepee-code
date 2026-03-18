@@ -110,55 +110,68 @@ async function main() {
     return tui.promptPermission(toolName, args, reason);
   });
 
-  // Run first-launch benchmark — blocking but with visible progress in TUI
+  // First-launch: smart benchmark all models, build roster
   const benchmarker = new Benchmarker(config.proxyUrl);
-  const existingBenchmarks = await benchmarker.loadLatest();
-  if (!existingBenchmarks) {
-    // Switch from welcome to conversation view so progress messages are visible
-    tui.showInfo(`${theme.accent('⚡ First launch')} — ranking your models to find the best defaults.`);
-    tui.showInfo(theme.dim('Testing 3 models × 11 tests. This takes ~2 minutes and only runs once.'));
+  const existingRoster = await benchmarker.loadRoster();
+  if (!existingRoster) {
+    tui.showInfo(`${theme.accent('⚡ First launch')} — testing all your models to find the best for each role.`);
+    tui.showInfo(theme.dim('Phase 1: Quick responsiveness check on all models'));
+    tui.showInfo(theme.dim('Phase 2: Full benchmark on models fast enough for interactive use'));
+    tui.showInfo(theme.dim('Phase 3: Assign best model per role (act, plan, chat, code, search)'));
     tui.showInfo('');
 
-    const standardModels = allModels
-      .filter(m => m.tier === 'standard' && m.capabilities.includes('tools'))
-      .slice(0, 3);
+    try {
+      const { results, roster } = await benchmarker.smartBenchmark(allModels, (phase, detail) => {
+        // Update progress in TUI — overwrite last line if same phase
+        const msgs = tui['messages'] as Array<{ role: string; content: string }>;
+        const lastIdx = msgs.length - 1;
+        const prefix = phase === 'speed-check' ? '🔍' : phase === 'benchmark' ? '📊' : phase === 'done' ? '✓' : '⚡';
+        const line = `${prefix} ${detail}`;
 
-    if (standardModels.length > 0) {
-      try {
-        const results = await benchmarker.benchmarkAll(standardModels, {
-          onProgress: (model, test, mi, mt, ti, tt) => {
-            // Overwrite last message with progress update
-            const msgs = tui['messages'] as Array<{ role: string; content: string }>;
-            const lastIdx = msgs.length - 1;
-            if (lastIdx >= 0 && msgs[lastIdx].content.startsWith('[')) {
-              msgs[lastIdx].content = `[${mi}/${mt}] ${model} — ${test} (${ti}/${tt})`;
-            } else {
-              tui.showInfo(`[${mi}/${mt}] ${model} — ${test} (${ti}/${tt})`);
-            }
-            tui.render();
-          },
-        });
-
-        tui.showInfo('');
-        tui.showInfo(`${theme.success('✓ Benchmark complete')} — ${results.length} models ranked:`);
-        for (const r of results) {
-          tui.showInfo(`  ${theme.accent(r.model.padEnd(25))} score: ${r.overall}/100  ${r.performance.tokensPerSecond} tok/s`);
+        if (lastIdx >= 0 && (msgs[lastIdx].content.startsWith('🔍') || msgs[lastIdx].content.startsWith('📊') || msgs[lastIdx].content.startsWith('[')) && phase !== 'done') {
+          msgs[lastIdx].content = line;
+        } else {
+          tui.showInfo(line);
         }
+        tui.render();
+      });
 
-        // Re-select default model
-        defaultModel = modelManager.selectDefault();
-        defaultProfile = modelManager.getProfile(defaultModel);
-        agent.setModel(defaultModel);
-        tui.updateModel(defaultModel, defaultProfile?.parameterSize);
+      tui.showInfo('');
+      if (results.length > 0) {
+        tui.showInfo(`${theme.success('✓ Benchmark complete')} — ${results.length} models ranked`);
         tui.showInfo('');
-        tui.showInfo(`${theme.accent('Selected:')} ${defaultModel}`);
-      } catch (err) {
-        tui.showInfo(theme.dim(`Benchmark failed: ${(err as Error).message}. Run /benchmark later.`));
+        for (const r of results.slice(0, 8)) {
+          tui.showInfo(`  ${theme.accent(r.model.padEnd(30))} ${String(r.overall).padStart(3)}/100  ${r.performance.tokensPerSecond} tok/s`);
+        }
+        tui.showInfo('');
+        tui.showInfo(Benchmarker.formatRoster(roster));
+
+        // Apply roster — use act model as default
+        if (roster.act) {
+          const profile = modelManager.getProfile(roster.act);
+          if (profile) {
+            defaultModel = roster.act;
+            defaultProfile = profile;
+            agent.setModel(defaultModel);
+            tui.updateModel(defaultModel, defaultProfile.parameterSize);
+          }
+        }
       }
-    } else {
-      tui.showInfo(theme.dim('No standard-tier models found. Skipping benchmark.'));
+    } catch (err) {
+      tui.showInfo(theme.dim(`Benchmark failed: ${(err as Error).message}. Run /benchmark later.`));
     }
     tui.showInfo('');
+  } else {
+    // Roster exists — apply it
+    if (existingRoster.act) {
+      const profile = modelManager.getProfile(existingRoster.act);
+      if (profile) {
+        defaultModel = existingRoster.act;
+        defaultProfile = profile;
+        agent.setModel(defaultModel);
+        tui.updateModel(defaultModel, defaultProfile.parameterSize);
+      }
+    }
   }
 
   // Handle --resume CLI argument

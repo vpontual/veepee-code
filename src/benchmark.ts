@@ -7,6 +7,15 @@ import type { ModelProfile } from './models.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+/** Model roster — best model for each role, determined by benchmark */
+export interface ModelRoster {
+  act: string | null;     // best balanced for coding (overall score + speed)
+  plan: string | null;    // best reasoning (highest reasoning score, can be slower)
+  chat: string | null;    // fastest with good instruction following
+  code: string | null;    // best code generation + editing
+  search: string | null;  // fastest with tool calling (for sub-agents)
+}
+
 export interface BenchmarkResult {
   model: string;
   tier: string;
@@ -572,6 +581,177 @@ export class Benchmarker {
     await this.saveResults(results);
 
     return results;
+  }
+
+  /**
+   * Smart first-launch benchmark:
+   * 1. Take all models with tool support (skip embedding-only)
+   * 2. Quick responsiveness check — send "hi", measure TTFT. Skip models > 10s
+   * 3. Full benchmark survivors
+   * 4. Build model roster (best per role)
+   */
+  async smartBenchmark(
+    allModels: ModelProfile[],
+    onProgress?: (phase: string, detail: string) => void,
+  ): Promise<{ results: BenchmarkResult[]; roster: ModelRoster }> {
+    // Phase 1: Filter candidates
+    const candidates = allModels.filter(m =>
+      !m.capabilities.includes('embedding') || m.capabilities.length > 1
+    ).filter(m =>
+      m.capabilities.includes('tools')
+    );
+
+    onProgress?.('filter', `${candidates.length} models with tool support out of ${allModels.length} total`);
+
+    // Phase 2: Quick responsiveness check — send a simple prompt, measure TTFT
+    const responsive: ModelProfile[] = [];
+    for (const model of candidates) {
+      onProgress?.('speed-check', `Testing ${model.name} (${model.parameterSize}) responsiveness...`);
+
+      try {
+        const start = Date.now();
+        let ttft = 0;
+
+        const stream = await this.ollama.chat({
+          model: model.name,
+          messages: [{ role: 'user', content: 'Say OK' }],
+          stream: true,
+          options: { num_predict: 5, temperature: 0 },
+        });
+
+        for await (const chunk of stream) {
+          if (ttft === 0 && chunk.message.content) {
+            ttft = Date.now() - start;
+          }
+        }
+
+        if (ttft > 0 && ttft < 15000) {
+          responsive.push(model);
+          onProgress?.('speed-check', `  ✓ ${model.name}: ${ttft}ms TTFT — fast enough`);
+        } else {
+          onProgress?.('speed-check', `  ✗ ${model.name}: ${ttft || 'timeout'}ms TTFT — too slow, skipping`);
+        }
+      } catch {
+        onProgress?.('speed-check', `  ✗ ${model.name}: failed to respond, skipping`);
+      }
+    }
+
+    onProgress?.('speed-check', `${responsive.length} models passed responsiveness check`);
+
+    if (responsive.length === 0) {
+      return { results: [], roster: { act: null, plan: null, chat: null, code: null, search: null } };
+    }
+
+    // Phase 3: Full benchmark on responsive models
+    onProgress?.('benchmark', `Running full benchmark on ${responsive.length} models...`);
+
+    const results: BenchmarkResult[] = [];
+    for (let mi = 0; mi < responsive.length; mi++) {
+      const model = responsive[mi];
+      const result = await this.benchmarkModel(model, (test, testIdx, totalTests) => {
+        onProgress?.('benchmark', `[${mi + 1}/${responsive.length}] ${model.name} — ${test} (${testIdx}/${totalTests})`);
+      });
+      results.push(result);
+    }
+
+    results.sort((a, b) => b.overall - a.overall);
+    await this.saveResults(results);
+
+    // Phase 4: Build roster
+    const roster = Benchmarker.buildRoster(results);
+    await this.saveRoster(roster);
+
+    onProgress?.('done', `Benchmark complete. Roster: act=${roster.act}, plan=${roster.plan}, chat=${roster.chat}, code=${roster.code}`);
+
+    return { results, roster };
+  }
+
+  /** Build optimal model roster from benchmark results */
+  static buildRoster(results: BenchmarkResult[]): ModelRoster {
+    if (results.length === 0) {
+      return { act: null, plan: null, chat: null, code: null, search: null };
+    }
+
+    // Act: best overall score with decent speed (>2 tok/s)
+    const act = results.find(r => r.performance.tokensPerSecond >= 2)?.model
+      || results[0].model;
+
+    // Plan: best reasoning score (can be slower — >1 tok/s is fine)
+    const plan = [...results]
+      .filter(r => r.performance.tokensPerSecond >= 1)
+      .sort((a, b) => b.scores.reasoning - a.scores.reasoning)[0]?.model
+      || act;
+
+    // Chat: fastest model with good instruction following (>5 tok/s preferred)
+    const chat = [...results]
+      .filter(r => r.performance.tokensPerSecond >= 3)
+      .sort((a, b) => {
+        // Weight speed heavily for chat
+        const aScore = a.scores.instructionFollowing + a.performance.tokensPerSecond * 5;
+        const bScore = b.scores.instructionFollowing + b.performance.tokensPerSecond * 5;
+        return bScore - aScore;
+      })[0]?.model
+      || act;
+
+    // Code: best code generation + editing combined
+    const code = [...results]
+      .filter(r => r.performance.tokensPerSecond >= 2)
+      .sort((a, b) => {
+        const aScore = a.scores.codeGeneration * 0.6 + a.scores.codeEditing * 0.4;
+        const bScore = b.scores.codeGeneration * 0.6 + b.scores.codeEditing * 0.4;
+        return bScore - aScore;
+      })[0]?.model
+      || act;
+
+    // Search (sub-agent): fastest with good tool calling
+    const search = [...results]
+      .filter(r => r.performance.tokensPerSecond >= 3)
+      .sort((a, b) => {
+        // Weight speed heavily + tool calling
+        const aScore = a.scores.toolCalling + a.performance.tokensPerSecond * 8;
+        const bScore = b.scores.toolCalling + b.performance.tokensPerSecond * 8;
+        return bScore - aScore;
+      })[0]?.model
+      || act;
+
+    return { act, plan, chat, code, search };
+  }
+
+  /** Save roster to disk */
+  private async saveRoster(roster: ModelRoster): Promise<void> {
+    await mkdir(this.resultsDir, { recursive: true });
+    const rosterPath = resolve(this.resultsDir, 'roster.json');
+    await writeFile(rosterPath, JSON.stringify(roster, null, 2));
+  }
+
+  /** Load saved roster */
+  async loadRoster(): Promise<ModelRoster | null> {
+    const rosterPath = resolve(this.resultsDir, 'roster.json');
+    if (!existsSync(rosterPath)) return null;
+    try {
+      const data = await readFile(rosterPath, 'utf-8');
+      return JSON.parse(data) as ModelRoster;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Format roster for display */
+  static formatRoster(roster: ModelRoster): string {
+    const lines: string[] = ['', chalk.bold('  Model Roster (auto-selected from benchmarks)'), ''];
+    const roles: Array<[string, string, keyof ModelRoster]> = [
+      ['Act (default)', 'Best balanced for coding', 'act'],
+      ['Plan', 'Best reasoning (thinking mode)', 'plan'],
+      ['Chat', 'Fastest conversational', 'chat'],
+      ['Code', 'Best code gen + editing', 'code'],
+      ['Search', 'Fastest for sub-agents', 'search'],
+    ];
+    for (const [label, desc, key] of roles) {
+      const model = roster[key] || '(none)';
+      lines.push(`  ${chalk.cyan(label.padEnd(16))} ${chalk.white(model.padEnd(30))} ${chalk.dim(desc)}`);
+    }
+    lines.push('');
+    return lines.join('\n');
   }
 
   /** Save benchmark results to disk */
