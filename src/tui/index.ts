@@ -615,14 +615,23 @@ export class TUI {
 
     // Input line
     const inputText = this.input.text || '';
-    const placeholder = inputText ? '' : theme.dimmer('Ask anything... "Fix the bug in auth.ts"');
-    const displayText = inputText || stripAnsi(placeholder) ? (inputText || placeholder) : '';
     const contentWidth = boxWidth - 4;
+    let displayLine: string;
+
+    if (inputText) {
+      // User text — no ANSI codes, padEnd works correctly
+      const truncated = inputText.length > contentWidth ? inputText.slice(0, contentWidth - 1) + '…' : inputText;
+      displayLine = truncated + ' '.repeat(Math.max(0, contentWidth - truncated.length));
+    } else {
+      // Placeholder — has ANSI codes, must pad by visual width
+      const placeholderText = 'Ask anything... "Fix the bug in auth.ts"';
+      const visual = placeholderText.slice(0, contentWidth);
+      const padding = ' '.repeat(Math.max(0, contentWidth - visual.length));
+      displayLine = theme.dimmer(visual) + padding;
+    }
 
     writeAt(topRow + 1, leftPad,
-      theme.borderFocused(box.v) + ' ' +
-      truncate(displayText, contentWidth).padEnd(contentWidth) + ' ' +
-      theme.borderFocused(box.v)
+      theme.borderFocused(box.v) + ' ' + displayLine + ' ' + theme.borderFocused(box.v)
     );
 
     // Model info line
