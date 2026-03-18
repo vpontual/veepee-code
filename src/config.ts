@@ -17,10 +17,10 @@ export interface Config {
 }
 
 export function loadConfig(): Config {
-  // Load .env from project root, then from ~/.llama-code/.env
+  // Load .env from project root, then from ~/.veepee-code/.env
   const localEnv = resolve(process.cwd(), '.env');
-  const homeEnv = resolve(process.env.HOME || '~', '.llama-code', '.env');
-  const globalEnv = resolve(process.env.HOME || '~', '.config', 'llama-code', '.env');
+  const homeEnv = resolve(process.env.HOME || '~', '.veepee-code', '.env');
+  const globalEnv = resolve(process.env.HOME || '~', '.config', 'veepee-code', '.env');
 
   if (existsSync(localEnv)) loadEnv({ path: localEnv });
   else if (existsSync(homeEnv)) loadEnv({ path: homeEnv });
@@ -30,11 +30,11 @@ export function loadConfig(): Config {
   const env = process.env;
 
   return {
-    proxyUrl: env.LLAMA_CODE_PROXY_URL || 'http://10.0.153.99:11434',
-    dashboardUrl: env.LLAMA_CODE_DASHBOARD_URL || 'http://10.0.153.99:3334',
-    model: env.LLAMA_CODE_MODEL || null,
-    autoSwitch: env.LLAMA_CODE_AUTO_SWITCH !== 'false',
-    maxTurns: parseInt(env.LLAMA_CODE_MAX_TURNS || '50', 10),
+    proxyUrl: env.VEEPEE_CODE_PROXY_URL || 'http://10.0.153.99:11434',
+    dashboardUrl: env.VEEPEE_CODE_DASHBOARD_URL || 'http://10.0.153.99:3334',
+    model: env.VEEPEE_CODE_MODEL || null,
+    autoSwitch: env.VEEPEE_CODE_AUTO_SWITCH !== 'false',
+    maxTurns: parseInt(env.VEEPEE_CODE_MAX_TURNS || '50', 10),
     ha: env.HA_URL && env.HA_TOKEN
       ? { url: env.HA_URL, token: env.HA_TOKEN } : null,
     mastodon: env.MASTODON_URL && env.MASTODON_TOKEN

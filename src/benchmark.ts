@@ -333,7 +333,7 @@ export class Benchmarker {
 
   constructor(proxyUrl: string) {
     this.ollama = new Ollama({ host: proxyUrl });
-    this.resultsDir = resolve(process.env.HOME || '~', '.llama-code', 'benchmarks');
+    this.resultsDir = resolve(process.env.HOME || '~', '.veepee-code', 'benchmarks');
   }
 
   /** Run full benchmark suite against a single model */

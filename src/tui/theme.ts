@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 
-// Llama Code color palette — warm tones inspired by llama wool
+// VEEPEE Code color palette — warm tones inspired by llama wool
 export const theme = {
   // Primary
   brand: chalk.hex('#E8A87C'),          // warm terracotta
@@ -52,7 +52,7 @@ export const box = {
 
 // Icons
 export const icons = {
-  llama: '🦙',
+  llama: '⚡',
   check: '✓',
   cross: '✗',
   dot: '●',

@@ -40,7 +40,7 @@ export class PermissionManager {
   ];
 
   constructor() {
-    this.configPath = resolve(process.env.HOME || '~', '.llama-code', 'permissions.json');
+    this.configPath = resolve(process.env.HOME || '~', '.veepee-code', 'permissions.json');
     this.loadPersisted();
   }
 

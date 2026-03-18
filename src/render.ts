@@ -59,7 +59,7 @@ export function renderBanner(
   cwd: string,
 ): void {
   console.log('');
-  console.log(chalk.bold('  🦙 Llama Code') + chalk.dim(` v${version}`));
+  console.log(chalk.bold('  ⚡ VEEPEE Code') + chalk.dim(` v${version}`));
   console.log(chalk.dim(`  Proxy: ${proxyUrl} (${serverCount} servers, ${modelCount} models)`));
   console.log(chalk.dim(`  Model: `) + chalk.cyan(activeModel));
   console.log(chalk.dim(`  Tools: ${toolCount} available`));
@@ -81,7 +81,7 @@ ${chalk.bold('Commands:')}
   ${chalk.cyan('/compact')}         Compact conversation to free context
   ${chalk.cyan('/status')}          Show current session status
   ${chalk.cyan('/help')}            Show this help
-  ${chalk.cyan('/quit')}            Exit Llama Code
+  ${chalk.cyan('/quit')}            Exit VEEPEE Code
 `);
 }
 

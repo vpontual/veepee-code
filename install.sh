@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Llama Code Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/vpontual/llama-code/main/install.sh | bash
+# VEEPEE Code Installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/vpontual/veepee-code/main/install.sh | bash
 
-REPO="vpontual/llama-code"
-INSTALL_DIR="${LLAMA_CODE_DIR:-$HOME/.llama-code}"
-BIN_DIR="${LLAMA_CODE_BIN:-/usr/local/bin}"
+REPO="vpontual/veepee-code"
+INSTALL_DIR="${VEEPEE_CODE_DIR:-$HOME/.veepee-code}"
+BIN_DIR="${VEEPEE_CODE_BIN:-/usr/local/bin}"
 
 echo ""
-echo "  🦙 Llama Code Installer"
+echo "  ⚡ VEEPEE Code Installer"
 echo ""
 
 # Check Node.js
@@ -41,9 +41,9 @@ fi
 echo "  ✓ npm $(npm -v)"
 
 # Install from npm if published, otherwise from git
-if npm view llama-code version &> /dev/null 2>&1; then
+if npm view veepee-code version &> /dev/null 2>&1; then
   echo "  Installing from npm..."
-  npm install -g llama-code
+  npm install -g veepee-code
 else
   echo "  Installing from GitHub..."
 
@@ -67,41 +67,41 @@ else
 
   # Create symlink
   if [ -w "$BIN_DIR" ]; then
-    ln -sf "$INSTALL_DIR/dist/index.js" "$BIN_DIR/llama-code"
-    chmod +x "$BIN_DIR/llama-code"
+    ln -sf "$INSTALL_DIR/dist/index.js" "$BIN_DIR/veepee-code"
+    chmod +x "$BIN_DIR/veepee-code"
   else
     echo "  Creating symlink (requires sudo)..."
-    sudo ln -sf "$INSTALL_DIR/dist/index.js" "$BIN_DIR/llama-code"
-    sudo chmod +x "$BIN_DIR/llama-code"
+    sudo ln -sf "$INSTALL_DIR/dist/index.js" "$BIN_DIR/veepee-code"
+    sudo chmod +x "$BIN_DIR/veepee-code"
   fi
 fi
 
 # Create config directory
-CONFIG_DIR="$HOME/.config/llama-code"
+CONFIG_DIR="$HOME/.config/veepee-code"
 mkdir -p "$CONFIG_DIR"
 
 # Create default config if not exists
 if [ ! -f "$CONFIG_DIR/.env" ]; then
   cat > "$CONFIG_DIR/.env" << 'ENVEOF'
 # Ollama Proxy URL — change this to your proxy address
-LLAMA_CODE_PROXY_URL=http://10.0.153.99:11434
-LLAMA_CODE_DASHBOARD_URL=http://10.0.153.99:3334
+VEEPEE_CODE_PROXY_URL=http://10.0.153.99:11434
+VEEPEE_CODE_DASHBOARD_URL=http://10.0.153.99:3334
 
 # Auto model switching (true/false)
-LLAMA_CODE_AUTO_SWITCH=true
+VEEPEE_CODE_AUTO_SWITCH=true
 
 # API port for external tool integration (Claude Code, Gemini CLI, etc.)
-LLAMA_CODE_API_PORT=8484
+VEEPEE_CODE_API_PORT=8484
 ENVEOF
   echo "  ✓ Created config at $CONFIG_DIR/.env"
 fi
 
 echo ""
-echo "  ✓ Llama Code installed successfully!"
+echo "  ✓ VEEPEE Code installed successfully!"
 echo ""
 echo "  Get started:"
-echo "    llama-code                    # Start in current directory"
-echo "    llama-code --help             # Show help"
+echo "    veepee-code                    # Start in current directory"
+echo "    veepee-code --help             # Show help"
 echo ""
 echo "  Configure:"
 echo "    Edit $CONFIG_DIR/.env"

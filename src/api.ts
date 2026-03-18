@@ -12,7 +12,7 @@ interface ApiConfig {
 
 /**
  * OpenAI-compatible API server that allows other tools (Claude Code, Gemini CLI,
- * Codex, etc.) to use Llama Code as a backend with full tool access.
+ * Codex, etc.) to use VEEPEE Code as a backend with full tool access.
  *
  * Endpoints:
  *   POST /v1/chat/completions  — OpenAI-compatible chat (with tool execution)
@@ -105,7 +105,7 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
                   finish_reason: null,
                 }],
                 // Custom extension — tool usage metadata
-                llama_code: { tool_call: { name: event.name, args: event.args } },
+                veepee_code: { tool_call: { name: event.name, args: event.args } },
               };
               res.write(`data: ${JSON.stringify(chunk)}\n\n`);
             } else if (event.type === 'tool_result') {
@@ -119,7 +119,7 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
                   delta: { content: '' },
                   finish_reason: null,
                 }],
-                llama_code: {
+                veepee_code: {
                   tool_result: {
                     name: event.name,
                     success: event.success,
@@ -169,7 +169,7 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
             total_tokens: 0,
           },
           // Custom extension — tool calls that happened
-          llama_code: {
+          veepee_code: {
             tool_calls: result.toolCalls,
           },
         });
@@ -238,7 +238,7 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
 
       // Health check
       if (path === '/' || path === '/health') {
-        sendJson(res, 200, { status: 'ok', service: 'llama-code' });
+        sendJson(res, 200, { status: 'ok', service: 'veepee-code' });
         return;
       }
 

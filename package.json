@@ -1,10 +1,10 @@
 {
-  "name": "llama-code",
+  "name": "veepee-code",
   "version": "0.1.0",
   "description": "AI coding assistant powered by your own Ollama fleet — Claude Code style CLI with 30+ tools",
   "type": "module",
   "bin": {
-    "llama-code": "./dist/index.js"
+    "veepee-code": "./dist/index.js"
   },
   "scripts": {
     "dev": "tsx src/index.ts",
@@ -17,7 +17,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vpontual/llama-code.git"
+    "url": "git+https://github.com/vpontual/veepee-code.git"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -22,7 +22,7 @@ import { registerNewsTools } from './tools/news.js';
 
 const VERSION = '0.1.0';
 
-const INIT_PROMPT = `Analyze this codebase and create a LLAMA.md file in the project root. This file will be automatically loaded into your system prompt on every session, so it must be high-quality and useful.
+const INIT_PROMPT = `Analyze this codebase and create a VEEPEE.md file in the project root. This file will be automatically loaded into your system prompt on every session, so it must be high-quality and useful.
 
 The file should contain (~150 lines):
 
@@ -46,7 +46,7 @@ To create this file:
 - Check for existing instruction files: .cursor/rules/, .cursorrules, .github/copilot-instructions.md, CLAUDE.md, AGENTS.md, OpenCode.md, GEMINI.md — incorporate relevant content
 - Check README.md for project description and setup instructions
 
-Write the LLAMA.md file using write_file. Be specific and actionable — vague guidelines are useless. Every line should help an agent write better code in this specific project.`;
+Write the VEEPEE.md file using write_file. Be specific and actionable — vague guidelines are useless. Every line should help an agent write better code in this specific project.`;
 
 async function main() {
   const config = loadConfig();
@@ -91,7 +91,7 @@ async function main() {
   agent.getContext().setSystemPrompt(defaultModel);
 
   // Start API server
-  const apiPort = parseInt(process.env.LLAMA_CODE_API_PORT || '8484', 10);
+  const apiPort = parseInt(process.env.VEEPEE_CODE_API_PORT || '8484', 10);
   const api = startApiServer({ port: apiPort, agent, modelManager, registry });
 
   // Initialize TUI
@@ -232,7 +232,7 @@ async function handleCommand(
         `  ${theme.accent('/model auto')}       Auto-switch on     ${theme.accent('/tools')}      List all tools`,
         `  ${theme.accent('/clear')}            Clear history      ${theme.accent('/compact')}    Free context space`,
         `  ${theme.accent('/status')}           Session info       ${theme.accent('/quit')}       Exit`,
-        `  ${theme.accent('/init')}             Create LLAMA.md    ${theme.accent('/setup')}       Validate tools`,
+        `  ${theme.accent('/init')}             Create VEEPEE.md    ${theme.accent('/setup')}       Validate tools`,
         '',
         `${theme.textBold('Modes:')}`,
         `  ${theme.accent('/plan')}   Plan mode — thinking ON, heavy model, clarifying questions first`,
@@ -440,17 +440,17 @@ async function handleCommand(
     }
 
     case '/init': {
-      const llamaMdPath = `${process.cwd()}/LLAMA.md`;
+      const llamaMdPath = `${process.cwd()}/VEEPEE.md`;
       const exists = await import('fs').then(fs => fs.existsSync(llamaMdPath));
 
-      tui.showInfo(`Analyzing project to ${exists ? 'improve' : 'create'} LLAMA.md...`);
-      tui.addUserMessage(INIT_PROMPT + (exists ? '\n\nThere is already a LLAMA.md in this directory. Read it and improve it — keep what\'s good, add what\'s missing, fix what\'s wrong.' : ''));
+      tui.showInfo(`Analyzing project to ${exists ? 'improve' : 'create'} VEEPEE.md...`);
+      tui.addUserMessage(INIT_PROMPT + (exists ? '\n\nThere is already a VEEPEE.md in this directory. Read it and improve it — keep what\'s good, add what\'s missing, fix what\'s wrong.' : ''));
 
-      // Run through the agent to let the model analyze and create LLAMA.md
+      // Run through the agent to let the model analyze and create VEEPEE.md
       tui.startStream();
       const turnStart = Date.now();
 
-      for await (const event of agent.run(INIT_PROMPT + (exists ? '\n\nThere is already a LLAMA.md in this directory. Read it and improve it.' : ''))) {
+      for await (const event of agent.run(INIT_PROMPT + (exists ? '\n\nThere is already a VEEPEE.md in this directory. Read it and improve it.' : ''))) {
         switch (event.type) {
           case 'text':
             if (event.content) tui.appendStream(event.content);
@@ -467,7 +467,7 @@ async function handleCommand(
             tui.endStream();
             tui.showCompletionBadge(modelManager.getCurrentModel(), Date.now() - turnStart);
 
-            // Auto-add LLAMA.md to .gitignore if it's a git repo and not already ignored
+            // Auto-add VEEPEE.md to .gitignore if it's a git repo and not already ignored
             try {
               const { execSync } = await import('child_process');
               const isGit = await import('fs').then(fs => fs.existsSync(`${process.cwd()}/.git`));
@@ -476,13 +476,13 @@ async function handleCommand(
                 const fs = await import('fs');
                 if (fs.existsSync(gitignorePath)) {
                   const content = fs.readFileSync(gitignorePath, 'utf-8');
-                  if (!content.includes('LLAMA.md')) {
-                    fs.appendFileSync(gitignorePath, '\n# Llama Code project instructions\nLLAMA.md\n');
-                    tui.showInfo(`${theme.success('Added LLAMA.md to .gitignore')}`);
+                  if (!content.includes('VEEPEE.md')) {
+                    fs.appendFileSync(gitignorePath, '\n# VEEPEE Code project instructions\nVEEPEE.md\n');
+                    tui.showInfo(`${theme.success('Added VEEPEE.md to .gitignore')}`);
                   }
                 } else {
-                  fs.writeFileSync(gitignorePath, '# Llama Code project instructions\nLLAMA.md\n');
-                  tui.showInfo(`${theme.success('Created .gitignore with LLAMA.md')}`);
+                  fs.writeFileSync(gitignorePath, '# VEEPEE Code project instructions\nVEEPEE.md\n');
+                  tui.showInfo(`${theme.success('Created .gitignore with VEEPEE.md')}`);
                 }
               }
             } catch { /* non-critical */ }

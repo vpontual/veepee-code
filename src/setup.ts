@@ -80,7 +80,7 @@ export async function validateIntegrations(config: Config): Promise<IntegrationS
         status: 'active',
         tools: [],
         message: `Connected — ${data.models?.length || 0} models available`,
-        requiredEnvVars: ['LLAMA_CODE_PROXY_URL'],
+        requiredEnvVars: ['VEEPEE_CODE_PROXY_URL'],
       });
     } else {
       results.push({
@@ -89,7 +89,7 @@ export async function validateIntegrations(config: Config): Promise<IntegrationS
         status: 'error',
         tools: [],
         message: `HTTP ${res.status} — check proxy URL`,
-        requiredEnvVars: ['LLAMA_CODE_PROXY_URL'],
+        requiredEnvVars: ['VEEPEE_CODE_PROXY_URL'],
       });
     }
   } catch {
@@ -99,7 +99,7 @@ export async function validateIntegrations(config: Config): Promise<IntegrationS
       status: 'error',
       tools: [],
       message: `Cannot connect to ${config.proxyUrl}`,
-      requiredEnvVars: ['LLAMA_CODE_PROXY_URL'],
+      requiredEnvVars: ['VEEPEE_CODE_PROXY_URL'],
     });
   }
 
@@ -374,7 +374,7 @@ export function formatSetupReport(results: IntegrationStatus[]): string {
   // Summary
   const totalTools = results.reduce((sum, r) => sum + r.tools.length, 0);
   const activeTools = active.reduce((sum, r) => sum + r.tools.length, 0);
-  lines.push(theme.dim(`  ${activeTools}/${totalTools} tools active  |  Config: ~/.llama-code/.env or ./.env`));
+  lines.push(theme.dim(`  ${activeTools}/${totalTools} tools active  |  Config: ~/.veepee-code/.env or ./.env`));
   lines.push('');
 
   return lines.join('\n');

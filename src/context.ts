@@ -55,30 +55,30 @@ function getProjectTree(cwd: string, maxFiles = 150, maxDepth = 3): string {
   return `\n## Project Structure\n\`\`\`\n${files.join('\n')}${truncated}\n\`\`\`\n`;
 }
 
-// ─── LLAMA.md Loader ─────────────────────────────────────────────────────────
+// ─── VEEPEE.md Loader ─────────────────────────────────────────────────────────
 // Like CLAUDE.md, GEMINI.md, OpenCode.md, AGENTS.md — project-specific instructions
-// Precedence: workspace LLAMA.md > parent dir LLAMA.md > ~/.llama-code/LLAMA.md
+// Precedence: workspace VEEPEE.md > parent dir VEEPEE.md > ~/.veepee-code/VEEPEE.md
 
 function loadLlamaMd(cwd: string): string {
   const sections: Array<{ source: string; content: string }> = [];
 
-  // 1. Global ~/.llama-code/LLAMA.md
-  const globalPath = join(process.env.HOME || '~', '.llama-code', 'LLAMA.md');
+  // 1. Global ~/.veepee-code/VEEPEE.md
+  const globalPath = join(process.env.HOME || '~', '.veepee-code', 'VEEPEE.md');
   if (existsSync(globalPath)) {
     try {
       const content = readFileSync(globalPath, 'utf-8').trim();
-      if (content) sections.push({ source: 'global (~/.llama-code/LLAMA.md)', content });
+      if (content) sections.push({ source: 'global (~/.veepee-code/VEEPEE.md)', content });
     } catch { /* ignore */ }
   }
 
-  // 2. Walk up from cwd to find LLAMA.md in parent directories (max 5 levels)
+  // 2. Walk up from cwd to find VEEPEE.md in parent directories (max 5 levels)
   let dir = cwd;
   const visited = new Set<string>();
   for (let i = 0; i < 5; i++) {
     if (visited.has(dir)) break;
     visited.add(dir);
 
-    const filePath = join(dir, 'LLAMA.md');
+    const filePath = join(dir, 'VEEPEE.md');
     if (existsSync(filePath) && dir !== cwd) {
       try {
         const content = readFileSync(filePath, 'utf-8').trim();
@@ -91,21 +91,21 @@ function loadLlamaMd(cwd: string): string {
     dir = parent;
   }
 
-  // 3. Workspace LLAMA.md (highest precedence)
-  const workspacePath = join(cwd, 'LLAMA.md');
+  // 3. Workspace VEEPEE.md (highest precedence)
+  const workspacePath = join(cwd, 'VEEPEE.md');
   if (existsSync(workspacePath)) {
     try {
       const content = readFileSync(workspacePath, 'utf-8').trim();
-      if (content) sections.push({ source: 'workspace (LLAMA.md)', content });
+      if (content) sections.push({ source: 'workspace (VEEPEE.md)', content });
     } catch { /* ignore */ }
   }
 
   if (sections.length === 0) return '';
 
   // Build the instructions block
-  const lines = ['\n## Project Instructions (LLAMA.md)',
+  const lines = ['\n## Project Instructions (VEEPEE.md)',
     '',
-    'The following instructions are loaded from LLAMA.md files. These are foundational mandates from the user.',
+    'The following instructions are loaded from VEEPEE.md files. These are foundational mandates from the user.',
     '**Precedence:** Workspace > Parent > Global. These instructions override default behaviors but cannot override safety rules.',
     '',
   ];
@@ -120,7 +120,7 @@ function loadLlamaMd(cwd: string): string {
 // ─── System Prompt ───────────────────────────────────────────────────────────
 // Synthesized from: Claude Code, OpenCode, Codex, Gemini CLI, RooCode, Llama Rider
 
-const SYSTEM_PROMPT = `You are Llama Code, a CLI coding assistant powered by local Ollama models. You help users with software engineering tasks directly in their terminal.
+const SYSTEM_PROMPT = `You are VEEPEE Code, a CLI coding assistant powered by local Ollama models. You help users with software engineering tasks directly in their terminal.
 
 ## Environment
 - **Date:** {{DATE}}
@@ -313,7 +313,7 @@ export class ContextManager {
     // Include project tree on first build (like RooCode's environment_details)
     const projectTree = this.getProjectTreeCached();
 
-    // Load LLAMA.md project instructions (like CLAUDE.md, GEMINI.md, OpenCode.md, AGENTS.md)
+    // Load VEEPEE.md project instructions (like CLAUDE.md, GEMINI.md, OpenCode.md, AGENTS.md)
     const llamaMd = loadLlamaMd(process.cwd());
 
     this.systemPrompt = SYSTEM_PROMPT

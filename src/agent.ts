@@ -132,7 +132,7 @@ export class Agent {
 
   /** Load optimal context sizes from latest benchmark results */
   private async loadBenchmarkContextSizes(): Promise<void> {
-    const latestPath = resolve(process.env.HOME || '~', '.llama-code', 'benchmarks', 'latest.json');
+    const latestPath = resolve(process.env.HOME || '~', '.veepee-code', 'benchmarks', 'latest.json');
     if (!existsSync(latestPath)) return;
 
     try {
