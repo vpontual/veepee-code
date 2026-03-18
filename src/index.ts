@@ -11,6 +11,7 @@ import { startApiServer } from './api.js';
 import { TUI, theme, icons } from './tui/index.js';
 import { validateIntegrations, formatSetupReport } from './setup.js';
 import { saveSession, listSessions, findSession, formatSessionList, autoName } from './sessions.js';
+import { MoeEngine, type MoeStrategy } from './moe.js';
 
 // Tool registrations
 import { registerCodingTools } from './tools/coding.js';
@@ -339,6 +340,8 @@ async function handleCommand(
         `  ${theme.accent('/plan')}   Plan mode — thinking ON, heavy model, clarifying questions first`,
         `  ${theme.accent('/act')}    Act mode  — thinking OFF, all tools, auto-switch (default)`,
         `  ${theme.accent('/chat')}   Chat mode — fast model, web search only, no file access`,
+        `  ${theme.accent('/moe')}    Mixture of Experts — 3 models discuss your question`,
+        `  ${theme.dim('  /moe debate | /moe vote | /moe fastest | /moe (auto-detects)')}`,
         `  ${theme.dim('  Plan auto-activates on "plan", "think through", "design", etc.')}`,
         '',
         `${theme.textBold('Benchmark:')}`,
@@ -532,6 +535,82 @@ async function handleCommand(
         `  ${theme.dim('Tools:')} web_search, web_fetch, weather, news (no file access)`,
         `  ${theme.dim('Exit:')} /act to switch back to coding mode`,
       ].join('\n'));
+      return false;
+    }
+
+    case '/moe': {
+      const strategyArg = parts[1]?.toLowerCase() as MoeStrategy | undefined;
+      const validStrategies = ['auto', 'synthesize', 'debate', 'vote', 'fastest'];
+      const strategy: MoeStrategy = validStrategies.includes(strategyArg || '') ? strategyArg as MoeStrategy : 'auto';
+
+      // Initialize MoE engine with roster
+      const roster = agent.getRoster();
+      const moe = new MoeEngine(config, roster);
+      const moeModels = moe.getModels();
+
+      tui.showInfo([
+        `${theme.accent('⚡ MoE mode')} — ${strategy === 'auto' ? 'auto-detecting strategy' : strategy}`,
+        `  ${moeModels.map(m => `${theme.dim(m.role)}: ${theme.accent(m.name)}`).join('\n  ')}`,
+        '',
+        theme.dim('Type your question. All models will respond in parallel.'),
+      ].join('\n'));
+
+      // Get user input
+      let moeInput: string;
+      try {
+        moeInput = await tui.getInput();
+      } catch {
+        return false;
+      }
+      if (!moeInput.trim() || moeInput.startsWith('/')) return false;
+
+      tui.addUserMessage(moeInput);
+      const moeStart = Date.now();
+
+      // Run MoE
+      const moeResult = await moe.run(
+        moeInput,
+        agent.getContext().getSystemPrompt(),
+        agent.getContext().getMessages(),
+        strategy,
+        (model, role, status, content) => {
+          if (status === 'started') {
+            tui.showInfo(theme.dim(`${role} (${model}): starting...`));
+          } else if (status === 'done' && content) {
+            const preview = content.split('\n')[0].slice(0, 80);
+            tui.showInfo(`${theme.accent(role)} (${model}): ${theme.dim('done')}`);
+          }
+        },
+      );
+
+      // Display results based on strategy
+      tui.showInfo('');
+      tui.showInfo(`${theme.accent('⚡ MoE Results')} — strategy: ${moeResult.strategy} — ${((Date.now() - moeStart) / 1000).toFixed(1)}s`);
+      tui.showInfo('');
+
+      if (moeResult.strategy === 'vote') {
+        // Show all responses for user to pick
+        for (const r of moeResult.responses) {
+          tui.showInfo(`${theme.accent(`── ${r.role}`)} (${r.model}, ${(r.elapsed / 1000).toFixed(1)}s) ──`);
+          tui.showInfo(r.content);
+          tui.showInfo('');
+        }
+        tui.showInfo(theme.dim('Pick the best response above. Use /act to return to normal mode.'));
+      } else {
+        // Show individual responses collapsed, then synthesis
+        for (const r of moeResult.responses) {
+          const firstLine = r.content.split('\n')[0].slice(0, 80);
+          tui.showInfo(theme.dim(`  ${r.role} (${(r.elapsed / 1000).toFixed(1)}s): ${firstLine}...`));
+        }
+        tui.showInfo('');
+
+        if (moeResult.synthesis) {
+          tui.showInfo(`${theme.accent('── Synthesized Answer ──')}`);
+          tui.showInfo(moeResult.synthesis);
+        }
+      }
+
+      tui.showInfo('');
       return false;
     }
 
