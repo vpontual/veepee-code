@@ -10,6 +10,7 @@ import { Benchmarker } from './benchmark.js';
 import { startApiServer } from './api.js';
 import { TUI, theme, icons } from './tui/index.js';
 import { validateIntegrations, formatSetupReport } from './setup.js';
+import { saveSession, listSessions, findSession, formatSessionList, autoName } from './sessions.js';
 
 // Tool registrations
 import { registerCodingTools } from './tools/coding.js';
@@ -110,6 +111,36 @@ async function main() {
     return tui.promptPermission(toolName, args, reason);
   });
 
+  // Handle --resume CLI argument
+  let currentSessionId: string | null = null;
+  const resumeArg = process.argv.find(a => a === '--resume' || a.startsWith('--resume='));
+  if (resumeArg) {
+    const query = resumeArg.includes('=') ? resumeArg.split('=')[1] : process.argv[process.argv.indexOf('--resume') + 1];
+    if (query) {
+      const session = await findSession(query);
+      if (session) {
+        // Restore conversation
+        for (const msg of session.messages) {
+          if (msg.role === 'user') {
+            agent.getContext().addUser(msg.content || '');
+            tui.addUserMessage(msg.content || '');
+          } else if (msg.role === 'assistant') {
+            agent.getContext().addAssistant(msg.content || '');
+            tui.showInfo(msg.content || '');
+          }
+        }
+        currentSessionId = session.id;
+        if (session.model) {
+          const profile = modelManager.getProfile(session.model);
+          if (profile) agent.setModel(session.model);
+        }
+        tui.showInfo(`${theme.success('Resumed session:')} ${theme.accent(session.name)} (${session.messageCount} messages)`);
+      } else {
+        tui.showInfo(`${theme.error('Session not found:')} ${query}`);
+      }
+    }
+  }
+
   // Main loop
   let sessionStart = Date.now();
 
@@ -135,8 +166,11 @@ async function main() {
 
     // Handle commands
     if (trimmed.startsWith('/')) {
-      const shouldQuit = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, apiPort);
-      if (shouldQuit) break;
+      const result = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, apiPort, currentSessionId);
+      if (result === true) break; // quit
+      if (typeof result === 'string' && result.startsWith('session:')) {
+        currentSessionId = result.slice(8) || null;
+      }
       continue;
     }
 
@@ -214,7 +248,9 @@ async function handleCommand(
   permissions: PermissionManager,
   config: ReturnType<typeof loadConfig>,
   apiPort: number,
-): Promise<boolean> {
+  currentSessionId: string | null,
+): Promise<boolean | string | void> {
+  // Returns: true = quit, 'session:<id>' = set session ID, void = continue
   const parts = input.split(/\s+/);
   const cmd = parts[0].toLowerCase();
 
@@ -233,6 +269,8 @@ async function handleCommand(
         `  ${theme.accent('/clear')}            Clear history      ${theme.accent('/compact')}    Free context space`,
         `  ${theme.accent('/status')}           Session info       ${theme.accent('/quit')}       Exit`,
         `  ${theme.accent('/init')}             Create VEEPEE.md    ${theme.accent('/setup')}       Validate tools`,
+        `  ${theme.accent('/save [name]')}      Save session        ${theme.accent('/sessions')}    List saved sessions`,
+        `  ${theme.accent('/resume <name>')}    Resume a session`,
         '',
         `${theme.textBold('Modes:')}`,
         `  ${theme.accent('/plan')}   Plan mode — thinking ON, heavy model, clarifying questions first`,
@@ -498,9 +536,81 @@ async function handleCommand(
       return false;
     }
 
+    // ─── Session Commands ─────────────────────────────────────────────
+    case '/save': {
+      const name = parts.slice(1).join(' ') || autoName(agent.getContext().getMessages());
+      if (agent.getContext().messageCount() === 0) {
+        tui.showInfo('Nothing to save — start a conversation first.');
+        return;
+      }
+      const session = await saveSession(
+        name,
+        agent.getContext().getMessages(),
+        modelManager.getCurrentModel(),
+        agent.getMode(),
+        process.cwd(),
+        currentSessionId || undefined,
+      );
+      tui.showInfo(`${theme.success('Saved:')} ${theme.accent(session.name)} ${theme.dim(`(ID: ${session.id})`)}`);
+      return `session:${session.id}`;
+    }
+
+    case '/sessions': {
+      const sessions = await listSessions();
+      tui.showInfo(formatSessionList(sessions));
+      return;
+    }
+
+    case '/resume': {
+      const query = parts.slice(1).join(' ');
+      if (!query) {
+        // Show session list for selection
+        const sessions = await listSessions();
+        if (sessions.length === 0) {
+          tui.showInfo('No saved sessions.');
+          return;
+        }
+        tui.showInfo(formatSessionList(sessions));
+        tui.showInfo(theme.dim('Use /resume <name> to continue a session.'));
+        return;
+      }
+
+      const session = await findSession(query);
+      if (!session) {
+        tui.showInfo(`${theme.error('Session not found:')} ${query}`);
+        return;
+      }
+
+      // Clear current conversation and restore
+      agent.clear();
+      for (const msg of session.messages) {
+        if (msg.role === 'user') {
+          agent.getContext().addUser(msg.content || '');
+          tui.addUserMessage(msg.content || '');
+        } else if (msg.role === 'assistant') {
+          agent.getContext().addAssistant(msg.content || '', msg.tool_calls);
+          tui.showInfo(msg.content || '');
+        } else if (msg.role === 'tool') {
+          agent.getContext().addToolResult('resumed', msg.content || '');
+        }
+      }
+
+      // Restore model if available
+      if (session.model) {
+        const profile = modelManager.getProfile(session.model);
+        if (profile) {
+          agent.setModel(session.model);
+          tui.updateModel(session.model);
+        }
+      }
+
+      tui.showInfo(`${theme.success('Resumed:')} ${theme.accent(session.name)} (${session.messageCount} messages)`);
+      return `session:${session.id}`;
+    }
+
     default:
       tui.showInfo(`Unknown command: ${cmd}. Type /help for commands.`);
-      return false;
+      return;
   }
 }
 

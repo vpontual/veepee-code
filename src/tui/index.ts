@@ -59,6 +59,9 @@ const COMMANDS = [
   { name: '/clear', args: '', description: 'Clear conversation history' },
   { name: '/compact', args: '', description: 'Compact conversation to free context' },
   { name: '/help', args: '', description: 'Show all commands' },
+  { name: '/save', args: '[name]', description: 'Save current conversation as a session' },
+  { name: '/sessions', args: '', description: 'List all saved sessions' },
+  { name: '/resume', args: '<name>', description: 'Resume a saved session' },
   { name: '/quit', args: '', description: 'Exit VEEPEE Code' },
   { name: '/exit', args: '', description: 'Exit VEEPEE Code' },
 ];
