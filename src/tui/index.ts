@@ -71,8 +71,6 @@ export class TUI {
   private commandMenuVisible = false;
   private commandMenuSelection = 0;
   private filteredCommands: typeof COMMANDS = [];
-  private lastInputBoxRow = 0;   // track where the input box was actually rendered
-  private lastInputBoxLeftPad = 0;
   private scrollOffset = 0;
   private state: 'welcome' | 'conversation' | 'waiting' = 'welcome';
   private modelName = '';
@@ -369,21 +367,8 @@ export class TUI {
     } else {
       this.renderConversation(rows, cols);
     }
-
-    // ALWAYS position cursor in the input box as the final step
-    this.positionCursorInInput(rows, cols);
-  }
-
-  /** Position the cursor inside the input box — must be called LAST after all rendering */
-  private positionCursorInInput(_rows: number, _cols: number): void {
-    if (!this.resolveInput) {
-      hideCursor();
-      return;
-    }
-
-    // Use the stored text line row directly
-    showCursor();
-    moveTo(this.lastInputBoxRow, this.lastInputBoxLeftPad + 2 + this.input.cursor);
+    // NOTE: cursor positioning is the LAST thing renderInputBox does,
+    // and renderInputBox is called AFTER renderStatusBar in both paths.
   }
 
   private renderWelcome(rows: number, cols: number): void {
@@ -402,12 +387,12 @@ export class TUI {
       writeAt(startRow + i, 1, center(logo[i], cols));
     }
 
-    // Input box
+    // Status bar FIRST (so cursor isn't left here)
+    this.renderStatusBar(rows, cols);
+
+    // Input box LAST (its final action is positioning the cursor)
     const boxRow = startRow + logoHeight + 3;
     this.renderInputBox(boxRow, cols);
-
-    // Status bar at very bottom
-    this.renderStatusBar(rows, cols);
   }
 
   private renderConversation(rows: number, cols: number): void {
@@ -432,12 +417,12 @@ export class TUI {
       this.renderTurnTracker(messagesEndRow + 1, cols);
     }
 
-    // Input box at bottom (above hints + status bar)
+    // Status bar FIRST (so cursor isn't left here)
+    this.renderStatusBar(rows, cols);
+
+    // Input box LAST (its final action is positioning the cursor)
     const inputRow = rows - totalBottomHeight;
     this.renderInputBox(inputRow, cols);
-
-    // Status bar at very bottom
-    this.renderStatusBar(rows, cols);
   }
 
   private renderMessages(startRow: number, endRow: number, cols: number): void {
@@ -602,10 +587,12 @@ export class TUI {
     const boxWidth = Math.min(cols - 4, 90);
     const leftPad = Math.max(2, Math.floor((cols - boxWidth) / 2));
 
-    // Store the EXACT text input line position for cursor placement
-    // topRow+0 = top border, topRow+1 = TEXT LINE, topRow+2 = model info, topRow+3 = bottom border
-    this.lastInputBoxRow = topRow + 1;  // the text line, not the border
-    this.lastInputBoxLeftPad = leftPad;
+    // Layout:
+    // topRow+0: ╭─── top border
+    // topRow+1: │ user text input  │   ← cursor goes here
+    // topRow+2: │ Build  model...  │
+    // topRow+3: ╰─── bottom border
+    // topRow+4: keyboard hints
 
     // Top border
     const topBorder = theme.borderFocused(
@@ -688,6 +675,16 @@ export class TUI {
     // Keyboard hints below box
     const hints = `${theme.textBold('tab')} ${theme.dim('tools')}  ${theme.textBold('ctrl+p')} ${theme.dim('commands')}  ${theme.textBold('/help')} ${theme.dim('help')}`;
     writeAt(topRow + 4, leftPad + 2, center(hints, boxWidth - 4));
+
+    // CURSOR POSITIONING — absolute last action of this function.
+    // This is the ONLY place cursor position is set. No other code touches it.
+    if (this.resolveInput) {
+      showCursor();
+      // Text line is at topRow+1. Cursor column: border(1) + space(1) + typed chars
+      moveTo(topRow + 1, leftPad + 2 + this.input.cursor);
+    } else {
+      hideCursor();
+    }
   }
 
   private renderStreamArea(): void {
