@@ -1,4 +1,6 @@
 import chalk from 'chalk';
+import { marked } from 'marked';
+import { markedTerminal } from 'marked-terminal';
 import { theme, box, icons } from './theme.js';
 import {
   enterAltScreen, exitAltScreen, showCursor, hideCursor,
@@ -36,6 +38,37 @@ interface TurnTracker {
   tokensEstimate: number;
   model: string;
   active: boolean;
+}
+
+// ─── Command Definitions ─────────────────────────────────────────────────────
+
+// ─── Markdown Renderer ───────────────────────────────────────────────────────
+
+// Initialize marked with terminal renderer
+marked.use(markedTerminal({
+  code: chalk.hex('#E8A87C'),           // code blocks in warm terracotta
+  codespan: chalk.hex('#E8A87C').bold,  // inline `code`
+  strong: chalk.bold.white,
+  em: chalk.italic,
+  heading: chalk.bold.underline.white,
+  listitem: chalk.white,
+  link: chalk.hex('#85C7F2').underline,
+  paragraph: chalk.white,
+  hr: () => chalk.dim('─'.repeat(40)) + '\n',
+  blockquote: chalk.dim.italic,
+  width: 96,
+  reflowText: true,
+  tab: 2,
+}) as never);
+
+/** Format assistant markdown into terminal-ready lines */
+function formatAssistantMarkdown(content: string, _maxWidth: number): string[] {
+  try {
+    let rendered = (marked.parse(content) as string).replace(/\n+$/, '');
+    return rendered.split('\n');
+  } catch {
+    return wordWrap(content, _maxWidth).map(line => chalk.white(line));
+  }
 }
 
 // ─── Command Definitions ─────────────────────────────────────────────────────
@@ -500,8 +533,7 @@ export class TUI {
       }
 
       case 'assistant': {
-        const wrapped = wordWrap(msg.content, maxWidth);
-        return wrapped.map(line => theme.assistant(line));
+        return formatAssistantMarkdown(msg.content, maxWidth);
       }
 
       case 'tool_call': {

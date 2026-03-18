@@ -1,8 +1,17 @@
 import chalk from 'chalk';
-import { Marked } from 'marked';
-import TerminalRenderer from 'marked-terminal';
+import { marked } from 'marked';
+import { markedTerminal } from 'marked-terminal';
 
-const marked = new Marked(TerminalRenderer as never);
+// Initialize marked with terminal renderer
+marked.use(markedTerminal({
+  code: chalk.hex('#E8A87C'),
+  codespan: chalk.hex('#E8A87C').bold,
+  strong: chalk.bold.white,
+  heading: chalk.bold.underline.white,
+  width: 96,
+  reflowText: true,
+  tab: 2,
+}) as never);
 
 /** Render markdown to terminal-formatted string */
 export function renderMarkdown(text: string): string {
