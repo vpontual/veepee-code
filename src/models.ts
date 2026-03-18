@@ -432,6 +432,7 @@ export class ModelManager {
   }
 
   private async fetchServers(): Promise<DashboardServer[]> {
+    if (!this.config.dashboardUrl) return []; // no Fleet Manager configured
     try {
       const res = await fetch(`${this.config.dashboardUrl}/api/servers`);
       if (!res.ok) return [];
@@ -442,6 +443,7 @@ export class ModelManager {
   }
 
   private async fetchDiscoveries(): Promise<DashboardDiscovery[]> {
+    if (!this.config.dashboardUrl) return []; // no Fleet Manager configured
     try {
       const res = await fetch(`${this.config.dashboardUrl}/api/discoveries?hours=8760&limit=500`);
       if (!res.ok) return [];

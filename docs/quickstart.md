@@ -63,7 +63,7 @@ veepee-code
 
 On first launch, VEEPEE Code will:
 
-1. **Connect to the proxy** -- It contacts the Ollama proxy URL from your config (default: `http://10.0.153.99:11434`).
+1. **Connect to the proxy** -- It contacts the Ollama proxy URL from your config (default: `http://localhost:11434`).
 2. **Discover models** -- It queries the proxy for available models and the dashboard for loaded model status and capabilities.
 3. **Select the best model** -- Models are scored by parameter size, tool-calling support, quantization quality, and loaded status. The highest-scoring model with tool-calling support becomes the default.
 4. **Register tools** -- All 25+ tools are initialized based on your `.env` configuration. Tools with missing credentials are silently skipped.

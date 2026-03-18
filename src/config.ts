@@ -32,8 +32,8 @@ export function loadConfig(): Config {
   const env = process.env;
 
   return {
-    proxyUrl: env.VEEPEE_CODE_PROXY_URL || 'http://10.0.153.99:11434',
-    dashboardUrl: env.VEEPEE_CODE_DASHBOARD_URL || 'http://10.0.153.99:3334',
+    proxyUrl: env.VEEPEE_CODE_PROXY_URL || 'http://localhost:11434',
+    dashboardUrl: env.VEEPEE_CODE_DASHBOARD_URL || '',
     model: env.VEEPEE_CODE_MODEL || null,
     autoSwitch: env.VEEPEE_CODE_AUTO_SWITCH !== 'false',
     maxTurns: parseInt(env.VEEPEE_CODE_MAX_TURNS || '50', 10),

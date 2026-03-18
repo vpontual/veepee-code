@@ -25,8 +25,8 @@ VEEPEE Code checks for `.env` files in this order (first match wins):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VEEPEE_CODE_PROXY_URL` | `http://10.0.153.99:11434` | URL of your Ollama proxy or standalone Ollama instance. This is the only truly required setting. |
-| `VEEPEE_CODE_DASHBOARD_URL` | `http://10.0.153.99:3334` | URL of the Ollama Fleet Manager dashboard. Used for model discovery (loaded models, capabilities, server status). |
+| `VEEPEE_CODE_PROXY_URL` | `http://localhost:11434` | URL of your Ollama proxy or standalone Ollama instance. This is the only truly required setting. |
+| `VEEPEE_CODE_DASHBOARD_URL` | `http://localhost:3334` | URL of the Ollama Fleet Manager dashboard. Used for model discovery (loaded models, capabilities, server status). |
 
 ### Model Preferences (Optional)
 
@@ -46,7 +46,7 @@ VEEPEE Code checks for `.env` files in this order (first match wins):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HA_URL` | *(none)* | Home Assistant base URL (e.g., `http://10.0.153.90:8123`). |
+| `HA_URL` | *(none)* | Home Assistant base URL (e.g., `http://your-ha-server:8123`). |
 | `HA_TOKEN` | *(none)* | Long-lived access token from Home Assistant. Generate one at Settings > Security > Long-lived access tokens. |
 
 Both `HA_URL` and `HA_TOKEN` must be set to enable the `home_assistant` and `timer` tools.
@@ -92,7 +92,7 @@ Required OAuth scopes:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SEARXNG_URL` | *(none)* | URL of your SearXNG instance (e.g., `http://10.0.153.99:8888`). SearXNG is a free, self-hosted metasearch engine. |
+| `SEARXNG_URL` | *(none)* | URL of your SearXNG instance (e.g., `http://localhost:8888`). SearXNG is a free, self-hosted metasearch engine. |
 
 Must be set to enable the `web_search` tool. Without it, the agent can still use `web_fetch` and `http_request` for direct URL access.
 
@@ -100,7 +100,7 @@ Must be set to enable the `web_search` tool. Without it, the agent can still use
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEWSFEED_URL` | *(none)* | URL of the AI-optimized newsfeed API (e.g., `http://10.0.153.99:3333`). |
+| `NEWSFEED_URL` | *(none)* | URL of the AI-optimized newsfeed API (e.g., `http://localhost:3333`). |
 
 Must be set to enable the `news` tool.
 
@@ -108,8 +108,8 @@ Must be set to enable the `news` tool.
 
 ```bash
 # Ollama Proxy (required)
-VEEPEE_CODE_PROXY_URL=http://10.0.153.99:11434
-VEEPEE_CODE_DASHBOARD_URL=http://10.0.153.99:3334
+VEEPEE_CODE_PROXY_URL=http://localhost:11434
+VEEPEE_CODE_DASHBOARD_URL=http://localhost:3334
 
 # Model preferences (optional)
 VEEPEE_CODE_MODEL=                # Leave empty for auto-selection
@@ -120,7 +120,7 @@ VEEPEE_CODE_MAX_TURNS=50
 VEEPEE_CODE_API_PORT=8484
 
 # Home Assistant
-HA_URL=http://10.0.153.90:8123
+HA_URL=http://your-ha-server:8123
 HA_TOKEN=eyJ0eXAiOiJKV1QiLCJh...
 
 # Mastodon
@@ -138,10 +138,10 @@ GOOGLE_CLIENT_SECRET=GOCSPX-...
 GOOGLE_REFRESH_TOKEN=1//0e...
 
 # Web Search (SearXNG)
-SEARXNG_URL=http://10.0.153.99:8888
+SEARXNG_URL=http://localhost:8888
 
 # News
-NEWSFEED_URL=http://10.0.153.99:3333
+NEWSFEED_URL=http://localhost:3333
 ```
 
 ## Directory Structure

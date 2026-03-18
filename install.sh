@@ -83,9 +83,9 @@ mkdir -p "$CONFIG_DIR"
 # Create default config if not exists
 if [ ! -f "$CONFIG_DIR/.env" ]; then
   cat > "$CONFIG_DIR/.env" << 'ENVEOF'
-# Ollama Proxy URL — change this to your proxy address
-VEEPEE_CODE_PROXY_URL=http://10.0.153.99:11434
-VEEPEE_CODE_DASHBOARD_URL=http://10.0.153.99:3334
+# Ollama URL — point to your Ollama server or proxy
+VEEPEE_CODE_PROXY_URL=http://localhost:11434
+# VEEPEE_CODE_DASHBOARD_URL=  # Only needed if using Ollama Fleet Manager
 
 # Auto model switching (true/false)
 VEEPEE_CODE_AUTO_SWITCH=true

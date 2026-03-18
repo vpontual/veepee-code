@@ -42,7 +42,7 @@ The command tests each integration in sequence with a 5-second timeout per conne
       Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN in .env
 
   ✗ Errors (1):
-    ✗ Newsfeed [news] — Cannot connect to http://10.0.153.99:3333
+    ✗ Newsfeed [news] — Cannot connect to http://localhost:3333
 
   20/25 tools active  |  Config: ~/.veepee-code/.env or ./.env
 ```
