@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { appendFileSync } from 'fs';
 import { theme, box, icons } from './theme.js';
 import {
   enterAltScreen, exitAltScreen, showCursor, hideCursor,
@@ -434,6 +435,14 @@ export class TUI {
 
     let row = startRow;
 
+    // Debug: write to file to trace the message array
+    appendFileSync('/tmp/vcode-debug.log',
+      `RENDER t=${Date.now()} msgs=${this.messages.length} ` +
+      `roles=[${this.messages.map(m => m.role).join(',')}] ` +
+      `first=${this.messages[0]?.content?.slice(0, 30) || 'NONE'} ` +
+      `startRow=${startRow} endRow=${endRow} vis=${endRow - startRow}\n`
+    );
+
     // Combine committed messages + current stream
     const allMessages = [...this.messages];
 
@@ -481,7 +490,7 @@ export class TUI {
   }
 
   private formatMessage(msg: Message, maxWidth: number): string[] {
-    const bgHighlight = chalk.bgHex('#1E2030');  // dark highlighted background for user msgs
+    const bgHighlight = chalk.bgHex('#2A2A4A');  // visible dark highlight for user messages
 
     switch (msg.role) {
       case 'user': {
@@ -491,7 +500,7 @@ export class TUI {
         const lines: string[] = [];
         for (const wl of wrapped) {
           const padded = wl + ' '.repeat(Math.max(0, contentWidth - stripAnsi(wl).length));
-          lines.push(bgHighlight(theme.accent('│') + ' ' + theme.textBold(padded)));
+          lines.push(bgHighlight(chalk.hex('#85C7F2')('│') + ' ' + chalk.white.bold(padded)));
         }
         return lines;
       }
