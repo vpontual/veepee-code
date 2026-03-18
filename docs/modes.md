@@ -1,12 +1,12 @@
 ---
 title: "Modes"
-description: "Three operating modes: act, plan, and chat -- how they work and when to use each."
+description: "Three operating modes: act, plan, and chat -- how they work, roster-based model selection, and when to use each."
 weight: 4
 ---
 
 # Modes
 
-VEEPEE Code has three operating modes, each optimized for a different workflow. Switch between them with slash commands, or let the agent auto-detect planning intent.
+VEEPEE Code has three operating modes, each optimized for a different workflow. Each mode uses its roster-assigned model (from the first-launch benchmark). Switch between them with slash commands, or let the agent auto-detect planning intent.
 
 ## /act -- Execution Mode (Default)
 
@@ -14,7 +14,7 @@ Act mode is the default. The agent reads, writes, and executes -- getting things
 
 **Characteristics:**
 - **Thinking:** OFF -- the model generates output directly without explicit reasoning steps
-- **Model:** Auto-switching enabled -- the agent picks the best model for the current task complexity
+- **Model:** Uses the roster's **act** model (best overall with decent speed). Auto-switching enabled -- the agent can upgrade to a heavier model for complex tasks.
 - **Tools:** All registered tools available
 - **Behavior:** Execute first, explain after. The agent calls tools proactively and gives concise answers.
 
@@ -43,8 +43,8 @@ Fixed the type mismatch on line 23 -- `string` should be `string | undefined`.
 Plan mode activates deep thinking. The agent reasons through problems before acting, asks clarifying questions, and presents a step-by-step plan for your approval.
 
 **Characteristics:**
-- **Thinking:** ON -- the model uses `<think>` tags (Qwen, DeepSeek) or native thinking to reason through decisions. Thinking blocks are displayed collapsed in the TUI.
-- **Model:** Switches to the heaviest available model with thinking support. Auto-switching is disabled (locked to the heavy model).
+- **Thinking:** ON -- the model uses `<think>` tags (Qwen, DeepSeek) or native thinking (via the `think` API parameter) to reason through decisions. Thinking blocks are displayed collapsed in the TUI.
+- **Model:** Uses the roster's **plan** model (best reasoning score). If no roster exists, falls back to the heaviest model with thinking support. Auto-switching is disabled (locked to the plan model).
 - **Tools:** All registered tools available, but the agent prefers reading and exploring over writing.
 - **Behavior:** Asks clarifying questions before acting. Presents numbered plans with rationale. Waits for explicit approval before implementing.
 
@@ -102,7 +102,7 @@ When in act mode, VEEPEE Code watches for planning-intent signals in your messag
 When auto-detected, you will see a model switch notification:
 
 ```
-  ⟳ Model switch: qwen3.5:35b → qwen3.5:35b (Entering plan mode)
+  ◐ Model: qwen3:8b → qwen3.5:35b (Entering plan mode)
 ```
 
 To return to act mode: type `/act`.
@@ -113,7 +113,7 @@ Chat mode is for casual conversation with web access. No file editing, no shell 
 
 **Characteristics:**
 - **Thinking:** OFF
-- **Model:** Switches to a fast standard-tier model. Auto-switching is disabled.
+- **Model:** Uses the roster's **chat** model (fastest with good instruction following). If no roster exists, falls back to a fast standard-tier model. Auto-switching is disabled.
 - **Tools:** Limited to `web_search`, `web_fetch`, `http_request`, `weather`, and `news`. No file access, no shell, no git.
 - **Behavior:** Proactively searches the web for current information. Cites sources. Conversational tone.
 
@@ -148,7 +148,7 @@ According to the React 19 release blog:
 | Feature | /act (default) | /plan | /chat |
 |---------|---------------|-------|-------|
 | Thinking | OFF | ON | OFF |
-| Model tier | Auto (adapts) | Heavy (locked) | Standard (locked) |
+| Model source | Roster: act | Roster: plan | Roster: chat |
 | Auto-switch | Yes | No | No |
 | All tools | Yes | Yes | No (web only) |
 | File access | Yes | Yes | No |
@@ -166,8 +166,8 @@ According to the React 19 release blog:
 ```
 
 When you switch back to `/act` from plan or chat mode:
-- The previous model is restored
+- The roster's act model is restored (or the previous model if no roster exists)
 - Auto-switching is re-enabled
 - The system prompt is rebuilt for execution mode
 
-Mode state is maintained for the session -- it does not persist across restarts.
+Mode state is maintained for the session -- it does not persist across restarts (though sessions saved with `/save` record the active mode).

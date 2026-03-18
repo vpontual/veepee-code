@@ -26,14 +26,16 @@ VEEPEE Code checks for `.env` files in this order (first match wins):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VEEPEE_CODE_PROXY_URL` | `http://localhost:11434` | URL of your Ollama proxy or standalone Ollama instance. This is the only truly required setting. |
-| `VEEPEE_CODE_DASHBOARD_URL` | `http://localhost:3334` | URL of the Ollama Fleet Manager dashboard. Used for model discovery (loaded models, capabilities, server status). |
+| `VEEPEE_CODE_DASHBOARD_URL` | *(empty)* | URL of the Ollama Fleet Manager dashboard. Used for enhanced model discovery (loaded models, capabilities, server status). Optional -- VEEPEE Code works without it. |
 
 ### Model Preferences (Optional)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VEEPEE_CODE_MODEL` | *(auto-selected)* | Force a specific model as default (e.g., `qwen3.5:35b`). Overrides the automatic selection algorithm. |
+| `VEEPEE_CODE_MODEL` | *(auto-selected)* | Force a specific model as default (e.g., `qwen3.5:35b`). Overrides the automatic selection algorithm and the model roster. |
 | `VEEPEE_CODE_AUTO_SWITCH` | `true` | Enable automatic model switching based on task complexity. Set to `false` to lock to the selected model. |
+| `VEEPEE_CODE_MAX_MODEL_SIZE` | `40` | Maximum model parameter count in billions. Models larger than this are excluded from auto-selection and benchmark candidacy. |
+| `VEEPEE_CODE_MIN_MODEL_SIZE` | `6` | Minimum model parameter count in billions for act mode. Models smaller than this are skipped during auto-selection (prevents using tiny unreliable models for coding). |
 | `VEEPEE_CODE_MAX_TURNS` | `50` | Maximum number of agent loop iterations per user message. Each iteration can include LLM inference and tool execution. Prevents runaway loops. |
 
 ### API Server (Optional)
@@ -106,42 +108,49 @@ Must be set to enable the `news` tool.
 
 ## Example .env File
 
+The installer creates `~/.veepee-code/.env` with this template:
+
 ```bash
-# Ollama Proxy (required)
+# ─── Ollama Connection (required) ─────────────────────────────────────────────
+# Point to your Ollama server or Ollama Fleet Manager proxy
 VEEPEE_CODE_PROXY_URL=http://localhost:11434
-VEEPEE_CODE_DASHBOARD_URL=http://localhost:3334
+# VEEPEE_CODE_DASHBOARD_URL=  # Only if using Ollama Fleet Manager
 
-# Model preferences (optional)
-VEEPEE_CODE_MODEL=                # Leave empty for auto-selection
+# ─── Model Preferences ────────────────────────────────────────────────────────
 VEEPEE_CODE_AUTO_SWITCH=true
-VEEPEE_CODE_MAX_TURNS=50
+VEEPEE_CODE_MAX_MODEL_SIZE=40
+VEEPEE_CODE_MIN_MODEL_SIZE=6
 
-# API port
+# ─── API Server ───────────────────────────────────────────────────────────────
 VEEPEE_CODE_API_PORT=8484
 
+# ─── Optional Integrations ────────────────────────────────────────────────────
+# Run /setup inside vcode to see which integrations are available.
+# Uncomment and fill in tokens for the ones you want.
+
 # Home Assistant
-HA_URL=http://your-ha-server:8123
-HA_TOKEN=eyJ0eXAiOiJKV1QiLCJh...
+# HA_URL=http://your-ha-server:8123
+# HA_TOKEN=
 
 # Mastodon
-MASTODON_URL=https://mastodon.social
-MASTODON_TOKEN=abc123...
+# MASTODON_URL=https://your.mastodon.instance
+# MASTODON_TOKEN=
 
-# Spotify
-SPOTIFY_CLIENT_ID=your-client-id
-SPOTIFY_CLIENT_SECRET=your-client-secret
-SPOTIFY_REFRESH_TOKEN=AQD...
+# Spotify (https://developer.spotify.com/dashboard)
+# SPOTIFY_CLIENT_ID=
+# SPOTIFY_CLIENT_SECRET=
+# SPOTIFY_REFRESH_TOKEN=
 
-# Google Workspace
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=GOCSPX-...
-GOOGLE_REFRESH_TOKEN=1//0e...
+# Google Workspace (https://console.cloud.google.com)
+# GOOGLE_CLIENT_ID=
+# GOOGLE_CLIENT_SECRET=
+# GOOGLE_REFRESH_TOKEN=
 
-# Web Search (SearXNG)
-SEARXNG_URL=http://localhost:8888
+# SearXNG web search (https://docs.searxng.org)
+# SEARXNG_URL=http://localhost:8888
 
-# News
-NEWSFEED_URL=http://localhost:3333
+# AI Newsfeed
+# NEWSFEED_URL=http://localhost:3333
 ```
 
 ## Directory Structure
@@ -152,21 +161,25 @@ The home directory stores persistent state:
 
 ```
 ~/.veepee-code/
-├── .env                    # Global config (alternative location)
-├── VEEPEE.md                # Global project instructions (loaded for all projects)
+├── .env                    # Global config
+├── VEEPEE.md               # Global project instructions (loaded for all projects)
 ├── permissions.json        # Persisted "always allow" tool permissions
+├── sessions/               # Saved conversation sessions
+│   ├── abc123-my-refactor.json
+│   └── def456-auth-fix.json
 └── benchmarks/
+    ├── roster.json         # Model roster (best model per role)
     ├── latest.json         # Most recent benchmark results
     └── benchmark-2026-03-18T...json  # Timestamped benchmark history
 ```
 
 ### ~/.config/veepee-code/
 
-XDG-compliant config location:
+XDG-compliant config location (alternative to `~/.veepee-code/.env`):
 
 ```
 ~/.config/veepee-code/
-└── .env                    # Global config (preferred location)
+└── .env                    # Global config (alternative location)
 ```
 
 ### Project Directory
@@ -174,7 +187,7 @@ XDG-compliant config location:
 ```
 your-project/
 ├── .env                    # Project-local config (overrides global)
-└── VEEPEE.md                # Project-specific instructions
+└── VEEPEE.md               # Project-specific instructions
 ```
 
 ## Config Precedence Summary
@@ -184,4 +197,5 @@ your-project/
 | `.env` file | Local `.env` > `~/.veepee-code/.env` > `~/.config/veepee-code/.env` > default dotenv |
 | `VEEPEE.md` | Workspace > Parent directories (up to 5 levels) > Global (`~/.veepee-code/VEEPEE.md`) |
 | Permissions | Persisted always-allow (`~/.veepee-code/permissions.json`) + session grants |
-| Benchmarks | Latest results at `~/.veepee-code/benchmarks/latest.json` |
+| Benchmarks | Roster at `~/.veepee-code/benchmarks/roster.json`, results at `latest.json` |
+| Sessions | Stored at `~/.veepee-code/sessions/` as JSON files |

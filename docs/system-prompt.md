@@ -32,7 +32,7 @@ The base prompt uses template variables that are resolved at build time:
 | `{{PLATFORM}}` | OS platform | `darwin` |
 | `{{MODE}}` | Current mode label | `Act (execution)` |
 | `{{PROJECT_TREE}}` | File tree (see below) | *(tree output)* |
-| `{{LLAMA_MD}}` | Project instructions (see below) | *(VEEPEE.md content)* |
+| `{{LLAMA_MD}}` | VEEPEE.md project instructions (see below) | *(VEEPEE.md content)* |
 
 ## Base Prompt Sections
 
@@ -146,7 +146,7 @@ If the tree exceeds 150 entries, it is truncated with a note directing the model
 
 ## VEEPEE.md Injection
 
-Project instructions from VEEPEE.md files are loaded hierarchically and injected into the prompt. See the [VEEPEE.md documentation](llama-md.md) for details.
+Project instructions from VEEPEE.md files are loaded hierarchically and injected into the prompt. See the [VEEPEE.md documentation](veepee-md.md) for details.
 
 The injected section looks like:
 

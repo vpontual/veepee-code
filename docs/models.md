@@ -1,24 +1,24 @@
 ---
 title: "Models"
-description: "Model discovery, ranking algorithm, tier system, and automatic model switching."
+description: "Model discovery, ranking algorithm, tier system, model roster, and automatic model switching."
 weight: 6
 ---
 
 # Models
 
-VEEPEE Code discovers all models available on your Ollama fleet, scores them, assigns tiers, and dynamically switches between them based on task complexity.
+VEEPEE Code discovers all models available on your Ollama fleet, scores them, assigns tiers, and uses benchmark-driven roster assignments to select the best model for each role. In act mode, it can dynamically switch between models based on task complexity.
 
 ## Discovery
 
-On startup, VEEPEE Code performs three parallel API calls:
+On startup, VEEPEE Code performs up to three parallel API calls:
 
 1. **`GET /api/tags`** (proxy) -- Retrieves the list of all models available across your fleet, including parameter size, family, quantization level, and disk size.
 
-2. **`GET /api/servers`** (dashboard) -- Queries the Ollama Fleet Manager dashboard for server status and currently loaded models, including context lengths and VRAM usage.
+2. **`GET /api/servers`** (dashboard) -- Queries the Ollama Fleet Manager dashboard for server status and currently loaded models, including context lengths and VRAM usage. Only called if `VEEPEE_CODE_DASHBOARD_URL` is configured.
 
-3. **`GET /api/discoveries`** (dashboard) -- Fetches model capability annotations from the fleet manager's discovery database, including tool support, vision, thinking, code specialization, and embedding.
+3. **`GET /api/discoveries`** (dashboard) -- Fetches model capability annotations from the fleet manager's discovery database, including tool support, vision, thinking, code specialization, and embedding. Only called if `VEEPEE_CODE_DASHBOARD_URL` is configured.
 
-These three data sources are merged to build a complete `ModelProfile` for each model:
+These data sources are merged to build a complete `ModelProfile` for each model:
 
 ```typescript
 interface ModelProfile {
@@ -57,11 +57,38 @@ Every discovered model receives a composite score (0-200+ range). The scoring fa
 | Q5 / Q4_K_M | +2 | Acceptable quality |
 | Embedding-only | -50 | Not useful for agent tasks |
 
-Models are sorted by score descending. The highest-scoring model with tool-calling support becomes the default.
+Models are sorted by score descending. Before the first benchmark runs, the highest-scoring model with tool-calling support (within the configured size limits) becomes the default.
+
+## Size Limits
+
+Two environment variables control which models are considered:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VEEPEE_CODE_MAX_MODEL_SIZE` | `40` | Maximum parameter count in billions. Models larger than this are excluded from auto-selection. |
+| `VEEPEE_CODE_MIN_MODEL_SIZE` | `6` | Minimum parameter count in billions. Models smaller than this are skipped for act mode (prevents using tiny unreliable models for coding). |
+
+These limits apply to both the initial model selection and benchmark candidacy. They do not prevent manual `/model <name>` switching.
+
+## Model Roster
+
+After the first-launch benchmark (or any `/benchmark` run), VEEPEE Code builds a **model roster** -- the best model for each role:
+
+| Role | Selection Criteria | Used By |
+|------|-------------------|---------|
+| **act** | Best overall score with decent speed (>2 tok/s) | `/act` mode (default) |
+| **plan** | Best reasoning score (>1 tok/s is fine -- can be slower) | `/plan` mode |
+| **chat** | Fastest with good instruction following (>3 tok/s preferred, weighted toward speed) | `/chat` mode |
+| **code** | Best code generation + editing combined (60% gen, 40% edit, >2 tok/s) | Future sub-agent use |
+| **search** | Fastest with good tool calling (speed weighted 8x, >3 tok/s) | Future sub-agent use |
+
+The same model can fill multiple roles. For example, if your best model is also the fastest, it might be assigned to act, plan, code, and search.
+
+The roster is saved to `~/.veepee-code/benchmarks/roster.json` and loaded on every subsequent launch. Mode switching (`/plan`, `/chat`, `/act`) uses the roster to select models.
 
 ## Tier System
 
-Models are assigned to tiers based on parameter count:
+Models are assigned to tiers based on parameter count (used for display and auto-switching fallback):
 
 | Tier | Parameter Range | Typical Models | Use Case |
 |------|----------------|----------------|----------|
@@ -102,7 +129,7 @@ Legend:
 
 ## Automatic Model Switching
 
-When `VEEPEE_CODE_AUTO_SWITCH=true` (the default), the agent monitors conversation signals and switches models when the task complexity changes.
+When `VEEPEE_CODE_AUTO_SWITCH=true` (the default), the agent monitors conversation signals and switches models when the task complexity changes. This only applies in act mode.
 
 ### Complexity Signals
 
@@ -121,15 +148,15 @@ The context manager tracks these signals every turn:
 | Complexity Score | Target Tier | Behavior |
 |-----------------|-------------|----------|
 | 8+ | Heavy | Switch to the best heavy-tier model |
-| 3-7 | Standard | Switch to the best standard-tier model |
-| 0-2 | Light | Switch to the best light-tier model |
+| 0-7 | Standard | Stay on standard (never auto-downgrades to light -- too unreliable for coding) |
 
 ### Switching Rules
 
 - **Minimum cooldown:** 3 turns between switches (prevents oscillation)
 - **Tool-calling required:** Only switches to models with tool-calling support
-- **Fallback:** If no model in the target tier has tool support, tries the adjacent tier
-- **Plan mode override:** Auto-switching is disabled in plan and chat modes
+- **Size limits respected:** Models outside `VEEPEE_CODE_MIN_MODEL_SIZE` / `VEEPEE_CODE_MAX_MODEL_SIZE` are excluded
+- **Fallback:** If no model in the target tier has tool support within size limits, stays on current model
+- **Plan/chat mode override:** Auto-switching is disabled in plan and chat modes (roster models are used instead)
 - **Manual override:** `/model <name>` disables auto-switching until `/model auto` re-enables it
 
 ### /model Commands
@@ -137,10 +164,9 @@ The context manager tracks these signals every turn:
 ```
 /model                    # Show current model
 /model qwen3.5:35b        # Switch to specific model (disables auto-switch)
+/model qwen3              # Partial name match
 /model auto               # Re-enable auto-switching
 ```
-
-Partial name matching is supported -- `/model qwen3.5` matches `qwen3.5:35b`.
 
 ## Capability Inference
 

@@ -1,12 +1,12 @@
 ---
 title: "Terminal UI"
-description: "Full-screen TUI: layout, input handling, turn tracker, streaming, thinking display, and keyboard shortcuts."
+description: "Full-screen TUI: layout, input handling, command palette, turn tracker, streaming, thinking display, and keyboard shortcuts."
 weight: 11
 ---
 
 # Terminal UI
 
-VEEPEE Code uses a full-screen alternate-buffer terminal interface inspired by Claude Code and OpenCode. The TUI manages the welcome screen, conversation view, input handling, streaming output, tool call visualization, and a live turn tracker.
+VEEPEE Code uses a full-screen alternate-buffer terminal interface inspired by Claude Code and OpenCode. The TUI manages the welcome screen, conversation view, input handling, command palette, streaming output, tool call visualization, and a live turn tracker.
 
 ## Screen Layout
 
@@ -15,9 +15,19 @@ VEEPEE Code uses a full-screen alternate-buffer terminal interface inspired by C
 When VEEPEE Code starts (or after `/clear` with no messages), the welcome screen is shown:
 
 ```
-                ██╗     ██╗      █████╗ ███╗   ███╗ █████╗
-                ██║     ██║     ██╔══██╗████╗ ████║██╔══██╗
-                ...
+            ██╗   ██╗███████╗███████╗██████╗ ███████╗███████╗
+            ██║   ██║██╔════╝██╔════╝██╔══██╗██╔════╝██╔════╝
+            ██║   ██║█████╗  █████╗  ██████╔╝█████╗  █████╗
+            ╚██╗ ██╔╝██╔══╝  ██╔══╝  ██╔═══╝ ██╔══╝  ██╔══╝
+             ╚████╔╝ ███████╗███████╗██║     ███████╗███████╗
+              ╚═══╝  ╚══════╝╚══════╝╚═╝     ╚══════╝╚══════╝
+
+                      ██████╗ ██████╗ ██████╗ ███████╗
+                     ██╔════╝██╔═══██╗██╔══██╗██╔════╝
+                     ██║     ██║   ██║██║  ██║█████╗
+                     ██║     ██║   ██║██║  ██║██╔══╝
+                     ╚██████╗╚██████╔╝██████╔╝███████╗
+                      ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝
 
                 ╭────────────────────────────────────────────────────────╮
                 │ Ask anything... "Fix the bug in auth.ts"               │
@@ -29,17 +39,17 @@ When VEEPEE Code starts (or after `/clear` with no messages), the welcome screen
 ```
 
 Components:
-- **ASCII art logo** -- Block-pixel "LLAMA CODE" in warm terracotta and white. Falls back to a compact version on narrow terminals.
-- **Input box** -- Rounded-corner box with placeholder text, model info, and provider name.
+- **ASCII art logo** -- Block-pixel "VEEPEE CODE" with the top half (VEEPEE) in warm terracotta and the bottom half (CODE) in white. Falls back to a compact `┃ veepee code ┃` on narrow terminals (<~54 columns).
+- **Input box** -- Rounded-corner box with placeholder text, model info line showing active model name/size and provider, and a blinking cursor.
 - **Keyboard hints** -- Quick reference below the input box.
 - **Status bar** -- Bottom line showing CWD, API port, and version.
 
 ### Conversation Screen
 
-After the first message, the layout switches to conversation mode:
+After the first message, the layout switches to conversation mode. Messages start at row 3 (rows 1-2 can be clipped by terminal title/tab bars):
 
 ```
-  ▎ Fix the off-by-one error in src/utils/paginate.ts
+  │ Fix the off-by-one error in src/utils/paginate.ts
 
   ◆ read_file path=src/utils/paginate.ts
     ✓ (45 lines)
@@ -63,7 +73,7 @@ After the first message, the layout switches to conversation mode:
 Layout regions (top to bottom):
 1. **Message area** -- Scrollable history of user messages, assistant responses, tool calls, and tool results
 2. **Turn tracker** -- Live view of the current agent turn (appears only while the agent is working)
-3. **Input box** -- Same as welcome screen
+3. **Input box** -- Same as welcome screen, with blinking cursor
 4. **Status bar** -- CWD, token count, context usage percentage, API port, version
 
 ## Message Types
@@ -72,15 +82,27 @@ Messages are rendered with distinct visual styles:
 
 | Role | Visual |
 |------|--------|
-| **User** | Blue left border `▎` with white text |
-| **Assistant** | White text, word-wrapped |
-| **Tool call** | Orange diamond `◆` with tool name and truncated arguments |
-| **Tool result (success)** | Green checkmark `✓` with dimmed output preview (max 3 lines) |
+| **User** | Highlighted background (`#2A2A4A`) with blue left border (`│`) and white bold text |
+| **Assistant** | Markdown-rendered via marked-terminal (code blocks in terracotta, bold/italic/headings styled, links in sky blue) |
+| **Tool call** | Terracotta diamond `◆` with tool name and truncated arguments |
+| **Tool result (success)** | Green checkmark `✓` with dimmed output preview (max 3-4 lines) |
 | **Tool result (error)** | Red cross `✗` with error message |
-| **Thinking** | Dimmed, collapsed by default. Shows `◐ Thinking...` while active, then summary `◐ Thought (N lines) preview...` |
+| **Thinking** | Dimmed, collapsed by default. Shows `◐ Thinking...` (animated: ◐ ◓ ◑ ◒) while active, then `◐ Thought (N lines) preview...` when complete |
 | **Model switch** | Yellow `◐ Model: old → new` |
 | **System** | Dimmed text for info, errors, and permission prompts |
 | **Completion badge** | Dimmed `◇ Build ● model ● N tool calls ● tokens ● time` |
+
+## Command Palette
+
+The command palette opens when you type `/` as the first character or press `Ctrl+P`. It appears as a bordered menu above the input box, similar to OpenCode's command palette:
+
+- Shows all available commands with descriptions
+- Filters as you type (e.g., `/be` shows only `/benchmark` commands)
+- Navigate with `Up/Down` arrows
+- `Enter` selects and submits immediately (for commands without arguments)
+- `Tab` accepts the selection but keeps the cursor for typing arguments
+- `Esc` closes without selecting
+- The highlighted row has a distinct background
 
 ## Turn Tracker (Agent Tree View)
 
@@ -94,7 +116,7 @@ While the agent is processing, a live turn tracker appears above the input box. 
 ```
 
 Components:
-- **Header** -- Animated spinner with running stats (tool count, token estimate, elapsed time)
+- **Header** -- Animated spinner (braille frames) with running stats (tool count, token estimate, elapsed time)
 - **Tool tree** -- Last 5 tool calls with tree connectors (`├─` / `└─`)
 - **Status icons** -- Spinning for running, green `✓` for done, red `✗` for error
 - **Overflow** -- If more than 5 tool calls, shows `... N earlier` above the visible tree
@@ -105,7 +127,7 @@ The tracker disappears when the agent completes, replaced by the completion badg
 
 Assistant text streams token-by-token into the message area. During streaming:
 
-- The message area updates in real-time as tokens arrive
+- The message area updates in real-time as tokens arrive (full re-render on each token)
 - The stream buffer accumulates text that has not yet been committed as a message
 - When streaming ends (`endStream`), the buffer is committed as an assistant message
 - Tool calls interrupt the stream -- the current text is committed, the tool call is shown, and streaming resumes after the tool result
@@ -114,7 +136,7 @@ Assistant text streams token-by-token into the message area. During streaming:
 
 When the model uses `<think>` tags (Qwen, DeepSeek) or native thinking (via the `think` API parameter in plan mode):
 
-1. A pulsing indicator appears: `◐ Thinking...` (with animated frames: ◐ ◓ ◑ ◒)
+1. A pulsing indicator appears: animated frames ◐ ◓ ◑ ◒ with "Thinking..."
 2. Thinking content accumulates in a buffer
 3. When thinking ends, the full content is rendered as a collapsed block:
    ```
@@ -153,7 +175,8 @@ History stores up to 100 entries and persists for the session.
 | Key | Action |
 |-----|--------|
 | `Tab` | Submit `/tools` command (show all tools) |
-| `Ctrl+P` | Submit `/help` command (show all commands) |
+| `Ctrl+P` | Open command palette (types `/` and shows command menu) |
+| `/` | Open command palette (when typed as first character) |
 | `Ctrl+L` | Clear screen and message history, return to welcome screen |
 | `Ctrl+C` | Clear current input text (does not quit) |
 | `Ctrl+D` | Quit VEEPEE Code (sends EOF) |
@@ -173,13 +196,13 @@ The bottom row shows:
 | Section | Content |
 |---------|---------|
 | Left | Current working directory (with `~` for home) |
-| Right | Token count, context usage %, API port, version, llama emoji |
+| Right | Token count, context usage %, API port, version, lightning bolt icon |
 
 Context usage percentage is calculated as `estimated_tokens / 32000 * 100`. This gives a rough indication of how full the context window is.
 
 ## Color Theme
 
-VEEPEE Code uses a warm color palette inspired by llama wool:
+VEEPEE Code uses a warm color palette:
 
 | Element | Color | Hex |
 |---------|-------|-----|
@@ -193,6 +216,7 @@ VEEPEE Code uses a warm color palette inspired by llama wool:
 | Dimmer | Dark gray | `#555555` |
 | Muted | Medium gray | `#888888` |
 | Borders | Dark gray / Sky blue (focused) | `#555555` / `#85C7F2` |
+| User message bg | Dark indigo | `#2A2A4A` |
 
 ## Box Drawing
 
@@ -216,7 +240,7 @@ The turn tracker uses tree drawing characters:
 
 The TUI adapts to terminal size:
 
-- **Logo** -- Full ASCII art logo requires ~50 columns. Below that, a compact `┃ llama code ┃` is shown.
+- **Logo** -- Full ASCII art logo requires ~50 columns. Below that, a compact `┃ veepee code ┃` is shown.
 - **Input box** -- Maximum 90 columns wide, centered in the terminal.
 - **Message area** -- Maximum 100 columns wide, centered. Text wraps at the available width.
 - **Resize** -- The TUI re-renders on `process.stdout` resize events.

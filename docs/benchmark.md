@@ -1,14 +1,65 @@
 ---
 title: "Benchmarking"
-description: "Built-in model benchmarking: test categories, scoring, context probing, and interpreting results."
+description: "Smart first-launch benchmark, model roster, test categories, scoring, context probing, and interpreting results."
 weight: 7
 ---
 
 # Benchmarking
 
-VEEPEE Code includes a built-in benchmarking system that tests your models across five categories relevant to coding assistant tasks. Results are used by the model manager to set optimal context sizes and inform model selection.
+VEEPEE Code includes a built-in benchmarking system that tests your models across five categories relevant to coding assistant tasks. On first launch, a smart benchmark runs automatically inside the TUI to build a model roster. Results are used by the agent for model selection, optimal context sizes, and mode switching.
 
-## Running Benchmarks
+## First-Launch Smart Benchmark
+
+On the very first launch (when no `~/.veepee-code/benchmarks/roster.json` exists), VEEPEE Code runs a smart benchmark automatically inside the TUI with live progress updates. This happens after the TUI starts, so you see real-time output.
+
+### Phase 1: Speed Check
+
+All models with tool support are tested for responsiveness:
+- Sends a simple prompt ("Count from 1 to 10, one number per line")
+- Allows up to **60 seconds** for cold-start model loading (models only load once per session, so cold start does not matter for ongoing use)
+- Measures **generation speed** (tok/s) after the first token arrives
+- Models with <1 tok/s are filtered out as too slow for interactive use
+
+### Phase 2: Full Benchmark
+
+Responsive models undergo the complete test suite (10 test cases across 5 categories -- see below).
+
+### Phase 3: Build Roster
+
+Benchmark results are used to assign the best model per role. See [Model Roster](#model-roster) below.
+
+Subsequent launches skip the benchmark and load the saved roster. Run `/benchmark` manually to re-benchmark after adding new models.
+
+## Model Roster
+
+The roster assigns the best model for each role based on benchmark scores and speed:
+
+| Role | Selection Logic |
+|------|----------------|
+| **act** | Best overall score with decent speed (>2 tok/s) |
+| **plan** | Best reasoning score (>1 tok/s is fine) |
+| **chat** | Fastest with good instruction following (speed weighted heavily, >3 tok/s) |
+| **code** | Best code generation (60%) + editing (40%) combined (>2 tok/s) |
+| **search** | Fastest with good tool calling (speed weighted 8x, >3 tok/s) |
+
+The same model can fill multiple roles. The roster is displayed after benchmarking:
+
+```
+  Model Roster (auto-selected from benchmarks)
+
+  Act (default)    qwen3.5:35b                    Best balanced for coding
+  Plan             qwen3.5:35b                    Best reasoning (thinking mode)
+  Chat             qwen3:8b                       Fastest conversational
+  Code             qwen3.5:35b                    Best code gen + editing
+  Search           qwen3:8b                       Fastest for sub-agents
+```
+
+The roster is saved to `~/.veepee-code/benchmarks/roster.json` and used by:
+- `/act` -- switches to the roster's act model
+- `/plan` -- switches to the roster's plan model
+- `/chat` -- switches to the roster's chat model
+
+## Running Benchmarks Manually
 
 ### Benchmark all models
 
@@ -47,12 +98,6 @@ Tests whether the model can correctly invoke tools with the right name and argum
 | Multi-arg tool call | 1.0 | Search with pattern, path, and include filter -- all args correct |
 | Tool selection | 1.5 | Choose the best tool from three options (glob vs bash vs read_file) |
 
-Scoring criteria:
-- Calling the correct tool: 30 points
-- Correct primary argument: 30 points
-- Correct secondary arguments: 20 points each
-- Choosing the optimal tool (glob > bash > read_file for listing): bonus points
-
 ### 2. Code Generation (Weight: 25%)
 
 Tests the quality of generated code.
@@ -63,13 +108,6 @@ Tests the quality of generated code.
 | TypeScript with types | 1.0 | Write an interface + factory function -- correct types, optional fields |
 | Bug fix | 1.5 | Identify `push` vs `concat` bug in a flatten function -- explanation + fix |
 
-Scoring criteria:
-- Correct function structure: 20 points
-- Correct naming: 20 points
-- Correct logic: 20 points
-- Edge case handling: 20 points
-- Complete solution: 20 points
-
 ### 3. Code Editing (Weight: 15%)
 
 Tests precise string replacement ability.
@@ -77,10 +115,6 @@ Tests precise string replacement ability.
 | Test | Weight | What It Checks |
 |------|--------|---------------|
 | Exact string replacement | 1.5 | Given code, produce exact OLD and NEW strings for a find-replace |
-
-Scoring criteria:
-- Correct old string identification: 50 points
-- Correct new string: 50 points
 
 ### 4. Instruction Following (Weight: 15%)
 
@@ -91,11 +125,6 @@ Tests whether the model follows format constraints and stays concise.
 | Format constraint | 1.0 | List exactly 3 items, numbered, no extra text |
 | Conciseness | 1.0 | Answer "2 + 2" with just "4" |
 
-Scoring criteria:
-- Exact format match: 40 points
-- Numbered items: 30 points
-- No unnecessary verbosity: 30 points
-
 ### 5. Reasoning (Weight: 15%)
 
 Tests multi-step logic and edge case awareness.
@@ -104,11 +133,6 @@ Tests multi-step logic and edge case awareness.
 |------|--------|---------------|
 | Multi-step logic | 1.0 | Find second-largest unique number -- dedup, sort, select |
 | Edge case awareness | 1.0 | List edge cases for a division function |
-
-Scoring criteria:
-- Correct intermediate steps: 20-40 points
-- Correct final answer: 40 points
-- Identifying relevant edge cases: 15-35 points per case
 
 ## Overall Score Calculation
 
@@ -140,8 +164,6 @@ efficiency = quality_bonus * tokens_per_second
 ```
 
 Where `quality_bonus` is 2.0 for correct answers and 0.5 for incorrect/empty answers. The size with the highest efficiency score becomes the model's optimal context, used automatically during agent operation.
-
-The **maximum usable context** is the largest size that still produces output (before the model errors or hangs).
 
 ## Results Table
 
@@ -196,20 +218,23 @@ The `/benchmark summary` command shows the winners:
 
 ## Storage
 
-Benchmark results are saved to:
+Benchmark results and the model roster are saved to:
 
 ```
 ~/.veepee-code/benchmarks/
-├── latest.json                           # Always points to the most recent run
+├── roster.json                          # Model roster (best per role)
+├── latest.json                          # Always points to the most recent run
 └── benchmark-2026-03-18T14-30-00-000Z.json  # Timestamped history
 ```
 
-Each file contains an array of `BenchmarkResult` objects with full scores, performance metrics, context probing data, errors, and timestamps.
+Each results file contains an array of `BenchmarkResult` objects with full scores, performance metrics, context probing data, errors, and timestamps.
 
 ## Tips
 
-- Run benchmarks after adding new models to your fleet to update rankings
+- The first-launch benchmark runs automatically -- no manual action needed
+- Run `/benchmark` after adding new models to your fleet to update the roster
 - The agent automatically uses optimal context sizes from benchmark results
-- Benchmark results persist across sessions -- run once, benefit always
+- Benchmark results and roster persist across sessions -- run once, benefit always
 - Use `/benchmark heavy` to quickly test just your flagship models
 - Models with high TTFT (time to first token) have cold-start penalties; keep them loaded for best experience
+- The speed check allows 60 seconds for cold starts, so even unloaded models get a fair chance

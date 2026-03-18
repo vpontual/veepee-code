@@ -6,7 +6,7 @@ weight: 13
 
 # VEEPEE.md Project Instructions
 
-VEEPEE.md is VEEPEE Code's equivalent of CLAUDE.md (Claude Code), AGENTS.md (Codex), GEMINI.md (Gemini CLI), or OpenCode.md. It is a markdown file containing project-specific instructions that are injected into every system prompt, ensuring the agent always has the right context about your project.
+VEEPEE.md is VEEPEE Code's equivalent of CLAUDE.md (Claude Code), AGENTS.md (Codex), GEMINI.md (Gemini CLI), or OpenCode.md. It is a markdown file containing project-specific instructions that are injected into every system prompt, ensuring the agent always has the right context about your project. Create one with the `/init` command.
 
 ## What Goes in VEEPEE.md
 
@@ -197,7 +197,7 @@ The model is instructed that:
 # Project: VEEPEE Code
 
 ## Overview
-AI coding CLI powered by local Ollama models. TypeScript, full-screen TUI, 25+ tools.
+AI coding CLI powered by local Ollama models. TypeScript, full-screen TUI, 25 tools.
 
 ## Stack
 - TypeScript 5.8, Node.js 22

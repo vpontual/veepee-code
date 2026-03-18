@@ -1,12 +1,12 @@
 ---
 title: "Tools Reference"
-description: "All 25+ tools organized by category with descriptions, parameters, and usage examples."
+description: "All 25 tools organized by category with descriptions, parameters, and usage examples."
 weight: 5
 ---
 
 # Tools Reference
 
-VEEPEE Code includes 25+ tools organized into seven categories. Core tools are always available. Optional tools activate when their required environment variables are configured.
+VEEPEE Code includes 25 tools organized into seven categories. Core tools are always available. Optional tools activate when their required environment variables are configured.
 
 Run `/tools` to see which tools are active in your current session, or `/setup` to see the full integration status.
 

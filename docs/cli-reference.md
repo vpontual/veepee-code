@@ -1,6 +1,6 @@
 ---
 title: "CLI Reference"
-description: "Complete reference for all slash commands and keyboard shortcuts."
+description: "Complete reference for all slash commands, CLI flags, and keyboard shortcuts."
 weight: 14
 ---
 
@@ -8,9 +8,59 @@ weight: 14
 
 All interaction with VEEPEE Code happens through the input box in the TUI. Type natural language prompts to interact with the agent, or use slash commands to control the session.
 
+## CLI Flags
+
+```bash
+vcode                          # Start in current directory
+vcode --resume <name-or-id>    # Resume a saved session
+veepee-code                    # Alternative command name
+```
+
+| Flag | Description |
+|------|-------------|
+| `--resume <query>` | Resume a saved session by name or ID. Supports exact match, starts-with, and contains matching. |
+
 ## Commands
 
 ### Session Management
+
+#### /save [name]
+
+Save the current conversation as a session.
+
+```
+/save                 # Auto-names from first user message
+/save my-refactor     # Save with a custom name
+```
+
+Sessions are stored as JSON at `~/.veepee-code/sessions/`. If the session was previously saved (has an ID), `/save` updates the existing session file.
+
+#### /sessions
+
+List all saved sessions, newest first.
+
+```
+/sessions
+```
+
+Output shows session name, age, message count, tool call count, model, and working directory.
+
+#### /resume <name>
+
+Resume a saved session by name (fuzzy match).
+
+```
+/resume my-refactor    # Resume by name
+/resume auth           # Fuzzy match -- finds "auth-fix", "auth module refactor", etc.
+```
+
+Without arguments, shows the session list with a hint to use `/resume <name>`.
+
+Resuming a session:
+- Clears the current conversation
+- Restores all messages (user, assistant, tool results)
+- Restores the model if it is still available
+- Shows a confirmation with message count
 
 #### /clear
 
@@ -70,7 +120,7 @@ Equivalent to pressing `Ctrl+D`.
 
 #### /plan
 
-Enter plan mode. The agent switches to the heaviest available model with thinking support, enables thinking, and adopts a clarify-first behavior.
+Enter plan mode. The agent switches to the roster's plan model (best reasoning), enables thinking, and adopts a clarify-first behavior.
 
 ```
 /plan
@@ -80,7 +130,7 @@ See [Modes](modes.md) for details.
 
 #### /act
 
-Return to act (execution) mode. Restores the previous model, re-enables auto-switching, and disables thinking.
+Return to act (execution) mode. Restores the roster's act model, re-enables auto-switching, and disables thinking.
 
 ```
 /act
@@ -88,7 +138,7 @@ Return to act (execution) mode. Restores the previous model, re-enables auto-swi
 
 #### /chat
 
-Enter chat mode. Switches to a fast standard-tier model with only web tools available.
+Enter chat mode. Switches to the roster's chat model (fastest conversational) with only web tools available.
 
 ```
 /chat
@@ -211,7 +261,7 @@ Generate or improve a VEEPEE.md project instructions file.
 /init
 ```
 
-The agent analyzes the project structure, reads config files and source code, and creates a VEEPEE.md. If one already exists, it is read and improved. Automatically adds VEEPEE.md to .gitignore. See [VEEPEE.md](llama-md.md) for details.
+The agent analyzes the project structure, reads config files and source code, and creates a VEEPEE.md. If one already exists, it is read and improved. Automatically adds VEEPEE.md to .gitignore. See [VEEPEE.md](veepee-md.md) for details.
 
 ### Help
 
@@ -250,10 +300,23 @@ The history buffer holds up to 100 entries for the session.
 | Key | Action |
 |-----|--------|
 | `Tab` | Show all tools (submits `/tools`) |
-| `Ctrl+P` | Show help (submits `/help`) |
+| `Ctrl+P` | Open command palette (types `/` and shows command menu) |
+| `/` | Open command palette (when typed as first character) |
 | `Ctrl+L` | Clear screen and messages, return to welcome |
 | `Ctrl+C` | Clear current input text |
 | `Ctrl+D` | Quit VEEPEE Code |
+
+### Command Palette Navigation
+
+When the command palette is open (after typing `/` or pressing `Ctrl+P`):
+
+| Key | Action |
+|-----|--------|
+| `Up/Down` | Navigate menu items |
+| `Enter` | Select command (submits immediately if no args needed) |
+| `Tab` | Accept selection and continue typing (for commands that take args) |
+| `Esc` | Close command palette |
+| Typing | Filters the command list |
 
 ### Permission Prompt Keys
 
@@ -282,6 +345,9 @@ When a permission prompt is active:
 | `/chat` | Enter chat mode |
 | `/init` | Create/improve VEEPEE.md |
 | `/setup` | Validate integrations |
+| `/save [name]` | Save session |
+| `/sessions` | List saved sessions |
+| `/resume <name>` | Resume a session |
 | `/permissions` | View permissions |
 | `/revoke <tool>` | Revoke always-allow |
 | `/benchmark [tier]` | Run benchmarks |

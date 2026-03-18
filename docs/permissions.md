@@ -136,6 +136,16 @@ Clears the conversation and resets session permissions (but not persistent permi
 /clear
 ```
 
+## Permission Prompt Options
+
+The prompt offers three choices:
+
+| Key | Action | Scope |
+|-----|--------|-------|
+| `y` / `Y` | Allow this once | Session only. The tool is added to the session-allowed list. Future calls to this tool (that don't match dangerous patterns) are auto-allowed for the rest of the session. |
+| `a` / `A` | Always allow | Persistent. The tool is added to the always-allowed list, saved to `~/.veepee-code/permissions.json`. Applies to all future sessions. |
+| `n` / `N` / `Esc` | Deny | The tool call is skipped. The agent receives a "Permission denied" message and continues with the next step. |
+
 ## API Mode Behavior
 
 When tool calls are made through the API server (port 8484) rather than the interactive TUI, the permission system auto-allows all calls. This is by design -- the API is intended for programmatic use by other tools (Claude Code, Gemini CLI, custom scripts) that handle their own permission logic.
