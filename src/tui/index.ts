@@ -38,11 +38,38 @@ interface TurnTracker {
   active: boolean;
 }
 
+// ─── Command Definitions ─────────────────────────────────────────────────────
+
+const COMMANDS = [
+  { name: '/model', args: '<name>', description: 'Switch to a specific model' },
+  { name: '/model auto', args: '', description: 'Re-enable auto model switching' },
+  { name: '/models', args: '', description: 'List all available models with rankings' },
+  { name: '/tools', args: '', description: 'List all available tools' },
+  { name: '/plan', args: '', description: 'Plan mode — thinking ON, heavy model' },
+  { name: '/act', args: '', description: 'Act mode — execution, auto-switch (default)' },
+  { name: '/chat', args: '', description: 'Chat mode — fast model, web search' },
+  { name: '/init', args: '', description: 'Create VEEPEE.md for this project' },
+  { name: '/setup', args: '', description: 'Validate all tool integrations' },
+  { name: '/benchmark', args: '[tier]', description: 'Run benchmarks on all models' },
+  { name: '/benchmark results', args: '', description: 'Show latest benchmark results' },
+  { name: '/benchmark summary', args: '', description: 'Show benchmark summary' },
+  { name: '/permissions', args: '', description: 'Show permission settings' },
+  { name: '/revoke', args: '<tool>', description: 'Revoke always-allow for a tool' },
+  { name: '/status', args: '', description: 'Show session status' },
+  { name: '/clear', args: '', description: 'Clear conversation history' },
+  { name: '/compact', args: '', description: 'Compact conversation to free context' },
+  { name: '/help', args: '', description: 'Show all commands' },
+  { name: '/quit', args: '', description: 'Exit VEEPEE Code' },
+];
+
 // ─── TUI Class ───────────────────────────────────────────────────────────────
 
 export class TUI {
   private messages: Message[] = [];
   private input: InputState = { text: '', cursor: 0, history: [], historyIdx: -1 };
+  private commandMenuVisible = false;
+  private commandMenuSelection = 0;
+  private filteredCommands: typeof COMMANDS = [];
   private scrollOffset = 0;
   private state: 'welcome' | 'conversation' | 'waiting' = 'welcome';
   private modelName = '';
@@ -583,6 +610,40 @@ export class TUI {
     );
     writeAt(topRow + 3, leftPad, bottomBorder);
 
+    // Command menu (rendered ABOVE the input box, like OpenCode)
+    if (this.commandMenuVisible && this.filteredCommands.length > 0) {
+      const menuMaxVisible = Math.min(this.filteredCommands.length, 12);
+      const menuStartRow = topRow - menuMaxVisible - 1;
+
+      // Menu border top
+      writeAt(menuStartRow, leftPad, theme.border(box.roundTl + box.h.repeat(boxWidth - 2) + box.roundTr));
+
+      for (let i = 0; i < menuMaxVisible; i++) {
+        const cmd = this.filteredCommands[i];
+        const isSelected = i === this.commandMenuSelection;
+        const row = menuStartRow + 1 + i;
+
+        const nameStr = cmd.name.padEnd(22);
+        const descStr = truncate(cmd.description, boxWidth - 28);
+
+        if (isSelected) {
+          // Highlighted row
+          const line = ` ${theme.brandBold(nameStr)} ${theme.text(descStr)}`;
+          const lineLen = stripAnsi(line).length;
+          const padded = line + ' '.repeat(Math.max(0, boxWidth - 4 - lineLen));
+          writeAt(row, leftPad, theme.border(box.v) + chalk.bgHex('#2A2A4A')(` ${padded} `) + theme.border(box.v));
+        } else {
+          const line = ` ${theme.accent(nameStr)} ${theme.dim(descStr)}`;
+          const lineLen = stripAnsi(line).length;
+          const padded = line + ' '.repeat(Math.max(0, boxWidth - 4 - lineLen));
+          writeAt(row, leftPad, theme.border(box.v) + ` ${padded} ` + theme.border(box.v));
+        }
+      }
+
+      // Menu border bottom
+      writeAt(menuStartRow + menuMaxVisible + 1, leftPad, theme.border(box.roundBl + box.h.repeat(boxWidth - 2) + box.roundBr));
+    }
+
     // Keyboard hints below box
     const hints = `${theme.textBold('tab')} ${theme.dim('tools')}  ${theme.textBold('ctrl+p')} ${theme.dim('commands')}  ${theme.textBold('/help')} ${theme.dim('help')}`;
     writeAt(topRow + 4, leftPad + 2, center(hints, boxWidth - 4));
@@ -681,6 +742,101 @@ export class TUI {
     // Only process further if we're waiting for input
     if (!this.resolveInput) return;
 
+    // ─── Command menu navigation ─────────────────────────────────────
+    if (this.commandMenuVisible) {
+      // Enter — select highlighted command
+      if (key === '\r' || key === '\n') {
+        if (this.filteredCommands.length > 0) {
+          const selected = this.filteredCommands[this.commandMenuSelection];
+          this.input.text = selected.name + (selected.args ? ' ' : '');
+          this.input.cursor = this.input.text.length;
+          this.commandMenuVisible = false;
+
+          // If command takes no args, submit immediately
+          if (!selected.args) {
+            this.input.history.unshift(this.input.text.trim());
+            if (this.input.history.length > 100) this.input.history.pop();
+            this.input.historyIdx = -1;
+            const resolve = this.resolveInput;
+            this.resolveInput = null;
+            this.rejectInput = null;
+            resolve(this.input.text.trim());
+            return;
+          }
+        }
+        this.render();
+        return;
+      }
+
+      // Arrow up/down — navigate menu
+      if (key === '\x1b[A') {
+        this.commandMenuSelection = Math.max(0, this.commandMenuSelection - 1);
+        this.render();
+        return;
+      }
+      if (key === '\x1b[B') {
+        this.commandMenuSelection = Math.min(this.filteredCommands.length - 1, this.commandMenuSelection + 1);
+        this.render();
+        return;
+      }
+
+      // Escape — close menu
+      if (key === '\x1b' && data.length === 1) {
+        this.commandMenuVisible = false;
+        this.render();
+        return;
+      }
+
+      // Tab — accept selection and keep typing
+      if (key === '\t') {
+        if (this.filteredCommands.length > 0) {
+          const selected = this.filteredCommands[this.commandMenuSelection];
+          this.input.text = selected.name + (selected.args ? ' ' : '');
+          this.input.cursor = this.input.text.length;
+          this.commandMenuVisible = false;
+        }
+        this.render();
+        return;
+      }
+
+      // Backspace — if deleting past /, close menu
+      if (key === '\x7f' || key === '\b') {
+        if (this.input.cursor > 0) {
+          this.input.text =
+            this.input.text.slice(0, this.input.cursor - 1) +
+            this.input.text.slice(this.input.cursor);
+          this.input.cursor--;
+          if (!this.input.text.startsWith('/')) {
+            this.commandMenuVisible = false;
+          } else {
+            this.updateCommandFilter();
+          }
+          this.render();
+        }
+        return;
+      }
+
+      // Regular character — filter the menu
+      if (key.length === 1 && key.charCodeAt(0) >= 32) {
+        this.input.text =
+          this.input.text.slice(0, this.input.cursor) +
+          key +
+          this.input.text.slice(this.input.cursor);
+        this.input.cursor++;
+
+        // If there's a space after the command name, close menu
+        if (this.input.text.includes(' ')) {
+          this.commandMenuVisible = false;
+        } else {
+          this.updateCommandFilter();
+        }
+        this.render();
+        return;
+      }
+    }
+
+    // ─── Normal input handling ───────────────────────────────────────
+
     // Enter — submit
     if (key === '\r' || key === '\n') {
       const text = this.input.text.trim();
@@ -707,20 +863,22 @@ export class TUI {
       return;
     }
 
-    // Tab — show tools
+    // Tab — show tools (when not in command menu)
     if (key === '\t') {
-      // Submit /tools command
       this.resolveInput('/tools');
       this.resolveInput = null;
       this.rejectInput = null;
       return;
     }
 
-    // Ctrl+P — show commands
+    // Ctrl+P — open command menu
     if (key === '\x10') {
-      this.resolveInput('/help');
-      this.resolveInput = null;
-      this.rejectInput = null;
+      this.input.text = '/';
+      this.input.cursor = 1;
+      this.commandMenuVisible = true;
+      this.commandMenuSelection = 0;
+      this.filteredCommands = [...COMMANDS];
+      this.render();
       return;
     }
 
@@ -789,8 +947,23 @@ export class TUI {
         key +
         this.input.text.slice(this.input.cursor);
       this.input.cursor++;
+
+      // Open command menu when typing / as first character
+      if (key === '/' && this.input.text === '/') {
+        this.commandMenuVisible = true;
+        this.commandMenuSelection = 0;
+        this.filteredCommands = [...COMMANDS];
+      }
+
       this.render();
     }
+  }
+
+  /** Update the filtered command list based on current input */
+  private updateCommandFilter(): void {
+    const query = this.input.text.toLowerCase();
+    this.filteredCommands = COMMANDS.filter(c => c.name.toLowerCase().startsWith(query));
+    this.commandMenuSelection = Math.min(this.commandMenuSelection, Math.max(0, this.filteredCommands.length - 1));
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────
