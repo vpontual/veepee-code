@@ -1,0 +1,805 @@
+import chalk from 'chalk';
+import { theme, box, icons } from './theme.js';
+import {
+  enterAltScreen, exitAltScreen, showCursor, hideCursor,
+  moveTo, clearLine, clearScreen, clearBelow,
+  getSize, writeAt, center, stripAnsi, truncate, wordWrap,
+} from './screen.js';
+import { getLogo, getLogoHeight } from './logo.js';
+import type { ToolRegistry } from '../tools/registry.js';
+import type { ModelManager, ModelProfile } from '../models.js';
+
+export { theme, box, icons } from './theme.js';
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface Message {
+  role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'system' | 'model_switch' | 'thinking';
+  content: string;
+  meta?: string;
+  success?: boolean;
+  timestamp?: number;
+  collapsed?: boolean;  // for thinking blocks
+}
+
+interface InputState {
+  text: string;
+  cursor: number;
+  history: string[];
+  historyIdx: number;
+}
+
+/** Tracks the current agent turn's progress — like Claude Code's agent tree view */
+interface TurnTracker {
+  startTime: number;
+  toolCalls: Array<{ name: string; status: 'running' | 'done' | 'error'; elapsed?: number }>;
+  tokensEstimate: number;
+  model: string;
+  active: boolean;
+}
+
+// ─── TUI Class ───────────────────────────────────────────────────────────────
+
+export class TUI {
+  private messages: Message[] = [];
+  private input: InputState = { text: '', cursor: 0, history: [], historyIdx: -1 };
+  private scrollOffset = 0;
+  private state: 'welcome' | 'conversation' | 'waiting' = 'welcome';
+  private modelName = '';
+  private modelSize = '';
+  private providerName = 'Ollama Fleet';
+  private toolCount = 0;
+  private modelCount = 0;
+  private tokenCount = 0;
+  private tokenPercent = 0;
+  private messageCount = 0;
+  private elapsed = 0;
+  private version = '0.1.0';
+  private apiPort = 8484;
+  private tips = [
+    'Permission system prevents unauthorized tool execution',
+    '/benchmark ranks all your models by actual performance',
+    'Model auto-switches based on task complexity',
+    'API on localhost:8484 lets Claude Code collaborate',
+    '/models shows all available models with scores',
+    'Press Ctrl+C to interrupt, /quit to exit',
+  ];
+  private currentTip = 0;
+  private resolveInput: ((value: string) => void) | null = null;
+  private rejectInput: ((reason: Error) => void) | null = null;
+  private permissionResolve: ((value: string) => void) | null = null;
+  private streamBuffer = '';
+  private streamActive = false;
+  private turnTracker: TurnTracker | null = null;
+  private turnTrackerInterval: ReturnType<typeof setInterval> | null = null;
+
+  constructor() {
+    this.currentTip = Math.floor(Math.random() * this.tips.length);
+  }
+
+  // ─── Lifecycle ─────────────────────────────────────────────────────
+
+  start(info: {
+    model: string; modelSize: string; toolCount: number;
+    modelCount: number; version: string; apiPort: number;
+  }): void {
+    this.modelName = info.model;
+    this.modelSize = info.modelSize;
+    this.toolCount = info.toolCount;
+    this.modelCount = info.modelCount;
+    this.version = info.version;
+    this.apiPort = info.apiPort;
+
+    enterAltScreen();
+    process.stdin.setRawMode?.(true);
+    process.stdin.resume();
+    process.stdin.on('data', this.handleKey.bind(this));
+    process.stdout.on('resize', () => this.render());
+
+    this.render();
+  }
+
+  stop(): void {
+    if (this.turnTrackerInterval) clearInterval(this.turnTrackerInterval);
+    process.stdin.setRawMode?.(false);
+    process.stdin.removeAllListeners('data');
+    exitAltScreen();
+    showCursor();
+  }
+
+  // ─── Public API ────────────────────────────────────────────────────
+
+  /** Wait for user input. Returns the entered text. */
+  getInput(placeholder?: string): Promise<string> {
+    this.input.text = '';
+    this.input.cursor = 0;
+    this.state = this.messages.length > 0 ? 'conversation' : 'welcome';
+    this.render();
+
+    return new Promise((resolve, reject) => {
+      this.resolveInput = resolve;
+      this.rejectInput = reject;
+    });
+  }
+
+  /** Show a permission prompt and wait for y/a/n */
+  async promptPermission(toolName: string, args: Record<string, unknown>, reason?: string): Promise<string> {
+    this.addMessage({
+      role: 'system',
+      content: `${icons.warn} Permission required: ${toolName}${reason ? ` (${reason})` : ''}`,
+    });
+
+    const argsSummary = Object.entries(args)
+      .map(([k, v]) => {
+        const val = typeof v === 'string'
+          ? (v.length > 80 ? v.slice(0, 77) + '...' : v)
+          : JSON.stringify(v);
+        return `  ${theme.dim(k)}: ${val}`;
+      })
+      .join('\n');
+    if (argsSummary) {
+      this.addMessage({ role: 'system', content: argsSummary });
+    }
+    this.addMessage({
+      role: 'system',
+      content: `${theme.dim('[y] Yes  [a] Always allow')} ${theme.accent(toolName)} ${theme.dim(' [n] No')}`,
+    });
+    this.render();
+
+    return new Promise((resolve) => {
+      this.permissionResolve = resolve;
+    });
+  }
+
+  /** Add a user message and start turn tracking */
+  addUserMessage(content: string): void {
+    this.addMessage({ role: 'user', content, timestamp: Date.now() });
+    this.state = 'waiting';
+
+    // Start turn tracker (agent tree view)
+    this.turnTracker = {
+      startTime: Date.now(),
+      toolCalls: [],
+      tokensEstimate: 0,
+      model: this.modelName,
+      active: true,
+    };
+
+    // Live-update the tracker display every 100ms
+    if (this.turnTrackerInterval) clearInterval(this.turnTrackerInterval);
+    this.turnTrackerInterval = setInterval(() => {
+      if (this.turnTracker?.active) this.render();
+    }, 500);
+
+    this.render();
+  }
+
+  /** Start streaming assistant text */
+  startStream(): void {
+    this.streamBuffer = '';
+    this.streamActive = true;
+  }
+
+  /** Append streaming text */
+  appendStream(text: string): void {
+    this.streamBuffer += text;
+    this.renderStreamArea();
+  }
+
+  /** End streaming and commit as message */
+  endStream(): void {
+    if (this.streamBuffer.trim()) {
+      this.addMessage({ role: 'assistant', content: this.streamBuffer.trim() });
+    }
+    this.streamBuffer = '';
+    this.streamActive = false;
+    this.state = 'conversation';
+    this.render();
+  }
+
+  /** Show a tool call */
+  showToolCall(name: string, args: Record<string, unknown>): void {
+    const argsStr = Object.entries(args)
+      .map(([k, v]) => {
+        const val = typeof v === 'string'
+          ? (v.length > 60 ? v.slice(0, 57) + '...' : v)
+          : JSON.stringify(v);
+        return `${k}=${val}`;
+      })
+      .join(' ');
+    this.addMessage({ role: 'tool_call', content: `${name} ${argsStr}` });
+
+    // Track in turn tracker
+    if (this.turnTracker) {
+      this.turnTracker.toolCalls.push({ name, status: 'running' });
+    }
+    this.render();
+  }
+
+  /** Show a tool result */
+  showToolResult(name: string, success: boolean, output: string): void {
+    const lines = output.split('\n');
+    const preview = lines.length > 3
+      ? lines.slice(0, 3).join('\n') + `\n... (${lines.length - 3} more lines)`
+      : output;
+    this.addMessage({ role: 'tool_result', content: preview, success, meta: name });
+
+    // Update tracker
+    if (this.turnTracker) {
+      const tc = [...this.turnTracker.toolCalls].reverse().find(t => t.name === name && t.status === 'running');
+      if (tc) {
+        tc.status = success ? 'done' : 'error';
+        tc.elapsed = Date.now() - this.turnTracker.startTime;
+      }
+      this.turnTracker.tokensEstimate += Math.ceil(output.length / 4);
+    }
+    this.render();
+  }
+
+  /** Show model switch */
+  showModelSwitch(from: string, to: string): void {
+    this.modelName = to;
+    this.addMessage({ role: 'model_switch', content: `${from} ${icons.arrow} ${to}` });
+    this.render();
+  }
+
+  /** Show permission denied */
+  showPermissionDenied(name: string): void {
+    this.addMessage({ role: 'system', content: `${icons.lock} ${name} — skipped (denied)` });
+    this.render();
+  }
+
+  /** Show error */
+  /** Show thinking — collapsed by default with first line preview */
+  showThinking(content: string): void {
+    if (content === '...') {
+      // Pulsing indicator — update last thinking message if it exists
+      const lastMsg = this.messages[this.messages.length - 1];
+      if (lastMsg?.role === 'thinking' && lastMsg.content === '...') {
+        return; // already showing indicator
+      }
+      this.addMessage({ role: 'thinking', content: '...', collapsed: true });
+      this.render();
+      return;
+    }
+
+    // Full thinking content — replace the indicator with collapsed block
+    const lastIdx = this.messages.findLastIndex(m => m.role === 'thinking');
+    if (lastIdx >= 0) {
+      this.messages[lastIdx] = { role: 'thinking', content, collapsed: true };
+    } else {
+      this.addMessage({ role: 'thinking', content, collapsed: true });
+    }
+    this.render();
+  }
+
+  showError(msg: string): void {
+    this.addMessage({ role: 'system', content: `${theme.error(msg)}` });
+    this.state = 'conversation';
+    this.render();
+  }
+
+  /** Show an info/system message */
+  showInfo(msg: string): void {
+    this.addMessage({ role: 'system', content: msg });
+    this.render();
+  }
+
+  /** Update context stats */
+  updateStats(tokens: number, percent: number, messages: number, elapsed: number): void {
+    this.tokenCount = tokens;
+    this.tokenPercent = percent;
+    this.messageCount = messages;
+    this.elapsed = elapsed;
+  }
+
+  updateModel(name: string, size?: string): void {
+    this.modelName = name;
+    if (size) this.modelSize = size;
+    this.render();
+  }
+
+  /** Show the completion badge after agent finishes */
+  showCompletionBadge(model: string, elapsed: number): void {
+    // Stop turn tracker
+    if (this.turnTracker) {
+      this.turnTracker.active = false;
+    }
+    if (this.turnTrackerInterval) {
+      clearInterval(this.turnTrackerInterval);
+      this.turnTrackerInterval = null;
+    }
+
+    const secs = (elapsed / 1000).toFixed(1);
+    const toolCount = this.turnTracker?.toolCalls.length || 0;
+    const tokens = this.turnTracker?.tokensEstimate || 0;
+    const tokStr = tokens > 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+
+    this.addMessage({
+      role: 'system',
+      content: `${theme.dim(`${icons.toolDone}  Build ${icons.dot} ${model} ${icons.dot} ${toolCount} tool calls ${icons.dot} ${tokStr} tokens ${icons.dot} ${secs}s`)}`,
+    });
+
+    this.turnTracker = null;
+    this.state = 'conversation';
+    this.render();
+  }
+
+  // ─── Rendering ─────────────────────────────────────────────────────
+
+  render(): void {
+    const { rows, cols } = getSize();
+    if (this.state === 'welcome') {
+      this.renderWelcome(rows, cols);
+    } else {
+      this.renderConversation(rows, cols);
+    }
+  }
+
+  private renderWelcome(rows: number, cols: number): void {
+    clearScreen();
+    hideCursor();
+
+    const logo = getLogo(cols);
+    const logoHeight = logo.length;
+
+    // Calculate vertical position — logo centered in upper half
+    const inputBoxHeight = 5; // box + model line + hints + tip + spacer
+    const contentHeight = logoHeight + 4 + inputBoxHeight;
+    const startRow = Math.max(2, Math.floor((rows - contentHeight) / 2) - 2);
+
+    // Draw logo centered
+    for (let i = 0; i < logo.length; i++) {
+      writeAt(startRow + i, 1, center(logo[i], cols));
+    }
+
+    // Input box
+    const boxRow = startRow + logoHeight + 3;
+    this.renderInputBox(boxRow, cols);
+
+    // Status bar at very bottom
+    this.renderStatusBar(rows, cols);
+  }
+
+  private renderConversation(rows: number, cols: number): void {
+    clearScreen();
+
+    // Layout: turn tracker (if active), messages area, input box, status bar
+    const statusBarHeight = 1;
+    const inputAreaHeight = 4;
+    const trackerHeight = this.turnTracker?.active ? Math.min(this.turnTracker.toolCalls.length + 2, 8) : 0;
+    const messagesEndRow = rows - statusBarHeight - inputAreaHeight - trackerHeight - 1;
+
+    // Render messages
+    this.renderMessages(1, messagesEndRow, cols);
+
+    // Render turn tracker (agent tree view) above input box
+    if (this.turnTracker?.active && trackerHeight > 0) {
+      this.renderTurnTracker(messagesEndRow + 1, cols);
+    }
+
+    // Input box at bottom
+    const inputRow = rows - statusBarHeight - inputAreaHeight;
+    this.renderInputBox(inputRow, cols);
+
+    // Status bar
+    this.renderStatusBar(rows, cols);
+  }
+
+  private renderMessages(startRow: number, endRow: number, cols: number): void {
+    const maxWidth = Math.min(cols - 4, 100);
+    const leftPad = Math.max(2, Math.floor((cols - maxWidth) / 2));
+
+    let row = startRow;
+
+    // Combine committed messages + current stream
+    const allMessages = [...this.messages];
+
+    // Auto-scroll to bottom
+    const renderedLines: { line: string; role: string }[] = [];
+    for (const msg of allMessages) {
+      const lines = this.formatMessage(msg, maxWidth);
+      for (const line of lines) {
+        renderedLines.push({ line, role: msg.role });
+      }
+      renderedLines.push({ line: '', role: 'spacer' });
+    }
+
+    // Add stream buffer if active
+    if (this.streamActive && this.streamBuffer) {
+      const wrapped = wordWrap(this.streamBuffer, maxWidth);
+      for (const line of wrapped) {
+        renderedLines.push({ line, role: 'assistant' });
+      }
+    }
+
+    // Calculate visible window
+    const visibleRows = endRow - startRow;
+    const startLine = Math.max(0, renderedLines.length - visibleRows);
+
+    for (let i = startLine; i < renderedLines.length && row <= endRow; i++) {
+      writeAt(row, leftPad, renderedLines[i].line);
+      row++;
+    }
+  }
+
+  private formatMessage(msg: Message, maxWidth: number): string[] {
+    switch (msg.role) {
+      case 'user': {
+        const lines: string[] = [];
+        // User messages in a subtle highlighted block
+        lines.push(theme.user.bold('▎ ') + theme.text(truncate(msg.content, maxWidth - 2)));
+        const wrapped = wordWrap(msg.content, maxWidth - 2);
+        if (wrapped.length > 1) {
+          lines.length = 0; // clear the truncated version
+          for (const wl of wrapped) {
+            lines.push(theme.user('▎ ') + theme.text(wl));
+          }
+        }
+        return lines;
+      }
+
+      case 'assistant': {
+        const wrapped = wordWrap(msg.content, maxWidth);
+        return wrapped.map(line => theme.assistant(line));
+      }
+
+      case 'tool_call': {
+        return [theme.tool(`${icons.tool} `) + theme.dim(truncate(msg.content, maxWidth - 3))];
+      }
+
+      case 'tool_result': {
+        const icon = msg.success ? theme.success(icons.check) : theme.error(icons.cross);
+        const lines = msg.content.split('\n').slice(0, 4);
+        return lines.map((line, i) =>
+          (i === 0 ? `  ${icon} ` : '    ') + theme.dim(truncate(line, maxWidth - 6))
+        );
+      }
+
+      case 'thinking': {
+        if (msg.content === '...') {
+          // Pulsing indicator
+          const frames = ['◐', '◓', '◑', '◒'];
+          const frame = frames[Math.floor(Date.now() / 200) % frames.length];
+          return [theme.dim(`  ${frame} Thinking...`)];
+        }
+        // Collapsed thinking block — show first line + expand hint
+        const thinkLines = msg.content.split('\n');
+        const preview = thinkLines[0].slice(0, maxWidth - 20);
+        const lineCount = thinkLines.length;
+        if (msg.collapsed && lineCount > 1) {
+          return [
+            theme.dim(`  ${icons.thinking} Thought (${lineCount} lines) `) + theme.dimmer(truncate(preview, maxWidth - 30)),
+          ];
+        }
+        // Expanded — show all lines dimmed
+        return thinkLines.slice(0, 20).map(l => theme.dimmer(`  │ ${truncate(l, maxWidth - 6)}`));
+      }
+
+      case 'model_switch': {
+        return [theme.warning(`  ${icons.thinking} Model: ${msg.content}`)];
+      }
+
+      case 'system': {
+        return [theme.dim(`  ${msg.content}`)];
+      }
+
+      default:
+        return [msg.content];
+    }
+  }
+
+  /** Render the live turn tracker — shows tool calls in progress like Claude Code's agent tree */
+  private renderTurnTracker(startRow: number, cols: number): void {
+    if (!this.turnTracker) return;
+
+    const maxWidth = Math.min(cols - 4, 100);
+    const leftPad = Math.max(2, Math.floor((cols - maxWidth) / 2));
+    const elapsed = ((Date.now() - this.turnTracker.startTime) / 1000).toFixed(1);
+    const toolCount = this.turnTracker.toolCalls.length;
+    const tokStr = this.turnTracker.tokensEstimate > 1000
+      ? `${(this.turnTracker.tokensEstimate / 1000).toFixed(1)}k`
+      : String(this.turnTracker.tokensEstimate);
+
+    // Spinner
+    const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    const frame = frames[Math.floor(Date.now() / 80) % frames.length];
+
+    // Header: Running... (3 tool calls · 1.2k tokens · 4.5s)
+    const header = `${theme.accent(frame)} ${theme.textBold('Running...')} ${theme.dim(`(${toolCount} tool calls ${icons.dot} ${tokStr} tokens ${icons.dot} ${elapsed}s)`)}`;
+    writeAt(startRow, leftPad, header);
+
+    // Tool call tree — show last N calls with tree connectors
+    const maxVisible = 5;
+    const visibleCalls = this.turnTracker.toolCalls.slice(-maxVisible);
+    const hasMore = this.turnTracker.toolCalls.length > maxVisible;
+
+    let row = startRow + 1;
+
+    if (hasMore) {
+      writeAt(row, leftPad, theme.dim(`  ${icons.dot}${icons.dot}${icons.dot} ${this.turnTracker.toolCalls.length - maxVisible} earlier`));
+      row++;
+    }
+
+    for (let i = 0; i < visibleCalls.length; i++) {
+      const tc = visibleCalls[i];
+      const isLast = i === visibleCalls.length - 1;
+      const connector = isLast ? '└─' : '├─';
+
+      let statusIcon: string;
+      let statusColor = theme.dim;
+      if (tc.status === 'running') {
+        statusIcon = theme.accent(frame);
+        statusColor = theme.accent;
+      } else if (tc.status === 'done') {
+        statusIcon = theme.success(icons.check);
+      } else {
+        statusIcon = theme.error(icons.cross);
+        statusColor = theme.error;
+      }
+
+      const elapsedStr = tc.elapsed ? theme.dim(` ${(tc.elapsed / 1000).toFixed(1)}s`) : '';
+      writeAt(row, leftPad, `  ${theme.dim(connector)} ${statusIcon} ${statusColor(tc.name)}${elapsedStr}`);
+      row++;
+    }
+  }
+
+  private renderInputBox(topRow: number, cols: number): void {
+    const boxWidth = Math.min(cols - 4, 90);
+    const leftPad = Math.max(2, Math.floor((cols - boxWidth) / 2));
+
+    // Top border
+    const topBorder = theme.borderFocused(
+      box.roundTl + box.h.repeat(boxWidth - 2) + box.roundTr
+    );
+    writeAt(topRow, leftPad, topBorder);
+
+    // Input line
+    const inputText = this.input.text || '';
+    const placeholder = inputText ? '' : theme.dimmer('Ask anything... "Fix the bug in auth.ts"');
+    const displayText = inputText || stripAnsi(placeholder) ? (inputText || placeholder) : '';
+    const contentWidth = boxWidth - 4;
+
+    writeAt(topRow + 1, leftPad,
+      theme.borderFocused(box.v) + ' ' +
+      truncate(displayText, contentWidth).padEnd(contentWidth) + ' ' +
+      theme.borderFocused(box.v)
+    );
+
+    // Model info line
+    const modelInfo = `${theme.accent('Build')}  ${theme.text(this.modelName)} ${theme.dim(this.modelSize)} ${theme.dim('(default)')} ${theme.dimmer(this.providerName)}`;
+    const modelInfoClean = stripAnsi(modelInfo);
+    const modelPadded = modelInfoClean.length < contentWidth
+      ? modelInfo + ' '.repeat(contentWidth - modelInfoClean.length)
+      : truncate(modelInfo, contentWidth);
+
+    writeAt(topRow + 2, leftPad,
+      theme.borderFocused(box.v) + ' ' + modelPadded + ' ' + theme.borderFocused(box.v)
+    );
+
+    // Bottom border
+    const bottomBorder = theme.borderFocused(
+      box.roundBl + box.h.repeat(boxWidth - 2) + box.roundBr
+    );
+    writeAt(topRow + 3, leftPad, bottomBorder);
+
+    // Keyboard hints below box
+    const hints = `${theme.textBold('tab')} ${theme.dim('tools')}  ${theme.textBold('ctrl+p')} ${theme.dim('commands')}  ${theme.textBold('/help')} ${theme.dim('help')}`;
+    writeAt(topRow + 4, leftPad + 2, center(hints, boxWidth - 4));
+
+    // Show cursor in input
+    if (this.resolveInput) {
+      showCursor();
+      moveTo(topRow + 1, leftPad + 2 + this.input.cursor);
+    }
+  }
+
+  private renderStreamArea(): void {
+    // Quick update of just the message area during streaming
+    // Instead of full re-render, just update the bottom of messages
+    const { rows, cols } = getSize();
+    const statusBarHeight = 1;
+    const inputAreaHeight = 4;
+    const messagesEndRow = rows - statusBarHeight - inputAreaHeight - 1;
+
+    this.renderMessages(1, messagesEndRow, cols);
+
+    // Re-show cursor in input area
+    if (this.resolveInput) {
+      const inputRow = rows - statusBarHeight - inputAreaHeight;
+      showCursor();
+      moveTo(inputRow + 1, Math.max(2, Math.floor((cols - Math.min(cols - 4, 90)) / 2)) + 2 + this.input.cursor);
+    }
+  }
+
+  private renderStatusBar(row: number, cols: number): void {
+    const cwd = process.cwd().replace(process.env.HOME || '', '~');
+    const left = ` ${cwd}`;
+
+    // Right side: context stats + version
+    const contextInfo = this.messageCount > 0
+      ? `${this.tokenCount.toLocaleString()} tok ${this.tokenPercent}%  `
+      : '';
+    const right = `${contextInfo}${icons.dot} API :${this.apiPort}  v${this.version} ${icons.llama} `;
+
+    const padding = Math.max(0, cols - stripAnsi(left).length - stripAnsi(right).length);
+
+    moveTo(row, 1);
+    process.stdout.write(
+      theme.dim(left) + ' '.repeat(padding) + theme.dim(right)
+    );
+  }
+
+  // ─── Tip rotation ──────────────────────────────────────────────────
+
+  private getTip(): string {
+    const tip = this.tips[this.currentTip % this.tips.length];
+    return `${theme.warning(icons.dot)} ${theme.dim('Tip')} ${theme.muted(tip)}`;
+  }
+
+  // ─── Input Handling ────────────────────────────────────────────────
+
+  private handleKey(data: Buffer): void {
+    const key = data.toString();
+
+    // Permission prompt mode
+    if (this.permissionResolve) {
+      if (key === 'y' || key === 'Y') {
+        this.permissionResolve('y');
+        this.permissionResolve = null;
+      } else if (key === 'a' || key === 'A') {
+        this.permissionResolve('a');
+        this.permissionResolve = null;
+      } else if (key === 'n' || key === 'N' || key === '\x1b') {
+        this.permissionResolve('n');
+        this.permissionResolve = null;
+      }
+      return;
+    }
+
+    // Ctrl+C
+    if (key === '\x03') {
+      if (this.resolveInput) {
+        // During input, just clear
+        this.input.text = '';
+        this.input.cursor = 0;
+        this.render();
+      }
+      return;
+    }
+
+    // Ctrl+D — quit
+    if (key === '\x04') {
+      if (this.resolveInput) {
+        this.rejectInput?.(new Error('EOF'));
+        this.resolveInput = null;
+        this.rejectInput = null;
+      }
+      return;
+    }
+
+    // Only process further if we're waiting for input
+    if (!this.resolveInput) return;
+
+    // Enter — submit
+    if (key === '\r' || key === '\n') {
+      const text = this.input.text.trim();
+      if (text) {
+        this.input.history.unshift(text);
+        if (this.input.history.length > 100) this.input.history.pop();
+        this.input.historyIdx = -1;
+        this.resolveInput(text);
+        this.resolveInput = null;
+        this.rejectInput = null;
+      }
+      return;
+    }
+
+    // Backspace
+    if (key === '\x7f' || key === '\b') {
+      if (this.input.cursor > 0) {
+        this.input.text =
+          this.input.text.slice(0, this.input.cursor - 1) +
+          this.input.text.slice(this.input.cursor);
+        this.input.cursor--;
+        this.render();
+      }
+      return;
+    }
+
+    // Tab — show tools
+    if (key === '\t') {
+      // Submit /tools command
+      this.resolveInput('/tools');
+      this.resolveInput = null;
+      this.rejectInput = null;
+      return;
+    }
+
+    // Ctrl+P — show commands
+    if (key === '\x10') {
+      this.resolveInput('/help');
+      this.resolveInput = null;
+      this.rejectInput = null;
+      return;
+    }
+
+    // Ctrl+L — clear screen
+    if (key === '\x0c') {
+      this.messages = [];
+      this.state = 'welcome';
+      this.render();
+      return;
+    }
+
+    // Arrow keys
+    if (key === '\x1b[A') {
+      // Up — history
+      if (this.input.history.length > 0) {
+        this.input.historyIdx = Math.min(this.input.historyIdx + 1, this.input.history.length - 1);
+        this.input.text = this.input.history[this.input.historyIdx];
+        this.input.cursor = this.input.text.length;
+        this.render();
+      }
+      return;
+    }
+    if (key === '\x1b[B') {
+      // Down — history forward
+      if (this.input.historyIdx > 0) {
+        this.input.historyIdx--;
+        this.input.text = this.input.history[this.input.historyIdx];
+        this.input.cursor = this.input.text.length;
+      } else {
+        this.input.historyIdx = -1;
+        this.input.text = '';
+        this.input.cursor = 0;
+      }
+      this.render();
+      return;
+    }
+    if (key === '\x1b[C') {
+      // Right
+      this.input.cursor = Math.min(this.input.cursor + 1, this.input.text.length);
+      this.render();
+      return;
+    }
+    if (key === '\x1b[D') {
+      // Left
+      this.input.cursor = Math.max(this.input.cursor - 1, 0);
+      this.render();
+      return;
+    }
+
+    // Home / End
+    if (key === '\x1b[H' || key === '\x01') {
+      this.input.cursor = 0;
+      this.render();
+      return;
+    }
+    if (key === '\x1b[F' || key === '\x05') {
+      this.input.cursor = this.input.text.length;
+      this.render();
+      return;
+    }
+
+    // Regular character
+    if (key.length === 1 && key.charCodeAt(0) >= 32) {
+      this.input.text =
+        this.input.text.slice(0, this.input.cursor) +
+        key +
+        this.input.text.slice(this.input.cursor);
+      this.input.cursor++;
+      this.render();
+    }
+  }
+
+  // ─── Helpers ───────────────────────────────────────────────────────
+
+  private addMessage(msg: Message): void {
+    this.messages.push(msg);
+    // Keep message buffer reasonable
+    if (this.messages.length > 500) {
+      this.messages = this.messages.slice(-400);
+    }
+  }
+}
