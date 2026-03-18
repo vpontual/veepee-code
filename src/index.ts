@@ -70,7 +70,34 @@ async function main() {
     process.exit(1);
   }
 
-  // Select default model
+  // Run first-launch benchmark if no results exist yet
+  const benchmarker = new Benchmarker(config.proxyUrl);
+  const existingBenchmarks = await benchmarker.loadLatest();
+  if (!existingBenchmarks) {
+    console.log(chalk.dim('  First launch — running quick benchmark to rank your models...'));
+    console.log(chalk.dim('  (This only runs once. Use /benchmark to re-run anytime.)'));
+
+    // Benchmark only standard-tier models (6-25B) for speed — skip heavy and light
+    const standardModels = allModels
+      .filter(m => m.tier === 'standard' && m.capabilities.includes('tools'))
+      .slice(0, 5); // top 5 standard models
+
+    if (standardModels.length > 0) {
+      try {
+        await benchmarker.benchmarkAll(standardModels, {
+          onProgress: (model, test, mi, mt, ti, tt) => {
+            process.stdout.write(`\r${chalk.dim(`  [${mi}/${mt}] ${model} — ${test}`)}`);
+          },
+        });
+        process.stdout.write('\r' + ' '.repeat(80) + '\r');
+        console.log(chalk.dim(`  Benchmark complete — ${standardModels.length} models ranked.`));
+      } catch {
+        console.log(chalk.dim('  Benchmark skipped (proxy busy or models loading).'));
+      }
+    }
+  }
+
+  // Select default model (now uses benchmark results if available)
   const defaultModel = modelManager.selectDefault();
   const defaultProfile = modelManager.getProfile(defaultModel);
 
