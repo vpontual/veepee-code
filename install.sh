@@ -101,68 +101,15 @@ else
   fi
 fi
 
-# Create config directory
+# Create config directory (wizard will create .env on first launch)
 CONFIG_DIR="$HOME/.veepee-code"
 mkdir -p "$CONFIG_DIR"
-
-# Create default config if not exists
-if [ ! -f "$CONFIG_DIR/.env" ]; then
-  cat > "$CONFIG_DIR/.env" << 'ENVEOF'
-# ─── Ollama Connection (required) ─────────────────────────────────────────────
-# Point to your Ollama server or Ollama Fleet Manager proxy
-VEEPEE_CODE_PROXY_URL=http://localhost:11434
-# VEEPEE_CODE_DASHBOARD_URL=  # Only if using Ollama Fleet Manager
-
-# ─── Model Preferences ────────────────────────────────────────────────────────
-VEEPEE_CODE_AUTO_SWITCH=true
-VEEPEE_CODE_MAX_MODEL_SIZE=40
-VEEPEE_CODE_MIN_MODEL_SIZE=6
-
-# ─── API Server ───────────────────────────────────────────────────────────────
-VEEPEE_CODE_API_PORT=8484
-
-# ─── Optional Integrations ────────────────────────────────────────────────────
-# Run /setup inside vcode to see which integrations are available.
-# Uncomment and fill in tokens for the ones you want.
-
-# Home Assistant
-# HA_URL=http://your-ha-server:8123
-# HA_TOKEN=
-
-# Mastodon
-# MASTODON_URL=https://your.mastodon.instance
-# MASTODON_TOKEN=
-
-# Spotify (https://developer.spotify.com/dashboard)
-# SPOTIFY_CLIENT_ID=
-# SPOTIFY_CLIENT_SECRET=
-# SPOTIFY_REFRESH_TOKEN=
-
-# Google Workspace (https://console.cloud.google.com)
-# GOOGLE_CLIENT_ID=
-# GOOGLE_CLIENT_SECRET=
-# GOOGLE_REFRESH_TOKEN=
-
-# SearXNG web search (https://docs.searxng.org)
-# SEARXNG_URL=http://localhost:8888
-
-# AI Newsfeed
-# NEWSFEED_URL=http://localhost:3333
-ENVEOF
-  echo "  ✓ Created config at $CONFIG_DIR/.env"
-  echo "    Edit it to set your Ollama URL and optional integrations."
-fi
 
 echo ""
 echo "  ✓ VEEPEE Code installed successfully!"
 echo ""
 echo "  Get started:"
-echo "    veepee-code                    # Start in current directory"
-echo "    veepee-code --help             # Show help"
-echo ""
-echo "  Configure:"
-echo "    Edit $CONFIG_DIR/.env"
-echo ""
-echo "  API for other tools:"
-echo "    Claude Code / Gemini CLI can connect to http://localhost:8484"
+echo "    vcode                           # Launch (setup wizard runs on first launch)"
+echo "    vcode --help                    # Show help"
+echo "    vcode --wizard                  # Re-run the setup wizard"
 echo ""

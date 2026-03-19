@@ -35,26 +35,54 @@ async function main() {
     await runWizard();
   }
 
-  const config = loadConfig();
+  let config = loadConfig();
 
   // Check for -p / --print mode (non-interactive, output to stdout)
   const printIdx = process.argv.findIndex(a => a === '-p' || a === '--print');
   const printQuery = printIdx >= 0 ? process.argv[printIdx + 1] : null;
 
-  // Discover models
-  const modelManager = new ModelManager(config);
+  // Discover models — if it fails, offer to run the setup wizard
+  let modelManager = new ModelManager(config);
   try {
     await modelManager.discover();
   } catch (err) {
     console.error(chalk.red(`Failed to connect to proxy at ${config.proxyUrl}`));
     console.error(chalk.dim((err as Error).message));
-    process.exit(1);
+    console.error('');
+    console.error(chalk.hex('#85C7F2')('Running the setup wizard to configure your connection...'));
+    console.error('');
+    await runWizard();
+    config = loadConfig();
+    modelManager = new ModelManager(config);
+    try {
+      await modelManager.discover();
+    } catch {
+      console.error(chalk.red(`Still cannot connect to proxy at ${config.proxyUrl}`));
+      console.error(chalk.dim('Check that Ollama is running and the URL is correct.'));
+      process.exit(1);
+    }
   }
 
   const allModels = modelManager.getAllModels();
   if (allModels.length === 0) {
     console.error(chalk.red('No models found on the proxy. Is Ollama running?'));
-    process.exit(1);
+    console.error('');
+    console.error(chalk.hex('#85C7F2')('Running the setup wizard to reconfigure...'));
+    console.error('');
+    await runWizard();
+    config = loadConfig();
+    modelManager = new ModelManager(config);
+    try {
+      await modelManager.discover();
+    } catch {
+      console.error(chalk.red('Still cannot connect. Check your Ollama setup.'));
+      process.exit(1);
+    }
+    const retryModels = modelManager.getAllModels();
+    if (retryModels.length === 0) {
+      console.error(chalk.red('No models found. Load models with: ollama pull <model>'));
+      process.exit(1);
+    }
   }
 
   // Select initial model (may be updated after benchmark)
