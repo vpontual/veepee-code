@@ -47,6 +47,29 @@ if npm view veepee-code version &> /dev/null 2>&1; then
 else
   echo "  Installing from GitHub..."
 
+  # Ensure GitHub CLI is installed and authenticated
+  if ! command -v gh &> /dev/null; then
+    echo "  ✗ GitHub CLI (gh) is required for private repo access."
+    echo ""
+    echo "  Install it with one of:"
+    echo "    brew install gh                # macOS"
+    echo "    sudo apt install gh            # Debian/Ubuntu"
+    echo "    sudo dnf install gh            # Fedora"
+    echo "    https://cli.github.com         # Other"
+    echo ""
+    exit 1
+  fi
+
+  if ! gh auth status &> /dev/null; then
+    echo "  GitHub authentication required..."
+    gh auth login
+  fi
+
+  # Ensure git uses gh credentials
+  gh auth setup-git
+
+  echo "  ✓ GitHub authenticated"
+
   # Clone or update
   if [ -d "$INSTALL_DIR" ]; then
     echo "  Updating existing installation..."
@@ -54,7 +77,7 @@ else
     git pull --ff-only
   else
     echo "  Cloning repository..."
-    git clone "https://github.com/$REPO.git" "$INSTALL_DIR"
+    gh repo clone "$REPO" "$INSTALL_DIR"
     cd "$INSTALL_DIR"
   fi
 
