@@ -8,6 +8,29 @@ REPO="vpontual/veepee-code"
 INSTALL_DIR="${VEEPEE_CODE_DIR:-$HOME/.veepee-code}"
 BIN_DIR="${VEEPEE_CODE_BIN:-/usr/local/bin}"
 
+# Quick update mode: vcode --update calls this with --update
+if [ "${1:-}" = "--update" ]; then
+  echo ""
+  echo "  ⚡ VEEPEE Code Updater"
+  echo ""
+  if [ -d "$INSTALL_DIR" ]; then
+    cd "$INSTALL_DIR"
+    echo "  Pulling latest..."
+    git pull --ff-only
+    echo "  Installing dependencies..."
+    npm ci --ignore-scripts 2>/dev/null || npm install
+    echo "  Building..."
+    npm run build
+    echo ""
+    echo "  ✓ Updated to $(git log --oneline -1 | cut -d' ' -f1)"
+    echo ""
+  else
+    echo "  ✗ VEEPEE Code not installed at $INSTALL_DIR"
+    echo "  Run the full installer first."
+  fi
+  exit 0
+fi
+
 echo ""
 echo "  ⚡ VEEPEE Code Installer"
 echo ""
@@ -16,10 +39,14 @@ echo ""
 if ! command -v node &> /dev/null; then
   echo "  ✗ Node.js is required but not installed."
   echo ""
-  echo "  Install it with one of:"
-  echo "    brew install node          # macOS"
-  echo "    curl -fsSL https://fnm.vercel.app/install | bash  # fnm (any OS)"
-  echo "    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash  # nvm"
+  echo "  We recommend using nvm (Node Version Manager) so you don't"
+  echo "  mess with your system's Node installation:"
+  echo ""
+  echo "    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash"
+  echo "    source ~/.bashrc   # or ~/.zshrc"
+  echo "    nvm install --lts"
+  echo ""
+  echo "  This installs Node in your home directory — safe and isolated."
   echo ""
   exit 1
 fi
@@ -27,6 +54,11 @@ fi
 NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
 if [ "$NODE_VERSION" -lt 20 ]; then
   echo "  ✗ Node.js 20+ is required (found v$(node -v))"
+  echo ""
+  echo "  Update with nvm:"
+  echo "    nvm install --lts"
+  echo "    nvm use --lts"
+  echo ""
   exit 1
 fi
 

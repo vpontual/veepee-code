@@ -106,8 +106,10 @@ After setup, VEEPEE Code runs a **smart benchmark** on all your models and build
 ### Project instructions
 
 ```
-/init     # Generate VEEPEE.md with project-specific context
-/setup    # Check integration status
+/init                    # Generate VEEPEE.md with project-specific context
+/setup                   # Check integration status
+/setup wizard            # Re-run the full setup wizard
+/setup wizard spotify    # Reconfigure just one integration
 ```
 
 ## Tools (26)
@@ -132,6 +134,7 @@ vcode -c                           # Continue last session
 vcode --resume my-session          # Resume a named session
 vcode --host 0.0.0.0 --port 9000  # Custom API server bind
 vcode --wizard                     # Re-run setup wizard
+vcode --update                     # Pull latest and rebuild
 ```
 
 ## API server
@@ -173,6 +176,24 @@ CLAUDE_CODE_USE_BEDROCK=0 claude --model openai/MODEL --api-base http://localhos
 ```
 
 VEEPEE Code runs locally. Inference requests go through the proxy to your GPU servers. Tool execution (file I/O, shell, APIs) happens on the machine running VEEPEE Code.
+
+## Supported models
+
+Any Ollama model with tool-calling support works. Tested and benchmarked:
+
+| Model | Size | Best for |
+|-------|------|----------|
+| `qwen3.5:35b` | 35B | Act, code, plan |
+| `qwen3:32b` | 32B | Act, plan |
+| `qwen3:8b` | 8B | Chat, search, sub-agents |
+| `llama3.3:70b` | 70B | Plan, reasoning |
+| `deepseek-r1:32b` | 32B | Plan, reasoning |
+| `mistral-small:24b` | 24B | Act, code |
+| `gemma3:27b` | 27B | Act, code |
+| `command-r:35b` | 35B | Chat |
+| `llama3.2-vision` | 11B | Image analysis |
+
+The built-in benchmark automatically ranks your available models and picks the best for each role. No manual configuration needed.
 
 ## Docs
 

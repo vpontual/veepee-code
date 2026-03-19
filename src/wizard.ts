@@ -3,6 +3,7 @@
  *
  * Interactive onboarding that runs in the TUI on first launch.
  * Walks users through every configuration step with explanations.
+ * Supports back navigation and per-integration reconfiguration.
  */
 
 import { resolve } from 'path';
@@ -259,7 +260,13 @@ const STEPS: WizardStep[] = [
 
 // ─── Input Helpers ──────────────────────────────────────────────────────────
 
-/** Read a line of text from stdin in raw mode */
+/** Result from readLine — includes whether user pressed Escape to go back */
+interface InputResult {
+  value: string;
+  action: 'submit' | 'back';
+}
+
+/** Read a line of text from stdin in raw mode. Returns value and action (submit or back). */
 function readLine(opts: {
   row: number;
   col: number;
@@ -268,7 +275,8 @@ function readLine(opts: {
   default?: string;
   secret?: boolean;
   required?: boolean;
-}): Promise<string> {
+  allowBack?: boolean;
+}): Promise<InputResult> {
   return new Promise((resolve) => {
     let text = '';
     let cursor = 0;
@@ -285,7 +293,6 @@ function readLine(opts: {
 
       // Position cursor
       const labelLen = stripAnsi(opts.label + ': ').length;
-      const displayLen = opts.secret ? text.length : text.length;
       moveTo(opts.row, opts.col + labelLen + cursor);
       showCursor();
     };
@@ -310,7 +317,15 @@ function readLine(opts: {
         }
         hideCursor();
         process.stdin.removeListener('data', handler);
-        resolve(value);
+        resolve({ value, action: 'submit' });
+        return;
+      }
+
+      // Escape — go back (if allowed and on first field)
+      if (key === '\x1b' && data.length === 1 && opts.allowBack) {
+        hideCursor();
+        process.stdin.removeListener('data', handler);
+        resolve({ value: '', action: 'back' });
         return;
       }
 
@@ -506,10 +521,13 @@ function renderProgressBar(stepNum: number, totalSteps: number): void {
   process.stdout.write(bar + theme.dim(` ${stepNum}/${totalSteps}`));
 }
 
-function renderFooter(): void {
+function renderFooter(canGoBack: boolean): void {
   const { rows } = getSize();
   moveTo(rows - 1, 3);
-  process.stdout.write(theme.dim('Enter: confirm  |  Ctrl+C: abort'));
+  const parts = ['Enter: confirm'];
+  if (canGoBack) parts.push('Esc: back');
+  parts.push('Ctrl+C: abort');
+  process.stdout.write(theme.dim(parts.join('  |  ')));
 }
 
 // ─── GitHub Auth ────────────────────────────────────────────────────────────
@@ -776,6 +794,94 @@ function saveConfig(values: Record<string, string>): void {
   writeFileSync(resolve(configDir, '.env'), lines.join('\n'));
 }
 
+// ─── Step Runner ────────────────────────────────────────────────────────────
+
+/** Run a single wizard step. Returns 'next', 'back', or 'retry'. */
+async function runStep(
+  step: WizardStep,
+  stepNum: number,
+  totalSteps: number,
+  values: Record<string, string>,
+  canGoBack: boolean,
+): Promise<'next' | 'back'> {
+  let row = renderHeader(stepNum, totalSteps, step.name);
+  row = renderDescription(row, step.description, step.tools, step.required);
+  renderProgressBar(stepNum, totalSteps);
+  renderFooter(canGoBack);
+
+  // Collect values for each env var in this step
+  const stepValues: Record<string, string> = {};
+  for (let j = 0; j < step.envVars.length; j++) {
+    const envVar = step.envVars[j];
+    const existingVal = values[envVar.key] || '';
+    const defaultVal = existingVal || envVar.default;
+
+    // Show hint if available
+    if (envVar.hint) {
+      moveTo(row, 5);
+      process.stdout.write(theme.dim(envVar.hint));
+      row++;
+    }
+
+    const result = await readLine({
+      row,
+      col: 5,
+      maxWidth: getSize().cols - 10,
+      label: envVar.label,
+      default: defaultVal,
+      secret: envVar.secret,
+      required: step.required && step.envVars.length === 1,
+      allowBack: canGoBack && j === 0, // Only allow back on first field
+    });
+
+    if (result.action === 'back') {
+      return 'back';
+    }
+
+    stepValues[envVar.key] = result.value;
+    row += 2;
+  }
+
+  // Store values
+  for (const [key, val] of Object.entries(stepValues)) {
+    if (val) values[key] = val;
+  }
+
+  // Validate if validator exists and values were provided
+  const hasAnyValue = Object.values(stepValues).some(v => v !== '');
+  if (step.validate && hasAnyValue) {
+    moveTo(row, 5);
+    process.stdout.write(theme.muted('Testing connection...'));
+
+    const result = await step.validate(stepValues);
+    moveTo(row, 5);
+    clearLine();
+
+    if (result.ok) {
+      process.stdout.write(theme.success(`  ${icons.check} ${result.message}`));
+    } else {
+      process.stdout.write(theme.error(`  ${icons.cross} ${result.message}`));
+
+      // For required steps, let user retry
+      if (step.required) {
+        row += 2;
+        const retry = await confirm(row, 5, 'Try again?', true);
+        if (retry) {
+          return runStep(step, stepNum, totalSteps, values, canGoBack);
+        }
+      }
+    }
+
+    await new Promise(r => setTimeout(r, 800));
+  } else if (!hasAnyValue) {
+    moveTo(row, 5);
+    process.stdout.write(theme.dim(`  ${icons.circle} Skipped`));
+    await new Promise(r => setTimeout(r, 400));
+  }
+
+  return 'next';
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /** Check if the wizard should run (no config file exists) */
@@ -784,7 +890,7 @@ export function needsWizard(): boolean {
   return !existsSync(homeEnv);
 }
 
-/** Run the guided setup wizard */
+/** Run the guided setup wizard for all steps */
 export async function runWizard(): Promise<void> {
   const existing = loadExistingConfig();
   const values: Record<string, string> = { ...existing };
@@ -819,6 +925,9 @@ export async function runWizard(): Promise<void> {
     row++;
     moveTo(row, 1);
     process.stdout.write(center(theme.dim('Optional steps can be skipped by pressing Enter.'), cols));
+    row++;
+    moveTo(row, 1);
+    process.stdout.write(center(theme.dim('Press Esc on any step to go back.'), cols));
     row += 3;
     moveTo(row, 1);
     process.stdout.write(center(theme.accent('Press any key to begin...'), cols));
@@ -829,158 +938,137 @@ export async function runWizard(): Promise<void> {
   // ─── GitHub Auth Step ──────────────────────────────────────────────
   await runGitHubAuth();
 
-  // ─── Walk Through Steps ────────────────────────────────────────────
-  for (let i = 0; i < STEPS.length; i++) {
+  // ─── Walk Through Steps (with back navigation) ────────────────────
+  let i = 0;
+  while (i < STEPS.length) {
     const step = STEPS[i];
-    const stepNum = i + 1;
+    const canGoBack = i > 0;
+    const result = await runStep(step, i + 1, totalSteps, values, canGoBack);
 
-    let row = renderHeader(stepNum, totalSteps, step.name);
-    row = renderDescription(row, step.description, step.tools, step.required);
-    renderProgressBar(stepNum, totalSteps);
-    renderFooter();
-
-    // Collect values for each env var in this step
-    const stepValues: Record<string, string> = {};
-    for (const envVar of step.envVars) {
-      const existingVal = values[envVar.key] || '';
-      const defaultVal = existingVal || envVar.default;
-
-      // Show hint if available
-      if (envVar.hint) {
-        moveTo(row, 5);
-        process.stdout.write(theme.dim(envVar.hint));
-        row++;
-      }
-
-      const value = await readLine({
-        row,
-        col: 5,
-        maxWidth: getSize().cols - 10,
-        label: envVar.label,
-        default: defaultVal,
-        secret: envVar.secret,
-        required: step.required && step.envVars.length === 1,
-      });
-
-      stepValues[envVar.key] = value;
-      row += 2;
-    }
-
-    // For required multi-field steps, check that all are filled
-    // (The proxy step only has one field so single-field required works)
-
-    // Store values
-    for (const [key, val] of Object.entries(stepValues)) {
-      if (val) values[key] = val;
-    }
-
-    // Validate if validator exists and values were provided
-    const hasAnyValue = Object.values(stepValues).some(v => v !== '');
-    if (step.validate && hasAnyValue) {
-      moveTo(row, 5);
-      process.stdout.write(theme.muted('Testing connection...'));
-
-      const result = await step.validate(stepValues);
-      moveTo(row, 5);
-      clearLine();
-
-      if (result.ok) {
-        process.stdout.write(theme.success(`  ${icons.check} ${result.message}`));
-      } else {
-        process.stdout.write(theme.error(`  ${icons.cross} ${result.message}`));
-
-        // For required steps, let user retry
-        if (step.required) {
-          row += 2;
-          const retry = await confirm(row, 5, 'Try again?', true);
-          if (retry) {
-            i--; // Repeat this step
-            continue;
-          }
-        }
-      }
-
-      // Brief pause so user can see the result
-      await new Promise(r => setTimeout(r, 800));
-    } else if (!hasAnyValue) {
-      moveTo(row, 5);
-      process.stdout.write(theme.dim(`  ${icons.circle} Skipped`));
-      await new Promise(r => setTimeout(r, 400));
+    if (result === 'back' && i > 0) {
+      i--;
+    } else {
+      i++;
     }
   }
 
   // ─── Summary Screen ───────────────────────────────────────────────
-  {
-    const { rows, cols } = getSize();
-    clearScreen();
-    hideCursor();
-
-    moveTo(1, 1);
-    process.stdout.write(theme.brandBold(`  ${icons.llama} VEEPEE Code Setup`));
-    moveTo(1, cols - 'Summary'.length - 1);
-    process.stdout.write(theme.accent('Summary'));
-    moveTo(2, 1);
-    process.stdout.write(theme.dim(box.h.repeat(cols)));
-
-    moveTo(4, 3);
-    process.stdout.write(theme.textBold('Configuration Summary'));
-
-    let row = 6;
-    let configuredCount = 0;
-
-    for (const step of STEPS) {
-      const hasValues = step.envVars.some(ev => values[ev.key]);
-      const icon = hasValues ? theme.success(icons.check) : theme.dim(icons.circle);
-      const status = hasValues ? theme.text(step.name) : theme.dim(step.name);
-      const badge = step.required ? theme.error(' REQUIRED') : '';
-
-      moveTo(row, 5);
-      process.stdout.write(`${icon} ${status}${badge}`);
-
-      if (hasValues) {
-        configuredCount++;
-        // Show first value as preview
-        const firstVar = step.envVars[0];
-        const val = values[firstVar.key] || '';
-        if (val && !firstVar.secret) {
-          moveTo(row, 40);
-          process.stdout.write(theme.dim(val.length > 35 ? val.slice(0, 32) + '...' : val));
-        } else if (val && firstVar.secret) {
-          moveTo(row, 40);
-          process.stdout.write(theme.dim('****'));
-        }
-      }
-
-      row++;
-    }
-
-    row += 2;
-    moveTo(row, 5);
-    process.stdout.write(theme.accent(`${configuredCount}/${STEPS.length}`) + theme.text(' integrations configured'));
-
-    row += 1;
-    moveTo(row, 5);
-    const configPath = resolve(process.env.HOME || '~', '.veepee-code', '.env');
-    process.stdout.write(theme.dim(`Config: ${configPath}`));
-
-    row += 2;
-    const shouldSave = await confirm(row, 5, 'Save and start VEEPEE Code?', true);
-
-    if (shouldSave) {
-      saveConfig(values);
-
-      moveTo(row + 2, 5);
-      process.stdout.write(theme.success(`${icons.check} Configuration saved!`));
-      await new Promise(r => setTimeout(r, 1000));
-    } else {
-      moveTo(row + 2, 5);
-      process.stdout.write(theme.warning(`${icons.warn} Configuration not saved. Run the wizard again with --wizard.`));
-      await new Promise(r => setTimeout(r, 1500));
-    }
-  }
+  await renderSummary(values, STEPS);
 
   // Clean up
   exitAltScreen();
   showCursor();
   process.stdin.setRawMode?.(false);
+}
+
+/** Run the wizard for a single integration by name */
+export async function runWizardForStep(stepId: string): Promise<void> {
+  const step = STEPS.find(s => s.id === stepId || s.name.toLowerCase() === stepId.toLowerCase());
+  if (!step) return;
+
+  const existing = loadExistingConfig();
+  const values: Record<string, string> = { ...existing };
+
+  // Enter alt screen and raw mode
+  enterAltScreen();
+  hideCursor();
+  process.stdin.setRawMode?.(true);
+  process.stdin.resume();
+
+  await runStep(step, 1, 1, values, false);
+
+  // Save immediately
+  saveConfig(values);
+
+  clearScreen();
+  moveTo(1, 1);
+  process.stdout.write(theme.brandBold(`  ${icons.llama} VEEPEE Code Setup`));
+  moveTo(2, 1);
+  process.stdout.write(theme.dim(box.h.repeat(getSize().cols)));
+  moveTo(4, 5);
+  process.stdout.write(theme.success(`${icons.check} ${step.name} configuration saved!`));
+  moveTo(6, 5);
+  process.stdout.write(theme.dim('Press any key to continue...'));
+  await waitForKey();
+
+  // Clean up
+  exitAltScreen();
+  showCursor();
+  process.stdin.setRawMode?.(false);
+}
+
+/** Get list of available step IDs for tab completion */
+export function getWizardStepIds(): string[] {
+  return STEPS.map(s => s.id);
+}
+
+// ─── Summary Screen ─────────────────────────────────────────────────────────
+
+async function renderSummary(values: Record<string, string>, steps: WizardStep[]): Promise<void> {
+  const { cols } = getSize();
+  clearScreen();
+  hideCursor();
+
+  moveTo(1, 1);
+  process.stdout.write(theme.brandBold(`  ${icons.llama} VEEPEE Code Setup`));
+  moveTo(1, cols - 'Summary'.length - 1);
+  process.stdout.write(theme.accent('Summary'));
+  moveTo(2, 1);
+  process.stdout.write(theme.dim(box.h.repeat(cols)));
+
+  moveTo(4, 3);
+  process.stdout.write(theme.textBold('Configuration Summary'));
+
+  let row = 6;
+  let configuredCount = 0;
+
+  for (const step of steps) {
+    const hasValues = step.envVars.some(ev => values[ev.key]);
+    const icon = hasValues ? theme.success(icons.check) : theme.dim(icons.circle);
+    const status = hasValues ? theme.text(step.name) : theme.dim(step.name);
+    const badge = step.required ? theme.error(' REQUIRED') : '';
+
+    moveTo(row, 5);
+    process.stdout.write(`${icon} ${status}${badge}`);
+
+    if (hasValues) {
+      configuredCount++;
+      // Show first value as preview
+      const firstVar = step.envVars[0];
+      const val = values[firstVar.key] || '';
+      if (val && !firstVar.secret) {
+        moveTo(row, 40);
+        process.stdout.write(theme.dim(val.length > 35 ? val.slice(0, 32) + '...' : val));
+      } else if (val && firstVar.secret) {
+        moveTo(row, 40);
+        process.stdout.write(theme.dim('****'));
+      }
+    }
+
+    row++;
+  }
+
+  row += 2;
+  moveTo(row, 5);
+  process.stdout.write(theme.accent(`${configuredCount}/${steps.length}`) + theme.text(' integrations configured'));
+
+  row += 1;
+  moveTo(row, 5);
+  const configPath = resolve(process.env.HOME || '~', '.veepee-code', '.env');
+  process.stdout.write(theme.dim(`Config: ${configPath}`));
+
+  row += 2;
+  const shouldSave = await confirm(row, 5, 'Save and start VEEPEE Code?', true);
+
+  if (shouldSave) {
+    saveConfig(values);
+
+    moveTo(row + 2, 5);
+    process.stdout.write(theme.success(`${icons.check} Configuration saved!`));
+    await new Promise(r => setTimeout(r, 1000));
+  } else {
+    moveTo(row + 2, 5);
+    process.stdout.write(theme.warning(`${icons.warn} Configuration not saved. Run the wizard again with --wizard.`));
+    await new Promise(r => setTimeout(r, 1500));
+  }
 }

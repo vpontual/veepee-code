@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { resolve } from 'path';
 import chalk from 'chalk';
 import { loadConfig } from './config.js';
 import { ModelManager } from './models.js';
@@ -14,7 +15,7 @@ import { saveSession, listSessions, findSession, formatSessionList, autoName } f
 import { MoeEngine, type MoeStrategy } from './moe.js';
 import { KnowledgeState } from './knowledge.js';
 import { createWorktree, listWorktrees, cleanupWorktrees, isGitRepo } from './worktree.js';
-import { needsWizard, runWizard } from './wizard.js';
+import { needsWizard, runWizard, runWizardForStep, getWizardStepIds } from './wizard.js';
 
 // Tool registrations
 import { registerCodingTools } from './tools/coding.js';
@@ -29,6 +30,18 @@ const VERSION = '0.2.0';
 
 
 async function main() {
+  // Self-update: vcode --update
+  if (process.argv.includes('--update')) {
+    const { execSync } = await import('child_process');
+    const installDir = resolve(process.env.HOME || '~', '.veepee-code');
+    try {
+      execSync(`bash "${installDir}/install.sh" --update`, { stdio: 'inherit' });
+    } catch {
+      console.error(chalk.red('Update failed. Run manually: cd ~/.veepee-code && git pull && npm ci && npm run build'));
+    }
+    process.exit(0);
+  }
+
   // Run setup wizard on first launch or with --wizard flag
   const forceWizard = process.argv.includes('--wizard');
   if (forceWizard || needsWizard()) {
@@ -291,7 +304,13 @@ async function main() {
       `  ${theme.accent('Claude Code:')} CLAUDE_CODE_USE_BEDROCK=0 claude --model openai/MODEL --api-base http://localhost:${actualApiPort}/v1`,
       `  ${theme.accent('OpenCode:')}   Set provider URL to http://localhost:${actualApiPort}/v1`,
       '',
-      `  ${theme.dim('Run /setup to check integrations | /help for all commands')}`,
+      `  ${theme.dim('Quick start:')}`,
+      `  ${theme.accent('/plan')}   ${theme.dim('Think through a problem before coding')}`,
+      `  ${theme.accent('/setup')}  ${theme.dim('Check which integrations are active')}`,
+      `  ${theme.accent('/help')}   ${theme.dim('See all commands')}`,
+      `  ${theme.accent('Ctrl+P')} ${theme.dim('Open command palette')}`,
+      '',
+      `  ${theme.dim('Update anytime:')} ${theme.accent('vcode --update')}`,
       '',
     ].join('\n'));
 
@@ -892,9 +911,14 @@ async function handleCommand(
 
     case '/setup': {
       if (parts[1] === 'wizard' || parts[1] === '--wizard') {
+        // Full wizard or per-integration: /setup wizard [integration]
+        const stepId = parts[2];
         tui.stop();
-        await runWizard();
-        tui.showInfo(theme.success('Configuration updated. Restart vcode to apply changes.'));
+        if (stepId) {
+          await runWizardForStep(stepId);
+        } else {
+          await runWizard();
+        }
         tui.start({
           model: modelManager.getCurrentModel(),
           modelSize: modelManager.getProfile(modelManager.getCurrentModel())?.parameterSize || '',
@@ -903,6 +927,7 @@ async function handleCommand(
           version: VERSION,
           apiPort,
         });
+        tui.showInfo(theme.success('Configuration updated. Restart vcode to apply changes.'));
         return false;
       }
       tui.showInfo('Validating integrations...');
