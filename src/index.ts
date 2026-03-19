@@ -220,6 +220,15 @@ async function main() {
     return tui.promptPermission(toolName, args, reason);
   });
 
+  // Wire Tab → show tools (without going through the input pipeline)
+  tui.onTabTools = () => {
+    const tools = registry.list().sort((a, b) => a.name.localeCompare(b.name));
+    const lines = tools.map(t =>
+      `  ${theme.accent(t.name.padEnd(20))} ${theme.muted(t.description.slice(0, 60))}`
+    );
+    tui.showInfo(`${theme.textBold(`${tools.length} tools:`)}\n${lines.join('\n')}`);
+  };
+
   // Wire Ctrl+C abort
   tui.setAbortHandler(() => agent.abort());
 
@@ -670,7 +679,7 @@ async function handleCommand(
     case '/tools': {
       const tools = registry.list().sort((a, b) => a.name.localeCompare(b.name));
       const lines = tools.map(t =>
-        `  ${theme.accent(t.name.padEnd(20))} ${theme.dim(t.description.slice(0, 60))}`
+        `  ${theme.accent(t.name.padEnd(20))} ${theme.muted(t.description.slice(0, 60))}`
       );
       tui.showInfo(`${theme.textBold(`${tools.length} tools:`)}\n${lines.join('\n')}`);
       return false;

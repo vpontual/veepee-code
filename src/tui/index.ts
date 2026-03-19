@@ -160,6 +160,8 @@ export class TUI {
   private resolveInput: ((value: string) => void) | null = null;
   private rejectInput: ((reason: Error) => void) | null = null;
   private permissionResolve: ((value: string) => void) | null = null;
+  onTabTools: (() => void) | null = null;
+  private toolsShown = false;
   private streamBuffer = '';
   private streamActive = false;
   private turnTracker: TurnTracker | null = null;
@@ -233,6 +235,7 @@ export class TUI {
 
     this.input.text = '';
     this.input.cursor = 0;
+    this.toolsShown = false;
     this.state = this.messages.length > 0 ? 'conversation' : 'welcome';
     this.render();
 
@@ -515,7 +518,7 @@ export class TUI {
 
     this.addMessage({
       role: 'system',
-      content: `${theme.dim(`${icons.toolDone}  Build ${icons.dot} ${model} ${icons.dot} ${toolCount} tool calls ${icons.dot} ${tokStr} tokens${promptStr}${tpsStr} ${icons.dot} ${secs}s`)}`,
+      content: `${theme.muted(`${icons.toolDone}  Build ${icons.dot} ${model} ${icons.dot} ${toolCount} tool calls ${icons.dot} ${tokStr} tokens${promptStr}${tpsStr} ${icons.dot} ${secs}s`)}`,
     });
 
     this.turnTracker = null;
@@ -736,7 +739,7 @@ export class TUI {
     const frame = frames[Math.floor(Date.now() / 80) % frames.length];
 
     // Header: Running... (3 tool calls · 1.2k tokens · 4.5s)
-    const header = `${theme.accent(frame)} ${theme.textBold('Running...')} ${theme.dim(`(${toolCount} tool calls ${icons.dot} ${tokStr} tokens ${icons.dot} ${elapsed}s)`)}`;
+    const header = `${theme.accent(frame)} ${theme.textBold('Running...')} ${theme.muted(`(${toolCount} tool calls ${icons.dot} ${tokStr} tokens ${icons.dot} ${elapsed}s)`)}`;
     writeAt(startRow, leftPad, header);
 
     // Tool call tree — show last N calls with tree connectors
@@ -814,13 +817,13 @@ export class TUI {
       const hint = 'Type ahead — your message will send when the model finishes';
       const visual = hint.slice(0, contentWidth);
       const padding = ' '.repeat(Math.max(0, contentWidth - visual.length));
-      displayLine = theme.dimmer(visual) + padding;
+      displayLine = theme.dim(visual) + padding;
     } else {
       // Normal placeholder
       const placeholderText = 'Ask anything... "Fix the bug in auth.ts"';
       const visual = placeholderText.slice(0, contentWidth);
       const padding = ' '.repeat(Math.max(0, contentWidth - visual.length));
-      displayLine = theme.dimmer(visual) + padding;
+      displayLine = theme.dim(visual) + padding;
     }
 
     writeAt(topRow + 1, leftPad,
@@ -828,7 +831,7 @@ export class TUI {
     );
 
     // Model info line
-    const modelInfo = `${theme.accent('Build')}  ${theme.text(this.modelName)} ${theme.dim(this.modelSize)} ${theme.dim('(default)')} ${theme.dimmer(this.providerName)}`;
+    const modelInfo = `${theme.accent('Build')}  ${theme.text(this.modelName)} ${theme.muted(this.modelSize)} ${theme.muted('(default)')} ${theme.dim(this.providerName)}`;
     const modelInfoClean = stripAnsi(modelInfo);
     const modelPadded = modelInfoClean.length < contentWidth
       ? modelInfo + ' '.repeat(contentWidth - modelInfoClean.length)
@@ -867,7 +870,7 @@ export class TUI {
           const padded = line + ' '.repeat(Math.max(0, boxWidth - 4 - lineLen));
           writeAt(row, leftPad, theme.border(box.v) + chalk.bgHex('#2A2A4A')(` ${padded} `) + theme.border(box.v));
         } else {
-          const line = ` ${theme.accent(nameStr)} ${theme.dim(descStr)}`;
+          const line = ` ${theme.accent(nameStr)} ${theme.muted(descStr)}`;
           const lineLen = stripAnsi(line).length;
           const padded = line + ' '.repeat(Math.max(0, boxWidth - 4 - lineLen));
           writeAt(row, leftPad, theme.border(box.v) + ` ${padded} ` + theme.border(box.v));
@@ -879,7 +882,7 @@ export class TUI {
     }
 
     // Keyboard hints below box
-    const hints = `${theme.textBold('tab')} ${theme.dim('tools')}  ${theme.textBold('ctrl+p')} ${theme.dim('commands')}  ${theme.textBold('/help')} ${theme.dim('help')}`;
+    const hints = `${theme.textBold('tab')} ${theme.muted('tools')}  ${theme.textBold('ctrl+p')} ${theme.muted('commands')}  ${theme.textBold('/help')} ${theme.muted('help')}`;
     writeAt(topRow + 4, leftPad + 2, center(hints, boxWidth - 4));
 
     // CURSOR POSITIONING — absolute last action of this function.
@@ -932,7 +935,7 @@ export class TUI {
 
     moveTo(row, 1);
     process.stdout.write(
-      theme.dim(left) + ' '.repeat(padding) + theme.dim(right)
+      theme.muted(left) + ' '.repeat(padding) + theme.muted(right)
     );
   }
 
@@ -1197,6 +1200,7 @@ export class TUI {
     if (key === '\r' || key === '\n') {
       const text = this.input.text.trim();
       if (text) {
+        this.toolsShown = false;
         this.input.history.unshift(text);
         if (this.input.history.length > 100) this.input.history.pop();
         this.input.historyIdx = -1;
@@ -1232,11 +1236,17 @@ export class TUI {
       return;
     }
 
-    // Tab — show tools (when not in command menu)
+    // Tab — toggle tools list (when not in command menu)
     if (key === '\t') {
-      this.resolveInput('/tools');
-      this.resolveInput = null;
-      this.rejectInput = null;
+      if (this.toolsShown) {
+        // Toggle off — remove the tools message
+        this.messages.pop();
+        this.toolsShown = false;
+        this.render();
+      } else if (this.onTabTools) {
+        this.toolsShown = true;
+        this.onTabTools();
+      }
       return;
     }
 
