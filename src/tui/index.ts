@@ -257,7 +257,7 @@ export class TUI {
         const val = typeof v === 'string'
           ? (v.length > 80 ? v.slice(0, 77) + '...' : v)
           : JSON.stringify(v);
-        return `  ${theme.dim(k)}: ${val}`;
+        return `  ${theme.muted(k)}: ${val}`;
       })
       .join('\n');
     if (argsSummary) {
@@ -265,7 +265,7 @@ export class TUI {
     }
     this.addMessage({
       role: 'system',
-      content: `${theme.dim('[y] Yes  [a] Always allow')} ${theme.accent(toolName)} ${theme.dim(' [n] No')}`,
+      content: `${theme.muted('[y] Yes  [a] Always allow')} ${theme.accent(toolName)} ${theme.muted(' [n] No')}`,
     });
     this.render();
 
@@ -671,7 +671,7 @@ export class TUI {
       }
 
       case 'tool_call': {
-        return [theme.tool(`${icons.tool} `) + theme.dim(truncate(msg.content, maxWidth - 3))];
+        return [theme.tool(`${icons.tool} `) + theme.muted(truncate(msg.content, maxWidth - 3))];
       }
 
       case 'tool_result': {
@@ -685,7 +685,7 @@ export class TUI {
           } else if (line.startsWith('- ')) {
             return prefix + chalk.red(truncate(line, maxWidth - 6));
           }
-          return prefix + theme.dim(truncate(line, maxWidth - 6));
+          return prefix + theme.muted(truncate(line, maxWidth - 6));
         });
       }
 
@@ -694,7 +694,7 @@ export class TUI {
           // Pulsing indicator
           const frames = ['◐', '◓', '◑', '◒'];
           const frame = frames[Math.floor(Date.now() / 200) % frames.length];
-          return [theme.dim(`  ${frame} Thinking...`)];
+          return [theme.muted(`  ${frame} Thinking...`)];
         }
         // Collapsed thinking block — show first line + expand hint
         const thinkLines = msg.content.split('\n');
@@ -702,11 +702,11 @@ export class TUI {
         const lineCount = thinkLines.length;
         if (msg.collapsed && lineCount > 1) {
           return [
-            theme.dim(`  ${icons.thinking} Thought (${lineCount} lines) `) + theme.dimmer(truncate(preview, maxWidth - 30)),
+            theme.muted(`  ${icons.thinking} Thought (${lineCount} lines) `) + theme.dim(truncate(preview, maxWidth - 30)),
           ];
         }
         // Expanded — show all lines dimmed
-        return thinkLines.slice(0, 20).map(l => theme.dimmer(`  │ ${truncate(l, maxWidth - 6)}`));
+        return thinkLines.slice(0, 20).map(l => theme.dim(`  │ ${truncate(l, maxWidth - 6)}`));
       }
 
       case 'model_switch': {
@@ -714,7 +714,7 @@ export class TUI {
       }
 
       case 'system': {
-        return [theme.dim(`  ${msg.content}`)];
+        return [theme.muted(`  ${msg.content}`)];
       }
 
       default:
@@ -750,7 +750,7 @@ export class TUI {
     let row = startRow + 1;
 
     if (hasMore) {
-      writeAt(row, leftPad, theme.dim(`  ${icons.dot}${icons.dot}${icons.dot} ${this.turnTracker.toolCalls.length - maxVisible} earlier`));
+      writeAt(row, leftPad, theme.muted(`  ${icons.dot}${icons.dot}${icons.dot} ${this.turnTracker.toolCalls.length - maxVisible} earlier`));
       row++;
     }
 
@@ -760,7 +760,7 @@ export class TUI {
       const connector = isLast ? '└─' : '├─';
 
       let statusIcon: string;
-      let statusColor = theme.dim;
+      let statusColor = theme.muted;
       if (tc.status === 'running') {
         statusIcon = theme.accent(frame);
         statusColor = theme.accent;
@@ -771,8 +771,8 @@ export class TUI {
         statusColor = theme.error;
       }
 
-      const elapsedStr = tc.elapsed ? theme.dim(` ${(tc.elapsed / 1000).toFixed(1)}s`) : '';
-      writeAt(row, leftPad, `  ${theme.dim(connector)} ${statusIcon} ${statusColor(tc.name)}${elapsedStr}`);
+      const elapsedStr = tc.elapsed ? theme.muted(` ${(tc.elapsed / 1000).toFixed(1)}s`) : '';
+      writeAt(row, leftPad, `  ${theme.muted(connector)} ${statusIcon} ${statusColor(tc.name)}${elapsedStr}`);
       row++;
     }
   }
@@ -994,7 +994,7 @@ export class TUI {
 
   private getTip(): string {
     const tip = this.tips[this.currentTip % this.tips.length];
-    return `${theme.warning(icons.dot)} ${theme.dim('Tip')} ${theme.muted(tip)}`;
+    return `${theme.warning(icons.dot)} ${theme.muted('Tip')} ${theme.muted(tip)}`;
   }
 
   // ─── Input Handling ────────────────────────────────────────────────
