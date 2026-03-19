@@ -88,14 +88,16 @@ else
   echo "  Building..."
   npm run build
 
-  # Create symlink
+  # Create symlinks (veepee-code and vcode)
   if [ -w "$BIN_DIR" ]; then
     ln -sf "$INSTALL_DIR/dist/index.js" "$BIN_DIR/veepee-code"
-    chmod +x "$BIN_DIR/veepee-code"
+    ln -sf "$INSTALL_DIR/dist/index.js" "$BIN_DIR/vcode"
+    chmod +x "$BIN_DIR/veepee-code" "$BIN_DIR/vcode"
   else
-    echo "  Creating symlink (requires sudo)..."
+    echo "  Creating symlinks (requires sudo)..."
     sudo ln -sf "$INSTALL_DIR/dist/index.js" "$BIN_DIR/veepee-code"
-    sudo chmod +x "$BIN_DIR/veepee-code"
+    sudo ln -sf "$INSTALL_DIR/dist/index.js" "$BIN_DIR/vcode"
+    sudo chmod +x "$BIN_DIR/veepee-code" "$BIN_DIR/vcode"
   fi
 fi
 

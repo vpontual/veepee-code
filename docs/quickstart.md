@@ -35,7 +35,7 @@ The install script will:
 - Configure git to use GitHub credentials (`gh auth setup-git`)
 - Clone the repository to `~/.veepee-code/`
 - Install dependencies and build
-- Create a `veepee-code` symlink in `/usr/local/bin/`
+- Create `veepee-code` and `vcode` symlinks in `/usr/local/bin/`
 - Generate a default config at `~/.veepee-code/.env` with all integration placeholders
 
 ### npm (when published)
