@@ -16,6 +16,10 @@ The `/setup` command tests connectivity to all external integrations and reports
 
 The command tests each integration in sequence with a 5-second timeout per connection. Results are displayed in three groups: active, needs configuration, and errors.
 
+### Automatic First-Run Check
+
+On first launch, `/setup` runs automatically as part of the onboarding flow. It displays a compact summary showing **"X/Y integrations active"** with a hint to run `/setup` manually for full details. This lets new users immediately see which integrations are working without needing to know the command exists.
+
 ## Integration Status Report
 
 ### Example Output

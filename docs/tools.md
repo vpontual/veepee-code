@@ -1,12 +1,12 @@
 ---
 title: "Tools Reference"
-description: "All 25 tools organized by category with descriptions, parameters, and usage examples."
+description: "All 26 tools organized by category with descriptions, parameters, and usage examples."
 weight: 5
 ---
 
 # Tools Reference
 
-VEEPEE Code includes 25 tools organized into seven categories. Core tools are always available. Optional tools activate when their required environment variables are configured.
+VEEPEE Code includes 26 tools organized into eight categories. Core tools are always available. Optional tools activate when their required environment variables are configured.
 
 Run `/tools` to see which tools are active in your current session, or `/setup` to see the full integration status.
 
@@ -76,7 +76,7 @@ Results are capped at 100 entries.
 
 ### grep
 
-Search file contents using regex. Uses ripgrep (`rg`) if available, falls back to `grep`.
+Search file contents using regex. Uses ripgrep (`rg`) if available, falls back to `grep`. Executes via `execFileSync` (no shell injection).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -110,7 +110,7 @@ bash command="curl -s https://api.example.com/health" timeout=5000
 
 ### git
 
-Run git commands in the current or specified repository.
+Run git commands in the current or specified repository. Executes via `execFileSync` (no shell injection).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -455,6 +455,25 @@ news action="topic" query="climate change"
 news action="story" story_id="abc123"
 ```
 
+## Knowledge Tools (Always Available)
+
+### update_memory
+
+Store facts, decisions, context, and preferences in the agent's knowledge state. This tool persists information across sessions, allowing the agent to remember project-specific context, user preferences, and prior decisions.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `content` | string | Yes | The fact, decision, or context to store |
+| `category` | string | No | Category for organization (e.g., `project`, `preference`, `decision`) |
+
+```
+update_memory content="This project uses pnpm, not npm" category="project"
+update_memory content="User prefers concise answers with no emojis" category="preference"
+update_memory content="Decided to use SQLite instead of PostgreSQL for this project" category="decision"
+```
+
+> **Note:** Stored knowledge is saved to the knowledge state file and loaded automatically on subsequent sessions.
+
 ## Tool Count by Category
 
 | Category | Always Available | Conditional | Total |
@@ -466,4 +485,5 @@ news action="story" story_id="abc123"
 | Social | 0 | 2 | 2 |
 | Google | 0 | 6 | 6 |
 | News | 0 | 1 | 1 |
-| **Total** | **13** | **12** | **25** |
+| Knowledge | 1 | 0 | 1 |
+| **Total** | **14** | **12** | **26** |

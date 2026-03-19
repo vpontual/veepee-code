@@ -1,12 +1,12 @@
 ---
 title: "Modes"
-description: "Three operating modes: act, plan, and chat -- how they work, roster-based model selection, and when to use each."
+description: "Five operating modes: act, plan, chat, and MoE -- how they work, roster-based model selection, effort levels, and when to use each."
 weight: 4
 ---
 
 # Modes
 
-VEEPEE Code has three operating modes, each optimized for a different workflow. Each mode uses its roster-assigned model (from the first-launch benchmark). Switch between them with slash commands, or let the agent auto-detect planning intent.
+VEEPEE Code has four operating modes, each optimized for a different workflow. Each mode uses its roster-assigned model (from the first-launch benchmark). Switch between them with slash commands, or let the agent auto-detect planning intent.
 
 ## /act -- Execution Mode (Default)
 
@@ -143,19 +143,77 @@ According to the React 19 release blog:
 - **Actions** replace form handling patterns...
 ```
 
+## /moe -- Mixture of Experts Mode
+
+MoE mode queries 3 models in parallel and combines their responses using an automatically detected strategy. This produces higher-quality answers by leveraging the strengths of different models.
+
+**Characteristics:**
+- **Models:** 3 models queried simultaneously (typically spanning heavy, standard, and light tiers)
+- **Strategy:** Auto-detected from the query type:
+  - **synthesize** -- combines the best parts of all responses into a unified answer (default for most queries)
+  - **debate** -- presents each model's perspective with a final verdict (for opinion/tradeoff questions)
+  - **vote** -- takes the majority answer (for factual/deterministic questions)
+  - **fastest** -- returns whichever model responds first (for simple or time-sensitive queries)
+- **Thinking:** OFF (each sub-model runs without thinking; the synthesis step handles reasoning)
+- **Tools:** All registered tools available to each sub-model
+- **Behavior:** Higher latency (waits for all 3 models), but noticeably better quality on complex or ambiguous questions
+
+**Best for:**
+- Architecture decisions where you want multiple perspectives
+- Code review with diverse model strengths
+- Ambiguous questions where a single model might guess wrong
+- Any task where quality matters more than speed
+
+**Example:**
+
+```
+/moe
+> What's the best way to handle auth tokens in a Next.js 16 app?
+
+  ◆ Querying 3 models in parallel...
+  ◆ Strategy: synthesize (auto-detected)
+
+  Model 1 (qwen3.5:35b): httpOnly cookies with middleware refresh...
+  Model 2 (qwen3:8b): server-side session with encrypted cookie...
+  Model 3 (llama3.2:8b): NextAuth.js with JWT strategy...
+
+  Synthesized answer:
+  The recommended approach combines httpOnly cookies for token storage
+  (Model 1) with middleware-based refresh (Model 1) and NextAuth.js
+  as the auth framework (Model 3)...
+```
+
+## Effort Levels
+
+The `/effort` command controls how much work the agent puts into each response. Effort levels work across all modes (act, plan, chat, and MoE).
+
+```
+/effort low        # Minimal -- short answers, fewer tool calls, skip exploration
+/effort medium     # Balanced -- default behavior (this is the default)
+/effort high       # Thorough -- deeper exploration, more tool calls, longer answers
+```
+
+| Level | Behavior |
+|-------|----------|
+| **low** | Concise answers, minimal tool usage, skips non-essential exploration. Good for quick questions or when you already know roughly what you want. |
+| **medium** | Default balance of thoroughness and speed. The agent explores as needed and gives reasonably detailed answers. |
+| **high** | Maximum thoroughness. The agent reads more files, considers more edge cases, and gives comprehensive answers. Good for complex debugging or architecture work. |
+
+Effort level persists for the session. It does not affect model selection -- only how aggressively the agent explores and how detailed its responses are.
+
 ## Mode Comparison
 
-| Feature | /act (default) | /plan | /chat |
-|---------|---------------|-------|-------|
-| Thinking | OFF | ON | OFF |
-| Model source | Roster: act | Roster: plan | Roster: chat |
-| Auto-switch | Yes | No | No |
-| All tools | Yes | Yes | No (web only) |
-| File access | Yes | Yes | No |
-| Shell commands | Yes | Yes | No |
-| Web search | Yes | Yes | Yes |
-| Behavior | Execute first | Think first | Converse |
-| Default | Yes | No | No |
+| Feature | /act (default) | /plan | /chat | /moe |
+|---------|---------------|-------|-------|------|
+| Thinking | OFF | ON | OFF | OFF |
+| Model source | Roster: act | Roster: plan | Roster: chat | 3 models (parallel) |
+| Auto-switch | Yes | No | No | No |
+| All tools | Yes | Yes | No (web only) | Yes |
+| File access | Yes | Yes | No | Yes |
+| Shell commands | Yes | Yes | No | Yes |
+| Web search | Yes | Yes | Yes | Yes |
+| Behavior | Execute first | Think first | Converse | Multi-model synthesis |
+| Default | Yes | No | No | No |
 
 ## Switching Modes
 
@@ -163,11 +221,13 @@ According to the React 19 release blog:
 /plan       # Enter plan mode
 /act        # Return to act/execution mode
 /chat       # Enter chat mode
+/moe        # Enter mixture of experts mode
+/effort low|medium|high  # Set effort level (works in any mode)
 ```
 
-When you switch back to `/act` from plan or chat mode:
+When you switch back to `/act` from plan, chat, or MoE mode:
 - The roster's act model is restored (or the previous model if no roster exists)
 - Auto-switching is re-enabled
 - The system prompt is rebuilt for execution mode
 
-Mode state is maintained for the session -- it does not persist across restarts (though sessions saved with `/save` record the active mode).
+Mode state is maintained for the session -- it does not persist across restarts (though sessions saved with `/save` record the active mode). Effort level also persists for the session.

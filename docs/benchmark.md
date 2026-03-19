@@ -6,7 +6,7 @@ weight: 7
 
 # Benchmarking
 
-VEEPEE Code includes a built-in benchmarking system that tests your models across five categories relevant to coding assistant tasks. On first launch, a smart benchmark runs automatically inside the TUI to build a model roster. Results are used by the agent for model selection, optimal context sizes, and mode switching.
+VEEPEE Code includes a built-in benchmarking system that tests your models across five categories relevant to coding assistant tasks. On first launch, a smart benchmark runs automatically inside the TUI to build a model roster. Results are used by the agent for model selection and mode switching. Context probing is optional and runs separately.
 
 ## First-Launch Smart Benchmark
 
@@ -15,6 +15,7 @@ On the very first launch (when no `~/.veepee-code/benchmarks/roster.json` exists
 ### Phase 1: Speed Check
 
 All models with tool support are tested for responsiveness:
+- **Preloads** each model before measuring (sends a warm-up prompt and waits for it to load, fixing false rejections from cold-start penalties)
 - Sends a simple prompt ("Count from 1 to 10, one number per line")
 - Allows up to **60 seconds** for cold-start model loading (models only load once per session, so cold start does not matter for ongoing use)
 - Measures **generation speed** (tok/s) after the first token arrives
@@ -27,6 +28,8 @@ Responsive models undergo the complete test suite (10 test cases across 5 catego
 ### Phase 3: Build Roster
 
 Benchmark results are used to assign the best model per role. See [Model Roster](#model-roster) below.
+
+The first-launch smart benchmark **skips context probing** to keep the initial experience fast. Context probing can be run separately with `/benchmark context` (see below).
 
 Subsequent launches skip the benchmark and load the saved roster. Run `/benchmark` manually to re-benchmark after adding new models.
 
@@ -67,7 +70,15 @@ The roster is saved to `~/.veepee-code/benchmarks/roster.json` and used by:
 /benchmark
 ```
 
-Runs the full test suite against every non-embedding model discovered on your fleet. This can take 10-30 minutes depending on the number of models and their speed.
+Runs the full test suite against every non-embedding model discovered on your fleet. **Context probing is skipped by default** (same as first-launch). This can take 10-30 minutes depending on the number of models and their speed.
+
+### Run context probing separately
+
+```
+/benchmark context
+```
+
+Runs context size probing for all benchmarked models. This tests each model at seven context window sizes (2K-128K tokens) to find the optimal context size. This is a separate step because it adds significant time and is not needed for roster building.
 
 ### Benchmark a specific tier
 
@@ -144,9 +155,11 @@ Overall = Tools * 0.30 + CodeGen * 0.25 + Edit * 0.15 + Follow * 0.15 + Reason *
 
 Tool calling and code generation are weighted highest because they are the most critical capabilities for a coding CLI.
 
-## Context Size Probing
+## Context Size Probing (Optional)
 
-After running the test suite, each model undergoes context size probing. This tests the model at seven context window sizes:
+Context probing is **not run** during the first-launch smart benchmark or during `/benchmark` by default. Run it separately with `/benchmark context`.
+
+When invoked, each model is tested at seven context window sizes:
 
 - 2K, 4K, 8K, 16K, 32K, 64K, 128K tokens
 

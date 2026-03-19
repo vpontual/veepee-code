@@ -52,6 +52,12 @@ vcode                # Global command (after npm link)
 veepee-code          # Alternative global command name
 node dist/index.js   # Direct execution
 npx tsx src/index.ts # During development
+
+# CLI flags
+vcode -p "explain this codebase"   # Print mode: one-shot, non-interactive
+vcode -c                           # Continue: resume the last session
+vcode --resume my-session          # Resume a named session
+vcode --host 0.0.0.0 --port 9000  # Bind API server to custom host/port
 ```
 
 ## First Run
@@ -68,12 +74,12 @@ On first launch, VEEPEE Code will:
 1. **Connect to the proxy** -- It contacts the Ollama proxy URL from your config (default: `http://localhost:11434`).
 2. **Discover models** -- It queries the proxy for available models and (if configured) the Fleet Manager dashboard for loaded model status and capabilities.
 3. **Select an initial model** -- The highest-scoring model with tool-calling support becomes the temporary default.
-4. **Register tools** -- All 25 tools are initialized based on your `.env` configuration. Tools with missing credentials are silently skipped.
+4. **Register tools** -- All 26 tools are initialized based on your `.env` configuration. Tools with missing credentials are silently skipped.
 5. **Start the API server** -- An OpenAI-compatible API server starts on port 8484 (configurable).
 6. **Launch the TUI** -- The full-screen terminal interface appears with the VEEPEE CODE logo and input box.
 7. **Run the first-launch benchmark** -- Automatically inside the TUI with live progress:
    - **Phase 1:** Quick responsiveness check on all models with tool support. Sends a prompt, allows up to 60 seconds for cold-start model loading, then measures generation speed (tok/s). Models with <1 tok/s are filtered out.
-   - **Phase 2:** Full benchmark on surviving models (tool calling, code generation, code editing, instruction following, reasoning, context probing).
+   - **Phase 2:** Full benchmark on surviving models (tool calling, code generation, code editing, instruction following, reasoning, context probing). Note: context probing is optional and skipped on first launch to speed up initial setup.
    - **Phase 3:** Builds a **model roster** -- assigns the best model per role (act, plan, chat, code, search) based on benchmark scores and speed. The act model becomes the new default.
    - Results are saved to `~/.veepee-code/benchmarks/` and the roster to `roster.json`. Subsequent launches skip the benchmark and load the saved roster.
 
@@ -99,7 +105,7 @@ Or create a project-local `.env` file in your working directory, which takes pre
 
 ### Ask a question
 
-Just type your question or instruction and press Enter:
+Just type your question or instruction and press Enter. Use **Shift+Enter** for multi-line input. Reference files inline with **@file** mentions (e.g., `@src/index.ts`):
 
 ```
 > What does the auth middleware do in this project?
@@ -145,6 +151,10 @@ The agent uses `web_search` (via SearXNG) to find current information, then summ
 /save my-refactor    # Save current conversation
 /sessions            # List saved sessions
 /resume my-refactor  # Resume a saved session
+/effort              # Set model effort level (low/medium/high)
+/worktree            # Manage git worktrees
+/rename              # Rename the current session
+/add-dir             # Add a directory to the working context
 ```
 
 Or resume from the command line:
@@ -158,15 +168,17 @@ vcode --resume my-refactor
 | Key | Action |
 |-----|--------|
 | `Enter` | Submit input |
+| `Shift+Enter` | New line (multi-line input) |
 | `Tab` | Show available tools |
 | `Ctrl+P` | Open command palette |
 | `/` | Open command palette (when typed as first character) |
 | `Ctrl+L` | Clear screen |
 | `Ctrl+D` | Quit |
-| `Ctrl+C` | Clear input |
+| `Ctrl+C` | Interrupt generation / clear input |
 | `Up/Down` | Browse input history |
 | `Left/Right` | Move cursor |
 | `Home/End` | Jump to start/end of input |
+| `Scroll Up/Down` | Scroll through conversation output |
 
 ## Verifying Your Setup
 
@@ -192,6 +204,6 @@ The agent analyzes your project structure, reads config files and source code, a
 
 - [Configuration Reference](configuration.md) -- All environment variables and config files
 - [Modes](modes.md) -- Understanding act, plan, and chat modes
-- [Tools Reference](tools.md) -- All 25 tools with usage examples
+- [Tools Reference](tools.md) -- All 26 tools with usage examples
 - [Models](models.md) -- Model discovery, ranking, and the model roster
 - [Benchmarking](benchmark.md) -- Smart benchmark, roster building, and interpreting results

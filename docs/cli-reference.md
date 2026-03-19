@@ -19,6 +19,11 @@ veepee-code                    # Alternative command name
 | Flag | Description |
 |------|-------------|
 | `--resume <query>` | Resume a saved session by name or ID. Supports exact match, starts-with, and contains matching. |
+| `-p`, `--print <query>` | Non-interactive mode. Runs the query and outputs the result to stdout, then exits. Useful for scripting and pipelines. |
+| `-c`, `--continue` | Resume the most recent session automatically. |
+| `--host=<addr>` | API bind address (default `127.0.0.1`). |
+| `--port=<port>` | API port (default `8484`). |
+| `--json-schema=<file>` | Structured JSON output mode. Requires `-p`. The agent's response is constrained to match the JSON schema defined in the given file. |
 
 ## Commands
 
@@ -83,6 +88,8 @@ Compact the conversation to free context space.
 If the estimated token count exceeds 80% of the 32K context budget and there are more than 12 messages, compaction drops older messages while keeping the first message and the 10 most recent. A summary message replaces the dropped content.
 
 If compaction is not needed (context is below threshold), reports "No compaction needed."
+
+Before trimming, `/compact` now asks the model to verify its knowledge state -- confirming what it knows about the current task, files, and decisions -- so that critical context survives compaction.
 
 > **Note:** Compaction also happens automatically during the agent loop when context pressure is detected.
 
@@ -263,6 +270,65 @@ Generate or improve a VEEPEE.md project instructions file.
 
 The agent analyzes the project structure, reads config files and source code, and creates a VEEPEE.md. If one already exists, it is read and improved. Automatically adds VEEPEE.md to .gitignore. See [VEEPEE.md](veepee-md.md) for details.
 
+### Response Control
+
+#### /effort low|medium|high
+
+Set the response depth for the current session.
+
+```
+/effort low       # 256 max tokens, 0.3 temperature -- terse answers
+/effort medium    # 1024 max tokens, 0.5 temperature -- balanced (default)
+/effort high      # 4096 max tokens, 0.7 temperature -- detailed, creative
+```
+
+Affects all subsequent responses until changed again or the session ends.
+
+### Workspace Management
+
+#### /worktree [list|create [name]|cleanup]
+
+Manage git worktree isolation for experiments.
+
+```
+/worktree              # Show current worktree status
+/worktree list         # List all worktrees
+/worktree create exp   # Create a new worktree named "exp" and switch into it
+/worktree cleanup      # Remove merged/stale worktrees
+```
+
+Worktrees let you experiment in an isolated branch without affecting your main working directory. Requires a git repository.
+
+#### /rename <name>
+
+Rename the current session mid-conversation.
+
+```
+/rename auth-refactor
+```
+
+Updates the session name without saving. Use `/save` afterward to persist the new name.
+
+#### /add-dir <path>
+
+Add an additional working directory to the current session.
+
+```
+/add-dir /Users/vp/Documents/Development/shared-lib
+```
+
+The agent can then read and edit files in the added directory. Useful for working across multiple projects.
+
+### Extended Benchmarking
+
+#### /benchmark context
+
+Probe optimal context sizes per model. Sends progressively larger prompts to each model and measures throughput and quality, identifying the sweet spot before performance degrades. This is separate from the main `/benchmark` suite.
+
+```
+/benchmark context
+```
+
 ### Help
 
 #### /help
@@ -280,6 +346,7 @@ Show the built-in help with all commands, modes, benchmark options, and keyboard
 | Key | Action |
 |-----|--------|
 | `Enter` | Submit input |
+| `Shift+Enter` | Insert newline (multi-line input) |
 | `Backspace` | Delete character before cursor |
 | `Left Arrow` | Move cursor left |
 | `Right Arrow` | Move cursor right |
@@ -303,8 +370,16 @@ The history buffer holds up to 100 entries for the session.
 | `Ctrl+P` | Open command palette (types `/` and shows command menu) |
 | `/` | Open command palette (when typed as first character) |
 | `Ctrl+L` | Clear screen and messages, return to welcome |
-| `Ctrl+C` | Clear current input text |
+| `Ctrl+C` | Interrupt running agent / clear current input text |
 | `Ctrl+D` | Quit VEEPEE Code |
+
+### Scrolling
+
+| Key | Action |
+|-----|--------|
+| `Scroll` / `Mouse wheel` | Scroll conversation |
+| `PgUp` / `PgDn` | Scroll conversation by page |
+| `Shift+Up` / `Shift+Down` | Scroll conversation by line |
 
 ### Command Palette Navigation
 
@@ -350,7 +425,12 @@ When a permission prompt is active:
 | `/resume <name>` | Resume a session |
 | `/permissions` | View permissions |
 | `/revoke <tool>` | Revoke always-allow |
+| `/effort low\|medium\|high` | Set response depth |
+| `/worktree [action]` | Git worktree isolation |
+| `/rename <name>` | Rename current session |
+| `/add-dir <path>` | Add working directory |
 | `/benchmark [tier]` | Run benchmarks |
+| `/benchmark context` | Probe optimal context sizes |
 | `/benchmark results` | Show results |
 | `/benchmark summary` | Show summary |
 | `/quit` / `/exit` / `/q` | Exit |

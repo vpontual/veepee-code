@@ -98,22 +98,27 @@ Things the agent might get wrong. These are the most valuable lines in the file.
 
 ## The /init Command
 
-The `/init` command uses the agent to analyze your project and generate a VEEPEE.md:
+The `/init` command analyzes your project and generates a VEEPEE.md using a hybrid approach:
 
 ```
 /init
 ```
 
-The agent will:
+The command uses a two-phase process:
 
-1. **Scan project structure** -- Uses `glob` and `list_files` to map the directory tree
-2. **Read package files** -- Examines `package.json`, `pyproject.toml`, `Cargo.toml`, `requirements.txt`, etc.
-3. **Read config files** -- Checks `.eslintrc`, `.prettierrc`, `tsconfig.json`, `ruff.toml`, `.editorconfig`
-4. **Read representative source files** -- Samples a few files to understand coding style
-5. **Check for existing instructions** -- Reads `.cursor/rules/`, `.cursorrules`, `.github/copilot-instructions.md`, `CLAUDE.md`, `AGENTS.md`, `OpenCode.md`, `GEMINI.md` and incorporates relevant content
-6. **Check README.md** -- Pulls project description and setup instructions
-7. **Write VEEPEE.md** -- Creates (or improves) the file using `write_file`
-8. **Update .gitignore** -- Automatically adds `VEEPEE.md` to `.gitignore` if the project is a git repo
+1. **Programmatic data gathering** -- VEEPEE Code itself (not the model) collects project context without any tool calls:
+   - File tree structure
+   - Package manifests (`package.json`, `pyproject.toml`, `Cargo.toml`, `requirements.txt`, etc.)
+   - Config files (`.eslintrc`, `.prettierrc`, `tsconfig.json`, `ruff.toml`, `.editorconfig`)
+   - README.md content
+   - Sample source files to infer coding style
+   - Existing instruction files (`.cursor/rules/`, `.cursorrules`, `.github/copilot-instructions.md`, `CLAUDE.md`, `AGENTS.md`, `OpenCode.md`, `GEMINI.md`)
+
+2. **Model synthesis** -- The gathered data is sent to the model as a single prompt, asking it to synthesize a VEEPEE.md. The generated content is **streamed live to the TUI** so you can watch it being written.
+
+After generation, VEEPEE Code writes the file directly (not via the model calling `write_file`) and updates `.gitignore` to include `VEEPEE.md` if the project is a git repo.
+
+This hybrid approach is **much more reliable across different models** because it has no dependency on tool calling -- even models with poor function-calling support can generate good VEEPEE.md content since they only need to produce markdown.
 
 If a VEEPEE.md already exists, `/init` reads it and improves it -- keeping what is good, adding what is missing, and fixing what is wrong.
 

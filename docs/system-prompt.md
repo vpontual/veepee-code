@@ -190,16 +190,11 @@ You are in PLANNING mode. Think deeply before acting.
 
 ### Chat Mode
 
-When in `/chat` mode:
+When in `/chat` mode, the prompt lists the tools available in chat mode. As of v0.2.0, this tool list is generated dynamically from the `CHAT_TOOLS` export in the tool registry rather than being a static string. `CHAT_TOOLS` serves as the single source of truth for both the chat mode system prompt and the agent's tool filtering logic.
+
+The chat mode prompt still includes proactive web search instructions:
 
 ```
-## Chat Mode (ACTIVE)
-
-You are in CHAT mode -- a knowledgeable conversational assistant with web access.
-
-Available tools: web_search, web_fetch, http_request, weather, news.
-NOT available: file editing, shell, git, docker, home automation, social media.
-
 Proactive web searching is MANDATORY:
 - Current events, recent developments, people → web_search immediately
 - Software, frameworks, APIs → web_search for latest docs/versions
@@ -223,12 +218,17 @@ The system prompt is rebuilt when:
 
 The project tree cache is invalidated when file operations occur (write_file, edit_file), so newly created files appear in the tree on the next turn.
 
+## Knowledge State
+
+As of v0.2.0, the system prompt includes a **Knowledge State** section that tells the model about the `update_memory` tool. This allows the agent to persist important facts (project conventions, user preferences, discovered context) across conversations by writing to a knowledge state file.
+
 ## Approximate Token Cost
 
-The system prompt typically consumes 1,500-3,000 tokens depending on:
+The base system prompt has been slimmed from ~3,000 tokens to ~800 tokens as of v0.2.0. Total prompt size depends on:
 
 - Project tree size (up to ~150 entries)
 - VEEPEE.md content length
+- Knowledge State content
 - Active mode (plan and chat add ~200 tokens each)
 
 This is accounted for in the context manager's token estimation.

@@ -131,6 +131,10 @@ Legend:
 
 When `VEEPEE_CODE_AUTO_SWITCH=true` (the default), the agent monitors conversation signals and switches models when the task complexity changes. This only applies in act mode.
 
+### Evaluation Timing
+
+Auto-switch only evaluates **after the first tool turn** -- it will not trigger on the very first message. This prevents unwanted model changes before the agent has done any work and gives the complexity tracker meaningful signals to act on.
+
 ### Complexity Signals
 
 The context manager tracks these signals every turn:
@@ -158,6 +162,7 @@ The context manager tracks these signals every turn:
 - **Fallback:** If no model in the target tier has tool support within size limits, stays on current model
 - **Plan/chat mode override:** Auto-switching is disabled in plan and chat modes (roster models are used instead)
 - **Manual override:** `/model <name>` disables auto-switching until `/model auto` re-enables it
+- **Vision auto-switch:** When image or screenshot paths are detected in a user message, the agent automatically switches to a vision-capable model for that turn, then restores the original model afterward
 
 ### /model Commands
 
@@ -185,6 +190,22 @@ When the dashboard discovery data is unavailable, VEEPEE Code infers capabilitie
 If you have run `/benchmark`, the agent uses the optimal context size discovered during benchmarking for each model. This is passed as `num_ctx` to the Ollama API, ensuring each model operates at its empirically-tested sweet spot between quality and speed.
 
 Without benchmark data, the default context size from the model's configuration is used.
+
+### Implementation Note
+
+Benchmark-based model selection uses **ESM dynamic imports** (`import()`) rather than `require()`. The earlier `require()` approach broke in the ESM module system; this was fixed in v0.2.0.
+
+## Effort Levels
+
+Effort levels (`/effort low`, `/effort medium`, `/effort high`) adjust per-request generation parameters sent to Ollama:
+
+| Level | `num_predict` | `temperature` | Effect |
+|-------|---------------|---------------|--------|
+| **low** | Reduced | Lower | Shorter, more deterministic responses |
+| **medium** | Default | Default | Balanced (default) |
+| **high** | Increased | Slightly higher | Longer, more exploratory responses |
+
+These values are set **per request** in the Ollama API options, not globally. Changing effort level takes effect on the next message.
 
 ## Knowledge Cutoffs
 

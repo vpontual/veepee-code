@@ -43,6 +43,9 @@ VEEPEE Code checks for `.env` files in this order (first match wins):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VEEPEE_CODE_API_PORT` | `8484` | Port for the OpenAI-compatible API server. If the port is in use, VEEPEE Code automatically tries the next port. |
+| `VEEPEE_CODE_API_HOST` | `127.0.0.1` | API bind address. Set to `0.0.0.0` to accept connections from other machines. |
+| `VEEPEE_CODE_API_TOKEN` | *(none)* | Bearer token for API authentication. When set, all API requests must include an `Authorization: Bearer <token>` header. Optional -- if unset, the API accepts unauthenticated requests (bind to localhost only for safety). |
+| `VEEPEE_CODE_API_EXECUTE` | `0` | Set to `1` to enable the `/api/execute` endpoint, which allows remote command execution via the API. Disabled by default for security. |
 
 ### Home Assistant (Optional)
 
@@ -123,6 +126,9 @@ VEEPEE_CODE_MIN_MODEL_SIZE=6
 
 # ─── API Server ───────────────────────────────────────────────────────────────
 VEEPEE_CODE_API_PORT=8484
+# VEEPEE_CODE_API_HOST=127.0.0.1
+# VEEPEE_CODE_API_TOKEN=           # Bearer token for API auth (optional)
+# VEEPEE_CODE_API_EXECUTE=0        # Set to 1 to enable /api/execute
 
 # ─── Optional Integrations ────────────────────────────────────────────────────
 # Run /setup inside vcode to see which integrations are available.

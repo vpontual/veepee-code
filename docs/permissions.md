@@ -34,6 +34,7 @@ These tools are considered safe and never prompt for permission:
 | `weather` | Public weather API, no side effects |
 | `system_info` | Read-only system information |
 | `news` | Read-only news access |
+| `update_memory` | Writes to the knowledge state file, no external side effects |
 
 > **Note:** While `git` is in the safe list for read operations, dangerous git patterns (force push, hard reset) are caught by the dangerous pattern check and will still prompt.
 

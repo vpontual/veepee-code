@@ -10,12 +10,22 @@ VEEPEE Code runs an HTTP API server alongside the TUI, enabling other tools and 
 
 ## Server Details
 
-- **Default port:** 8484 (configurable via `VEEPEE_CODE_API_PORT`)
-- **Bind address:** `0.0.0.0` (accessible from other machines on your network)
+- **Default port:** 8484 (configurable via `VEEPEE_CODE_API_PORT` or `--port` CLI flag)
+- **Bind address:** `127.0.0.1` (localhost only by default; override with `--host` CLI flag)
 - **Auto-fallback:** If the port is in use, VEEPEE Code automatically tries port + 1
-- **CORS:** Enabled for all origins (`Access-Control-Allow-Origin: *`)
+- **CORS:** Restricted to localhost origins (`http://localhost:*` and `http://127.0.0.1:*`)
 
 The API starts automatically when VEEPEE Code launches. No separate process needed.
+
+### Authentication
+
+If the `VEEPEE_CODE_API_TOKEN` environment variable is set, all API requests must include a Bearer token in the `Authorization` header:
+
+```
+Authorization: Bearer your-token-here
+```
+
+Requests without a valid token receive a `401 Unauthorized` response. If the variable is not set, authentication is disabled (open access on localhost).
 
 ## Endpoints
 
@@ -41,6 +51,7 @@ OpenAI-compatible chat completions. The agent processes the last user message, e
 | `model` | string | No | Model to use. If specified and valid, the agent switches to it. Otherwise uses the current default. |
 | `messages` | array | Yes | Array of message objects with `role` and `content`. Only the last user message is processed. |
 | `stream` | boolean | No | Enable Server-Sent Events streaming (default false). |
+| `tools` | array | No | OpenAI-format tool definitions. If provided, constrains the agent to only use tools in this list (intersection with registered tools). |
 
 **Non-streaming response:**
 
@@ -55,7 +66,17 @@ OpenAI-compatible chat completions. The agent processes the last user message, e
       "index": 0,
       "message": {
         "role": "assistant",
-        "content": "The file is the main entry point..."
+        "content": "The file is the main entry point...",
+        "tool_calls": [
+          {
+            "id": "call_0",
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "arguments": "{\"path\":\"src/index.ts\"}"
+            }
+          }
+        ]
       },
       "finish_reason": "stop"
     }
@@ -77,7 +98,7 @@ OpenAI-compatible chat completions. The agent processes the last user message, e
 }
 ```
 
-> **Note:** The `usage` field always returns zeros -- token counting is approximate and tracked separately in the context manager. The `veepee_code` extension contains the list of tool calls that were executed during processing.
+> **Note:** The `usage` field always returns zeros -- token counting is approximate and tracked separately in the context manager. The assistant message now includes a standard OpenAI `tool_calls` array alongside the legacy `veepee_code` extension for backwards compatibility.
 
 **Streaming response (SSE):**
 
@@ -89,10 +110,10 @@ data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model
 data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"qwen3.5:35b","choices":[{"index":0,"delta":{"content":"file "},"finish_reason":null}]}
 ```
 
-Tool calls and results are also streamed as events with `veepee_code` extensions:
+Tool calls are streamed as standard OpenAI `tool_calls` deltas, alongside legacy `veepee_code` extensions for backwards compatibility:
 
 ```
-data: {"id":"chatcmpl-...","choices":[{"index":0,"delta":{"content":""},"finish_reason":null}],"veepee_code":{"tool_call":{"name":"read_file","args":{"path":"src/index.ts"}}}}
+data: {"id":"chatcmpl-...","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"src/index.ts\"}"}}]},"finish_reason":null}],"veepee_code":{"tool_call":{"name":"read_file","args":{"path":"src/index.ts"}}}}
 
 data: {"id":"chatcmpl-...","choices":[{"index":0,"delta":{"content":""},"finish_reason":null}],"veepee_code":{"tool_result":{"name":"read_file","success":true,"output":"..."}}}
 ```
@@ -164,6 +185,8 @@ List all registered tools.
 
 Execute a specific tool directly, bypassing the LLM.
 
+**This endpoint is disabled by default.** To enable it, set `VEEPEE_CODE_API_EXECUTE=1` in your environment or `.env` file. Requests to this endpoint when it is disabled receive a `403 Forbidden` response.
+
 **Request:**
 
 ```json
@@ -194,7 +217,7 @@ Or on error:
 }
 ```
 
-> **Note:** Tool execution through the API bypasses the permission system entirely. This endpoint is intended for trusted programmatic use.
+> **Note:** Tool execution through the API bypasses the permission system entirely. This endpoint is gated behind `VEEPEE_CODE_API_EXECUTE=1` as a safety measure.
 
 ### GET /api/status
 
@@ -225,18 +248,29 @@ Health check endpoint.
 }
 ```
 
-## Multi-Agent Collaboration
+## CLI Flags
 
-The API enables a powerful workflow where multiple AI tools collaborate:
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--host` | Bind address for the API server | `127.0.0.1` |
+| `--port` | Port for the API server | `8484` |
 
-### Claude Code as Orchestrator
-
-Claude Code can use VEEPEE Code as a local execution backend:
+Example:
 
 ```bash
-# In Claude Code's configuration, point to VEEPEE Code's API
-curl -X POST http://localhost:8484/v1/chat/completions \
+vcode --host 0.0.0.0 --port 9000
+```
+
+## Connect Snippets
+
+### Claude Code
+
+Add VEEPEE Code as an MCP-compatible backend in Claude Code's settings. With auth enabled:
+
+```bash
+curl -X POST http://127.0.0.1:8484/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $VEEPEE_CODE_API_TOKEN" \
   -d '{
     "messages": [{"role": "user", "content": "Run the test suite and fix any failures"}],
     "stream": true
@@ -245,16 +279,37 @@ curl -X POST http://localhost:8484/v1/chat/completions \
 
 Claude Code handles the high-level planning while VEEPEE Code executes tool calls locally with zero API cost.
 
+### OpenCode
+
+Point OpenCode at the VEEPEE Code API in `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "provider": {
+    "veepee": {
+      "api_key": "your-token-here",
+      "api_url": "http://127.0.0.1:8484/v1"
+    }
+  }
+}
+```
+
+OpenCode will use the `/v1/chat/completions` and `/v1/models` endpoints with standard OpenAI `tool_calls` format.
+
+## Multi-Agent Collaboration
+
+The API enables a powerful workflow where multiple AI tools collaborate:
+
 ### Gemini CLI Integration
 
 Gemini CLI can use VEEPEE Code's models endpoint for model discovery and the chat endpoint for local inference:
 
 ```bash
 # List available local models
-curl http://localhost:8484/v1/models
+curl http://127.0.0.1:8484/v1/models
 
 # Use a local model through Gemini CLI's custom backend support
-curl -X POST http://localhost:8484/v1/chat/completions \
+curl -X POST http://127.0.0.1:8484/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "qwen3.5:35b", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
@@ -267,14 +322,14 @@ Build automation scripts that leverage VEEPEE Code's tools:
 import requests
 
 # Execute a tool directly
-result = requests.post("http://localhost:8484/api/execute", json={
+result = requests.post("http://127.0.0.1:8484/api/execute", json={
     "tool": "grep",
     "args": {"pattern": "TODO", "include": "*.ts"}
 })
 print(result.json()["output"])
 
 # Ask the agent to analyze and act
-result = requests.post("http://localhost:8484/v1/chat/completions", json={
+result = requests.post("http://127.0.0.1:8484/v1/chat/completions", json={
     "messages": [{"role": "user", "content": "Find and fix all TODO items in the codebase"}]
 })
 print(result.json()["choices"][0]["message"]["content"])
@@ -297,5 +352,7 @@ HTTP status codes:
 | 200 | Success |
 | 204 | No content (OPTIONS preflight) |
 | 400 | Bad request (missing fields, invalid JSON) |
+| 401 | Unauthorized (missing or invalid Bearer token) |
+| 403 | Forbidden (`/api/execute` disabled) |
 | 404 | Endpoint not found |
 | 500 | Internal server error |

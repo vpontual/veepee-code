@@ -85,18 +85,18 @@ Messages are rendered with distinct visual styles:
 | **User** | Highlighted background (`#2A2A4A`) with blue left border (`│`) and white bold text |
 | **Assistant** | Markdown-rendered via marked-terminal (code blocks in terracotta, bold/italic/headings styled, links in sky blue) |
 | **Tool call** | Terracotta diamond `◆` with tool name and truncated arguments |
-| **Tool result (success)** | Green checkmark `✓` with dimmed output preview (max 3-4 lines) |
+| **Tool result (success)** | Green checkmark `✓` with dimmed output preview (max 3-4 lines). `edit_file` results show red/green colored diffs. |
 | **Tool result (error)** | Red cross `✗` with error message |
 | **Thinking** | Dimmed, collapsed by default. Shows `◐ Thinking...` (animated: ◐ ◓ ◑ ◒) while active, then `◐ Thought (N lines) preview...` when complete |
 | **Model switch** | Yellow `◐ Model: old → new` |
 | **System** | Dimmed text for info, errors, and permission prompts |
-| **Completion badge** | Dimmed `◇ Build ● model ● N tool calls ● tokens ● time` |
+| **Completion badge** | Dimmed `◇ Build ● model ● N tool calls ● tokens ● tok/s ● time`. Token count uses real Ollama `eval_count` and prompt token counts. |
 
 ## Command Palette
 
 The command palette opens when you type `/` as the first character or press `Ctrl+P`. It appears as a bordered menu above the input box, similar to OpenCode's command palette:
 
-- Shows all available commands with descriptions
+- Shows all available commands with descriptions (includes `/rename`, `/add-dir`, `/worktree`, `/effort`, `/benchmark context` among others)
 - Filters as you type (e.g., `/be` shows only `/benchmark` commands)
 - Navigate with `Up/Down` arrows
 - `Enter` selects and submits immediately (for commands without arguments)
@@ -159,16 +159,22 @@ The TUI uses raw mode input (`process.stdin.setRawMode(true)`) to capture indivi
 | `Left` / `Right` | Move cursor |
 | `Home` / `Ctrl+A` | Move cursor to start |
 | `End` / `Ctrl+E` | Move cursor to end |
+| `Shift+Enter` | Insert a newline (multi-line input) |
 | `Enter` | Submit input (if non-empty) |
 
-### Navigation
+### Navigation & Scrolling
 
 | Key | Action |
 |-----|--------|
 | `Up` | Previous command from history |
 | `Down` | Next command in history (or clear) |
+| `Shift+Up` / `Page Up` | Scroll message area up |
+| `Shift+Down` / `Page Down` | Scroll message area down |
+| Trackpad / mouse wheel | Scroll message area |
 
 History stores up to 100 entries and persists for the session.
+
+Auto-scroll always keeps the latest content visible. Scrolling up temporarily disables auto-scroll; scrolling back to the bottom re-enables it.
 
 ### Shortcuts
 
@@ -178,8 +184,16 @@ History stores up to 100 entries and persists for the session.
 | `Ctrl+P` | Open command palette (types `/` and shows command menu) |
 | `/` | Open command palette (when typed as first character) |
 | `Ctrl+L` | Clear screen and message history, return to welcome screen |
-| `Ctrl+C` | Clear current input text (does not quit) |
+| `Ctrl+C` | If the agent is running, interrupts it (shows "Interrupted" and returns to input). Otherwise, clears the current input text. Does not quit. |
 | `Ctrl+D` | Quit VEEPEE Code (sends EOF) |
+
+### Paste Detection
+
+When text is pasted into the input (detected by rapid multi-byte sequences), newlines in the pasted content are preserved. This allows pasting multi-line code snippets or text blocks without losing formatting.
+
+### Command Display
+
+Slash commands (e.g., `/model`, `/clear`) are shown as user messages in the conversation area immediately when submitted, providing visual confirmation of the action taken.
 
 ### Permission Prompts
 
@@ -242,7 +256,7 @@ The TUI adapts to terminal size:
 
 - **Logo** -- Full ASCII art logo requires ~50 columns. Below that, a compact `┃ veepee code ┃` is shown.
 - **Input box** -- Maximum 90 columns wide, centered in the terminal.
-- **Message area** -- Maximum 100 columns wide, centered. Text wraps at the available width.
+- **Message area** -- Full-width edge-to-edge layout (the 100-column cap has been removed). Markdown width adapts dynamically to the current terminal size.
 - **Resize** -- The TUI re-renders on `process.stdout` resize events.
 
 ## Alternate Screen Buffer

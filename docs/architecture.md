@@ -21,6 +21,9 @@ veepee-code/
 │   ├── permissions.ts     # Permission system
 │   ├── api.ts             # OpenAI-compatible HTTP API server
 │   ├── benchmark.ts       # Benchmark runner, test suite, roster builder
+│   ├── knowledge.ts       # KnowledgeState class (compressed context, serialize/deserialize, disk persistence)
+│   ├── subagent.ts        # SubAgent + SubAgentManager (search/review/summarize roles)
+│   ├── worktree.ts        # Git worktree create/list/cleanup
 │   ├── sessions.ts        # Session save/load/resume/list
 │   ├── setup.ts           # Integration validation
 │   ├── render.ts          # Markdown rendering and legacy formatters
@@ -40,6 +43,8 @@ veepee-code/
 │       ├── screen.ts      # Terminal primitives (cursor, clear, write, wrap)
 │       ├── theme.ts       # Color palette, box drawing, icons
 │       └── logo.ts        # ASCII art logo generation
+├── test/                  # 54 unit tests (Vitest)
+├── vitest.config.ts       # Vitest configuration
 ├── dist/                  # Compiled JavaScript output
 ├── docs/                  # Documentation (this site)
 ├── install.sh             # One-liner installer
@@ -62,8 +67,11 @@ index.ts
 │   ├── social.ts ──── types.ts, config.ts
 │   ├── google.ts ──── types.ts, config.ts
 │   └── news.ts ────── types.ts, config.ts
-├── agent.ts ─── config.ts, models.ts, context.ts, tools/registry.ts, permissions.ts, benchmark.ts
-├── context.ts ── models.ts, agent.ts (types only)
+├── agent.ts ─── config.ts, models.ts, context.ts, tools/registry.ts, permissions.ts, benchmark.ts, knowledge.ts
+├── context.ts ── models.ts, agent.ts (types only), knowledge.ts
+├── knowledge.ts ─ (standalone, serializable)
+├── subagent.ts ── agent.ts, models.ts, tools/registry.ts
+├── worktree.ts ── (standalone, shells out to git)
 ├── permissions.ts
 ├── api.ts ────── agent.ts, models.ts, tools/registry.ts
 ├── benchmark.ts ─ models.ts
@@ -116,6 +124,14 @@ Discovers, scores, ranks, and manages model selection.
 ### Agent (`agent.ts`)
 
 The core ReAct (Reasoning + Acting) loop with mode management and roster integration.
+
+**Input preprocessing:**
+- `@file` expansion: references like `@src/index.ts` in user messages are detected and expanded inline with the file contents before being sent to the model.
+- Image detection: image file paths in user messages are detected and attached as vision inputs when the model supports it.
+
+**Abort handling:** An `AbortController` is wired through the agent loop. Pressing Ctrl+C during generation aborts the current Ollama request and yields a `done` event, returning control to the user without killing the process.
+
+**Effort levels:** The agent supports configurable effort levels that control how aggressively it uses tools and how thorough its responses are.
 
 **Mode management:**
 - Loads the model roster from `~/.veepee-code/benchmarks/roster.json` on construction
@@ -174,11 +190,17 @@ Manages the conversation history and system prompt.
 - Estimate token usage (characters / 4)
 - Compact conversation when context pressure builds
 
+**Sliding window:**
+The context manager maintains a sliding window of the 6 most recent messages. When the window is exceeded, older messages are compressed into the knowledge state rather than being discarded outright.
+
+**Knowledge state injection:**
+On each turn, the serialized `KnowledgeState` is injected into the system prompt, giving the model a compressed summary of the full conversation history (files seen, decisions made, errors encountered) without consuming the raw message tokens.
+
 **Compaction algorithm:**
 When estimated tokens exceed 80% of the 32K budget and there are more than 12 messages:
 1. Keep the first message (initial context)
 2. Insert a summary message noting how many messages were dropped
-3. Keep the 10 most recent messages
+3. Keep the 6 most recent messages (sliding window)
 
 **Project tree caching:**
 The file tree is computed once and cached. It is invalidated when file operations occur (write_file, edit_file modify the filesystem), ensuring new files appear in subsequent turns.
@@ -204,8 +226,8 @@ The benchmark runner with smart first-launch mode and roster building.
 
 **Smart benchmark flow:**
 1. Filter candidates: models with tool support (skip embedding-only)
-2. Speed check: send a prompt, allow 60s cold start, measure generation tok/s. Filter out <1 tok/s.
-3. Full benchmark on survivors: 10 test cases + context probing
+2. Speed check: preloads the model before measuring to avoid cold-start skew, then measures generation tok/s. Filter out <1 tok/s.
+3. Full benchmark on survivors: 10 test cases + optional context probing (tests the model's ability to recall information placed earlier in a long context)
 4. Build roster: assign best model per role based on scores + speed
 5. Save results and roster to `~/.veepee-code/benchmarks/`
 
@@ -217,6 +239,42 @@ The benchmark runner with smart first-launch mode and roster building.
 - **search:** Fastest with good tool calling (speed weighted 8x), >3 tok/s
 
 **Test validation functions** are deterministic -- they check for specific strings, patterns, and structural elements in the model's response.
+
+### Knowledge State (`knowledge.ts`)
+
+The `KnowledgeState` class provides compressed context persistence for v0.2.0. Instead of keeping the full conversation history, the knowledge state captures the essential information in a structured, serializable format.
+
+**Responsibilities:**
+- Track files seen, decisions made, errors encountered, and key facts discovered during a session
+- Serialize to a compact text format suitable for injection into the system prompt
+- Deserialize from disk to resume context across sessions
+- Persist to `~/.veepee-code/knowledge/` as JSON files
+
+The knowledge state is the foundation of the "compressed knowledge state" approach in v0.2.0 -- replacing full conversation history replay with an AI-readable context dump.
+
+### SubAgent System (`subagent.ts`)
+
+The `SubAgent` and `SubAgentManager` enable the main agent to delegate specialized tasks to lightweight sub-agents with constrained roles.
+
+**Available roles:**
+- **search** -- Focused on finding information in the codebase using grep, glob, and read_file
+- **review** -- Code review with a critical eye, checking for bugs, style issues, and improvements
+- **summarize** -- Condense large amounts of information into concise summaries
+
+Each sub-agent gets a role-specific system prompt and a limited tool set. The `SubAgentManager` handles lifecycle, ensuring sub-agents are spun up and torn down cleanly.
+
+### Git Worktree Manager (`worktree.ts`)
+
+Manages Git worktrees for parallel branch work without disturbing the main working directory.
+
+**Operations:**
+- **create** -- Create a new worktree for a branch at a specified path
+- **list** -- Enumerate active worktrees
+- **cleanup** -- Remove worktrees and prune stale references
+
+### System Prompt
+
+The system prompt has been slimmed from ~3000 tokens to ~800 tokens in v0.2.0. The reduction is possible because the knowledge state now carries contextual information that was previously baked into verbose prompt instructions.
 
 ### Tool System
 
@@ -278,14 +336,14 @@ The prompt handler is injectable -- the TUI sets a custom handler that uses the 
 
 A raw Node.js `http.createServer` (no Express, no framework). Endpoints:
 
-- `/v1/chat/completions` -- Consumes the agent's event stream, translating events to OpenAI SSE format (with `veepee_code` custom extensions for tool calls/results) or a single JSON response
+- `/v1/chat/completions` -- Consumes the agent's event stream, translating events to standard OpenAI format: non-streaming responses include a `tool_calls` array in the assistant message; streaming responses emit `tool_calls` deltas in standard OpenAI format. Legacy `veepee_code` extensions are still included for backwards compatibility. Incoming `tools` definitions in the request are honored and constrain the agent to the client's tool set.
 - `/v1/models` -- Maps `ModelProfile[]` to OpenAI model list format with custom fields
 - `/api/tools` -- Simple tool enumeration
-- `/api/execute` -- Direct tool execution (bypasses LLM)
+- `/api/execute` -- Direct tool execution (bypasses LLM), gated behind `VEEPEE_CODE_API_EXECUTE=1`
 - `/api/status` -- Session state snapshot
 - `/health` -- Liveness probe
 
-The server binds to `0.0.0.0` and auto-increments the port if `EADDRINUSE`.
+The server binds to `127.0.0.1` (localhost only) by default. Use `--host` and `--port` CLI flags to override. Auto-increments the port if `EADDRINUSE`. Bearer token auth is supported via `VEEPEE_CODE_API_TOKEN`. CORS is restricted to localhost origins.
 
 ### TUI (`tui/`)
 
@@ -381,6 +439,7 @@ Each agent turn:
 | `dotenv` | .env file loading |
 | `glob` | File pattern matching |
 | `marked` + `marked-terminal` | Markdown rendering for assistant output in the TUI |
+| `vitest` | Test runner (54 tests) |
 | `tsx` | TypeScript execution for development |
 | `typescript` | Compiler |
 
