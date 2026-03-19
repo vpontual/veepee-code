@@ -3,6 +3,7 @@ import { resolve, join } from 'path';
 import { existsSync } from 'fs';
 import type { Message } from 'ollama';
 import type { AgentMode } from './agent.js';
+import type { KnowledgeStateData } from './knowledge.js';
 import { theme, icons } from './tui/index.js';
 
 export interface Session {
@@ -12,6 +13,7 @@ export interface Session {
   mode: AgentMode;
   cwd: string;
   messages: Message[];
+  knowledgeState?: KnowledgeStateData;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
@@ -36,6 +38,7 @@ export async function saveSession(
   mode: AgentMode,
   cwd: string,
   existingId?: string,
+  knowledgeState?: KnowledgeStateData,
 ): Promise<Session> {
   await mkdir(SESSIONS_DIR, { recursive: true });
 
@@ -49,6 +52,7 @@ export async function saveSession(
     mode,
     cwd,
     messages,
+    knowledgeState,
     createdAt: existingId ? (await loadSession(existingId))?.createdAt || now : now,
     updatedAt: now,
     messageCount: messages.length,

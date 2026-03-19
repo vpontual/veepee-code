@@ -4,11 +4,12 @@ import type { Config } from './config.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { PermissionManager } from './permissions.js';
 import type { BenchmarkResult } from './benchmark.js';
-import { ContextManager } from './context.js';
+import { ContextManager, CHAT_TOOLS } from './context.js';
 import { ModelManager } from './models.js';
 import type { ModelRoster } from './benchmark.js';
-import { readFile } from 'fs/promises';
-import { resolve } from 'path';
+import { SubAgentManager } from './subagent.js';
+import { readFile, readFile as readFileAsync } from 'node:fs/promises';
+import { resolve, relative } from 'path';
 import { existsSync } from 'fs';
 
 export interface AgentEvent {
@@ -20,6 +21,10 @@ export interface AgentEvent {
   error?: string;
   from?: string;
   to?: string;
+  // Token metrics from Ollama (available on 'done' events)
+  evalCount?: number;      // tokens generated
+  promptEvalCount?: number; // prompt tokens processed
+  tokensPerSecond?: number; // actual generation speed
 }
 
 // Planning intent detection patterns
@@ -35,6 +40,7 @@ const PLAN_PATTERNS = [
 ];
 
 export type AgentMode = 'act' | 'plan' | 'chat';
+export type EffortLevel = 'low' | 'medium' | 'high';
 
 export class Agent {
   private ollama: Ollama;
@@ -47,6 +53,10 @@ export class Agent {
   private mode: AgentMode = 'act';
   private previousModel: string | null = null;
   private roster: ModelRoster | null = null;
+  private subAgents: SubAgentManager | null = null;
+  private config: Config;
+  private abortController: AbortController | null = null;
+  private effort: EffortLevel = 'medium';
 
   constructor(config: Config, registry: ToolRegistry, modelManager: ModelManager, permissions: PermissionManager) {
     this.ollama = new Ollama({ host: config.proxyUrl });
@@ -55,6 +65,7 @@ export class Agent {
     this.registry = registry;
     this.permissions = permissions;
     this.maxTurns = config.maxTurns;
+    this.config = config;
 
     this.loadBenchmarkContextSizes();
     this.loadRoster();
@@ -67,6 +78,8 @@ export class Agent {
     try {
       const data = await readFile(rosterPath, 'utf-8');
       this.roster = JSON.parse(data) as ModelRoster;
+      // Initialize sub-agent manager with roster
+      this.subAgents = new SubAgentManager(this.config, this.registry, this.roster);
     } catch { /* ignore */ }
   }
 
@@ -153,6 +166,65 @@ export class Agent {
     return { model: this.modelManager.getCurrentModel() };
   }
 
+  /** Detect image paths in user messages and return base64 data for vision models */
+  private async extractImages(message: string): Promise<string[]> {
+    const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
+    const pathPattern = /(?:^|\s)((?:\/|\.\/|~\/|[A-Za-z]:\\)[\w./-]+\.(?:png|jpg|jpeg|gif|webp|bmp))/gi;
+    const matches = [...message.matchAll(pathPattern)];
+    if (matches.length === 0) return [];
+
+    const images: string[] = [];
+    for (const match of matches) {
+      let filePath = match[1].trim();
+      if (filePath.startsWith('~/')) {
+        filePath = resolve(process.env.HOME || '~', filePath.slice(2));
+      } else {
+        filePath = resolve(process.cwd(), filePath);
+      }
+      if (existsSync(filePath)) {
+        try {
+          const data = await readFileAsync(filePath);
+          images.push(data.toString('base64'));
+        } catch { /* skip unreadable */ }
+      }
+    }
+    return images;
+  }
+
+  /** Find a vision-capable model from the roster or model list */
+  private findVisionModel(): string | null {
+    // Check all models for vision capability
+    const visionModels = this.modelManager.getAllModels()
+      .filter(m => m.capabilities.includes('vision'))
+      .sort((a, b) => b.score - a.score);
+    return visionModels[0]?.name || null;
+  }
+
+  /** Expand @file mentions in user messages — reads the file and appends content */
+  private async expandFileMentions(message: string): Promise<string> {
+    const mentionPattern = /@([\w./-]+(?:\.\w+))/g;
+    const mentions = [...message.matchAll(mentionPattern)];
+    if (mentions.length === 0) return message;
+
+    const fileContents: string[] = [];
+    for (const match of mentions) {
+      const filePath = resolve(process.cwd(), match[1]);
+      if (existsSync(filePath)) {
+        try {
+          const content = await readFileAsync(filePath, 'utf-8');
+          const lines = content.split('\n');
+          const preview = lines.length > 200
+            ? lines.slice(0, 200).join('\n') + `\n... (${lines.length - 200} more lines)`
+            : content;
+          fileContents.push(`\n<file path="${relative(process.cwd(), filePath)}">\n${preview}\n</file>`);
+        } catch { /* skip unreadable files */ }
+      }
+    }
+
+    if (fileContents.length === 0) return message;
+    return message + '\n\n' + fileContents.join('\n');
+  }
+
   /** Detect if a message has planning intent */
   private detectPlanningIntent(message: string): boolean {
     // Don't auto-detect in chat mode
@@ -195,6 +267,37 @@ export class Agent {
     return this.permissions;
   }
 
+  getSubAgents(): SubAgentManager | null {
+    return this.subAgents;
+  }
+
+  setEffort(level: EffortLevel): void {
+    this.effort = level;
+  }
+
+  getEffort(): EffortLevel {
+    return this.effort;
+  }
+
+  /** Get Ollama options based on effort level */
+  private getEffortOptions(): { num_predict?: number; temperature?: number } {
+    switch (this.effort) {
+      case 'low': return { num_predict: 256, temperature: 0.3 };
+      case 'high': return { num_predict: 4096, temperature: 0.7 };
+      case 'medium':
+      default: return { num_predict: 1024, temperature: 0.5 };
+    }
+  }
+
+  /** Abort the current running agent loop (called on Ctrl+C) */
+  abort(): void {
+    this.abortController?.abort();
+  }
+
+  isRunning(): boolean {
+    return this.abortController !== null;
+  }
+
   setModel(model: string): void {
     this.modelManager.switchTo(model);
     this.context.setSystemPrompt(model);
@@ -202,13 +305,33 @@ export class Agent {
 
   /** Run the agent loop for a user message, yielding events as they occur */
   async *run(userMessage: string): AsyncGenerator<AgentEvent> {
+    this.abortController = new AbortController();
+
+    // Expand @file mentions — read files and append content
+    const expandedMessage = await this.expandFileMentions(userMessage);
+
+    // Detect images in message and switch to vision model if needed
+    const images = await this.extractImages(expandedMessage);
+    let visionModelSwitch: string | null = null;
+    if (images.length > 0) {
+      const visionModel = this.findVisionModel();
+      if (visionModel && visionModel !== this.modelManager.getCurrentModel()) {
+        visionModelSwitch = this.modelManager.getCurrentModel(); // save to restore later
+        this.modelManager.switchTo(visionModel);
+        this.context.setSystemPrompt(visionModel);
+        yield { type: 'model_switch', content: 'Switching to vision model for image analysis', from: visionModelSwitch, to: visionModel };
+      } else if (!visionModel) {
+        yield { type: 'thinking', content: 'No vision model available — image will be described by path only' };
+      }
+    }
+
     // Auto-detect planning intent and switch modes if needed
-    if (this.mode === 'act' && this.detectPlanningIntent(userMessage)) {
+    if (this.mode === 'act' && this.detectPlanningIntent(expandedMessage)) {
       const { model } = this.enterPlanMode();
       yield { type: 'model_switch', content: `Entering plan mode (thinking enabled)`, from: this.previousModel || '', to: model };
     }
 
-    this.context.addUser(userMessage);
+    this.context.addUser(expandedMessage);
 
     // Check for context compaction
     if (this.context.compact()) {
@@ -216,27 +339,41 @@ export class Agent {
     }
 
     for (let turn = 0; turn < this.maxTurns; turn++) {
-      // Check if model should switch
-      const signals = this.context.getSignals();
-      const newModel = this.modelManager.evaluate(signals);
-      if (newModel) {
-        this.context.setSystemPrompt(newModel);
-        yield { type: 'model_switch', from: this.modelManager.getCurrentModel(), to: newModel };
+      // Check if model should switch (only after the first turn of a message)
+      if (turn > 0) {
+        const signals = this.context.getSignals();
+        const newModel = this.modelManager.evaluate(signals);
+        if (newModel) {
+          this.context.setSystemPrompt(newModel);
+          yield { type: 'model_switch', from: this.modelManager.getCurrentModel(), to: newModel };
+        }
       }
 
       const currentModel = this.modelManager.getCurrentModel();
 
       // Build messages with system prompt
+      const contextMessages = this.context.getMessages();
       const messages: Message[] = [
         { role: 'system', content: this.context.getSystemPrompt() },
-        ...this.context.getMessages(),
+        ...contextMessages,
       ];
+
+      // Inject images into the last user message if present
+      if (images.length > 0 && messages.length > 0) {
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg.role === 'user') {
+          (lastMsg as unknown as { images: string[] }).images = images;
+        }
+      }
 
       // Stream LLM response with thinking detection
       let fullContent = '';
       let toolCalls: ToolCall[] = [];
       let inThinking = false;
       let thinkingBuffer = '';
+      let evalCount = 0;
+      let promptEvalCount = 0;
+      let evalDuration = 0;
 
       try {
         // Use optimal context size from benchmarks if available
@@ -250,20 +387,31 @@ export class Agent {
         const tools = this.mode === 'chat'
           ? this.registry.toOllamaTools().filter(t => {
               const name = t.function?.name || '';
-              return ['web_search', 'web_fetch', 'http_request', 'weather', 'news'].includes(name);
+              return CHAT_TOOLS.includes(name);
             })
           : this.registry.toOllamaTools();
+        const effortOpts = this.getEffortOptions();
         const stream = await this.ollama.chat({
           model: currentModel,
           messages,
           ...(tools.length > 0 ? { tools } : {}),
           stream: true,
           think: useThinking,
-          keep_alive: '30m', // keep model loaded during multi-step tool calls
-          ...(numCtx ? { options: { num_ctx: numCtx } } : {}),
+          keep_alive: '30m',
+          options: {
+            ...(numCtx ? { num_ctx: numCtx } : {}),
+            ...effortOpts,
+          },
         } as never);
 
         for await (const chunk of stream) {
+          // Check for abort
+          if (this.abortController?.signal.aborted) {
+            yield { type: 'error', error: 'Interrupted by user' };
+            this.abortController = null;
+            return;
+          }
+
           if (chunk.message.content) {
             const text = chunk.message.content;
             fullContent += text;
@@ -310,6 +458,12 @@ export class Agent {
           if (chunk.message.tool_calls && chunk.message.tool_calls.length > 0) {
             toolCalls = chunk.message.tool_calls;
           }
+
+          // Capture eval metrics from final chunk
+          const c = chunk as unknown as Record<string, number>;
+          if (c.eval_count) evalCount += c.eval_count;
+          if (c.prompt_eval_count) promptEvalCount += c.prompt_eval_count;
+          if (c.eval_duration) evalDuration += c.eval_duration;
         }
 
         // If thinking was still open (malformed output), flush it
@@ -317,6 +471,12 @@ export class Agent {
           yield { type: 'thinking', content: thinkingBuffer.trim() };
         }
       } catch (err) {
+        const wasAborted = this.abortController?.signal.aborted;
+        this.abortController = null;
+        if (wasAborted) {
+          yield { type: 'error', error: 'Interrupted by user' };
+          return;
+        }
         const msg = err instanceof Error ? err.message : String(err);
         yield { type: 'error', error: msg };
         this.context.addAssistant(`Error communicating with model: ${msg}`);
@@ -328,7 +488,23 @@ export class Agent {
 
       // If no tool calls, the turn is complete
       if (toolCalls.length === 0) {
-        yield { type: 'done' };
+        // Save knowledge state to disk (non-blocking)
+        this.context.getKnowledgeState().save().catch(() => {});
+        this.abortController = null;
+
+        // Restore original model if we switched for vision
+        if (visionModelSwitch) {
+          this.modelManager.switchTo(visionModelSwitch);
+          this.context.setSystemPrompt(visionModelSwitch);
+        }
+
+        const tps = evalDuration > 0 ? Math.round((evalCount / evalDuration) * 1e9) : 0;
+        yield {
+          type: 'done',
+          evalCount,
+          promptEvalCount,
+          tokensPerSecond: tps,
+        };
         return;
       }
 
@@ -336,6 +512,16 @@ export class Agent {
       for (const call of toolCalls) {
         const toolName = call.function.name;
         const toolArgs = (call.function.arguments || {}) as Record<string, unknown>;
+
+        // Handle update_memory tool internally
+        if (toolName === 'update_memory') {
+          const key = (toolArgs.key as string) || '';
+          const value = (toolArgs.value as string) || '';
+          this.context.getKnowledgeState().updateMemory(key, value);
+          yield { type: 'tool_result', name: toolName, success: true, content: `Stored: ${key} = ${value}` };
+          this.context.addToolResult(toolName, `Stored: ${key} = ${value}`);
+          continue;
+        }
 
         yield { type: 'tool_call', name: toolName, args: toolArgs };
 
@@ -360,8 +546,13 @@ export class Agent {
         const resultContent = result.success
           ? result.output
           : `Error: ${result.error}`;
-        this.context.addToolResult(toolName, resultContent);
+        // Pass file path for accurate file tracking
+        const filePath = (toolArgs.path as string) || undefined;
+        this.context.addToolResult(toolName, resultContent, filePath);
       }
+
+      // Flush knowledge state update after all tool results are collected
+      this.context.flushKnowledgeUpdate(fullContent);
     }
 
     yield { type: 'error', error: `Reached maximum turns (${this.maxTurns})` };

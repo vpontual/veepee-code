@@ -5,9 +5,11 @@ import type { ToolRegistry } from './tools/registry.js';
 
 interface ApiConfig {
   port: number;
+  host?: string; // bind address (default: 127.0.0.1)
   agent: Agent;
   modelManager: ModelManager;
   registry: ToolRegistry;
+  apiToken?: string; // optional auth token; if set, all requests must include it
 }
 
 /**
@@ -24,9 +26,14 @@ interface ApiConfig {
 export function startApiServer(config: ApiConfig): { port: number; close: () => void } {
   const { agent, modelManager, registry } = config;
 
+  const apiToken = config.apiToken || process.env.VEEPEE_CODE_API_TOKEN || null;
+
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    // CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // CORS — localhost only
+    const origin = req.headers.origin || '';
+    if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
@@ -34,6 +41,16 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
       res.writeHead(204);
       res.end();
       return;
+    }
+
+    // Auth check — if token is configured, require Bearer token
+    if (apiToken) {
+      const authHeader = req.headers.authorization || '';
+      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+      if (token !== apiToken) {
+        sendJson(res, 401, { error: 'Unauthorized — set Authorization: Bearer <token>' });
+        return;
+      }
     }
 
     const url = new URL(req.url || '/', `http://localhost:${config.port}`);
@@ -65,6 +82,19 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
           return;
         }
 
+        // If client provides tool definitions, constrain to those tools only
+        // by prepending a system instruction (the agent always has all tools
+        // available but will respect this constraint)
+        let userContent = lastUserMsg.content;
+        if (data.tools && Array.isArray(data.tools) && data.tools.length > 0) {
+          const clientToolNames = data.tools
+            .map((t: any) => t?.function?.name)
+            .filter(Boolean) as string[];
+          if (clientToolNames.length > 0) {
+            userContent = `[System: For this request, only use these tools: ${clientToolNames.join(', ')}. Do not call any other tools.]\n\n${userContent}`;
+          }
+        }
+
         if (data.stream) {
           // Streaming response (SSE)
           res.writeHead(200, {
@@ -75,8 +105,9 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
 
           const model = modelManager.getCurrentModel();
           let fullContent = '';
+          let toolCallIndex = -1;
 
-          for await (const event of agent.run(lastUserMsg.content)) {
+          for await (const event of agent.run(userContent)) {
             if (event.type === 'text' && event.content) {
               fullContent += event.content;
               const chunk = {
@@ -92,8 +123,8 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
               };
               res.write(`data: ${JSON.stringify(chunk)}\n\n`);
             } else if (event.type === 'tool_call') {
-              // Send tool usage as a system note in the stream
-              const note = `[Tool: ${event.name}(${JSON.stringify(event.args).slice(0, 200)})]`;
+              // Emit standard OpenAI tool_calls delta
+              toolCallIndex++;
               const chunk = {
                 id: `chatcmpl-${Date.now()}`,
                 object: 'chat.completion.chunk',
@@ -101,14 +132,23 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
                 model,
                 choices: [{
                   index: 0,
-                  delta: { content: '' },
+                  delta: {
+                    tool_calls: [{
+                      index: toolCallIndex,
+                      id: `call_${Date.now()}_${toolCallIndex}`,
+                      type: 'function',
+                      function: {
+                        name: event.name,
+                        arguments: JSON.stringify(event.args || {}),
+                      },
+                    }],
+                  },
                   finish_reason: null,
                 }],
-                // Custom extension — tool usage metadata
-                veepee_code: { tool_call: { name: event.name, args: event.args } },
               };
               res.write(`data: ${JSON.stringify(chunk)}\n\n`);
             } else if (event.type === 'tool_result') {
+              // Tool results aren't part of OpenAI streaming spec, but useful for clients
               const chunk = {
                 id: `chatcmpl-${Date.now()}`,
                 object: 'chat.completion.chunk',
@@ -150,8 +190,17 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
         }
 
         // Non-streaming response
-        const result = await agent.runSync(lastUserMsg.content);
+        const result = await agent.runSync(userContent);
         const model = modelManager.getCurrentModel();
+
+        // Build standard OpenAI tool_calls array
+        const toolCallsMsg = result.toolCalls.length > 0
+          ? result.toolCalls.map((tc, i) => ({
+              id: `call_${Date.now()}_${i}`,
+              type: 'function' as const,
+              function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+            }))
+          : undefined;
 
         sendJson(res, 200, {
           id: `chatcmpl-${Date.now()}`,
@@ -160,17 +209,17 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
           model,
           choices: [{
             index: 0,
-            message: { role: 'assistant', content: result.content },
+            message: {
+              role: 'assistant',
+              content: result.content,
+              ...(toolCallsMsg ? { tool_calls: toolCallsMsg } : {}),
+            },
             finish_reason: 'stop',
           }],
           usage: {
             prompt_tokens: 0,
             completion_tokens: 0,
             total_tokens: 0,
-          },
-          // Custom extension — tool calls that happened
-          veepee_code: {
-            tool_calls: result.toolCalls,
           },
         });
         return;
@@ -209,8 +258,13 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
         return;
       }
 
-      // Execute a tool directly
+      // Execute a tool directly — requires VEEPEE_CODE_API_EXECUTE=1 opt-in
       if (path === '/api/execute' && req.method === 'POST') {
+        if (!process.env.VEEPEE_CODE_API_EXECUTE) {
+          sendJson(res, 403, { error: '/api/execute is disabled. Set VEEPEE_CODE_API_EXECUTE=1 to enable.' });
+          return;
+        }
+
         const body = await readBody(req);
         const data = JSON.parse(body) as { tool: string; args: Record<string, unknown> };
 
@@ -253,11 +307,11 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
     if (err.code === 'EADDRINUSE') {
       console.error(`  API port ${config.port} in use — trying ${config.port + 1}`);
       config.port++;
-      server.listen(config.port, '0.0.0.0');
+      server.listen(config.port, config.host || '127.0.0.1');
     }
   });
 
-  server.listen(config.port, '0.0.0.0');
+  server.listen(config.port, config.host || '127.0.0.1');
 
   return {
     get port() { return config.port; },

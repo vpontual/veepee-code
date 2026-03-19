@@ -44,30 +44,46 @@ interface TurnTracker {
 
 // ─── Markdown Renderer ───────────────────────────────────────────────────────
 
-// Initialize marked with terminal renderer
-marked.use(markedTerminal({
-  code: chalk.hex('#E8A87C'),           // code blocks in warm terracotta
-  codespan: chalk.hex('#E8A87C').bold,  // inline `code`
-  strong: chalk.bold.white,
-  em: chalk.italic,
-  heading: chalk.bold.underline.white,
-  listitem: chalk.white,
-  link: chalk.hex('#85C7F2').underline,
-  paragraph: chalk.white,
-  hr: () => chalk.dim('─'.repeat(40)) + '\n',
-  blockquote: chalk.dim.italic,
-  width: 96,
-  reflowText: true,
-  tab: 2,
-}) as never);
+// Initialize marked with terminal renderer — reconfigured per render for dynamic width
+function setupMarkedTerminal(width: number): void {
+  marked.use(markedTerminal({
+    code: chalk.hex('#E8A87C'),
+    codespan: chalk.hex('#E8A87C').bold,
+    strong: chalk.bold.white,
+    em: chalk.italic,
+    heading: chalk.bold.underline.white,
+    listitem: chalk.white,
+    link: chalk.hex('#85C7F2').underline,
+    paragraph: chalk.white,
+    hr: () => chalk.dim('─'.repeat(Math.min(40, width - 4))) + '\n',
+    blockquote: chalk.dim.italic,
+    width,
+    reflowText: true,
+    tab: 2,
+  }) as never);
+}
+// Initial setup with default
+setupMarkedTerminal(process.stdout.columns ? process.stdout.columns - 6 : 90);
 
-/** Format assistant markdown into terminal-ready lines */
-function formatAssistantMarkdown(content: string, _maxWidth: number): string[] {
+/** Format assistant markdown into terminal-ready lines, word-wrapped to fit */
+function formatAssistantMarkdown(content: string, maxWidth: number): string[] {
   try {
-    let rendered = (marked.parse(content) as string).replace(/\n+$/, '');
-    return rendered.split('\n');
+    setupMarkedTerminal(maxWidth);
+    const rendered = (marked.parse(content) as string).replace(/\n+$/, '');
+    const lines: string[] = [];
+    for (const line of rendered.split('\n')) {
+      const visualLen = stripAnsi(line).length;
+      if (visualLen <= maxWidth) {
+        lines.push(line);
+      } else {
+        // Wrap long rendered lines
+        const wrapped = wordWrap(stripAnsi(line), maxWidth);
+        lines.push(...wrapped);
+      }
+    }
+    return lines;
   } catch {
-    return wordWrap(content, _maxWidth).map(line => chalk.white(line));
+    return wordWrap(content, maxWidth).map(line => chalk.white(line));
   }
 }
 
@@ -100,6 +116,11 @@ const COMMANDS = [
   { name: '/save', args: '[name]', description: 'Save current conversation as a session' },
   { name: '/sessions', args: '', description: 'List all saved sessions' },
   { name: '/resume', args: '<name>', description: 'Resume a saved session' },
+  { name: '/rename', args: '<name>', description: 'Rename current session' },
+  { name: '/add-dir', args: '<path>', description: 'Add a working directory' },
+  { name: '/worktree', args: '[cmd]', description: 'Git worktree isolation (create/list/cleanup)' },
+  { name: '/effort', args: '<level>', description: 'Set effort level (low/medium/high)' },
+  { name: '/benchmark context', args: '', description: 'Probe optimal context sizes per model' },
   { name: '/quit', args: '', description: 'Exit VEEPEE Code' },
   { name: '/exit', args: '', description: 'Exit VEEPEE Code' },
 ];
@@ -141,6 +162,7 @@ export class TUI {
   private streamActive = false;
   private turnTracker: TurnTracker | null = null;
   private turnTrackerInterval: ReturnType<typeof setInterval> | null = null;
+  private abortHandler: (() => void) | null = null;
 
   constructor() {
     this.currentTip = Math.floor(Math.random() * this.tips.length);
@@ -165,11 +187,18 @@ export class TUI {
     process.stdin.on('data', this.handleKey.bind(this));
     process.stdout.on('resize', () => this.render());
 
+    // Enable mouse wheel tracking (SGR extended mode for modern terminals)
+    process.stdout.write('\x1b[?1000h'); // enable basic mouse
+    process.stdout.write('\x1b[?1006h'); // enable SGR extended mouse
+
     this.render();
   }
 
   stop(): void {
     if (this.turnTrackerInterval) clearInterval(this.turnTrackerInterval);
+    // Disable mouse tracking
+    process.stdout.write('\x1b[?1006l');
+    process.stdout.write('\x1b[?1000l');
     process.stdin.setRawMode?.(false);
     process.stdin.removeAllListeners('data');
     exitAltScreen();
@@ -221,13 +250,19 @@ export class TUI {
   }
 
   /** Add a user message and start turn tracking */
+  /** Set a handler to call when user presses Ctrl+C during agent execution */
+  setAbortHandler(handler: () => void): void {
+    this.abortHandler = handler;
+  }
+
   addUserMessage(content: string): void {
     this.addMessage({ role: 'user', content, timestamp: Date.now() });
     this.state = 'waiting';
 
-    // Clear the input box immediately
+    // Clear the input box and reset scroll to bottom
     this.input.text = '';
     this.input.cursor = 0;
+    this.scrollOffset = 0;
     this.commandMenuVisible = false;
 
     // Start turn tracker (agent tree view)
@@ -378,7 +413,7 @@ export class TUI {
   }
 
   /** Show the completion badge after agent finishes */
-  showCompletionBadge(model: string, elapsed: number): void {
+  showCompletionBadge(model: string, elapsed: number, metrics?: { evalCount?: number; promptEvalCount?: number; tokensPerSecond?: number }): void {
     // Stop turn tracker
     if (this.turnTracker) {
       this.turnTracker.active = false;
@@ -390,12 +425,19 @@ export class TUI {
 
     const secs = (elapsed / 1000).toFixed(1);
     const toolCount = this.turnTracker?.toolCalls.length || 0;
-    const tokens = this.turnTracker?.tokensEstimate || 0;
-    const tokStr = tokens > 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+
+    // Use real Ollama metrics if available, otherwise fall back to estimate
+    const evalTokens = metrics?.evalCount || this.turnTracker?.tokensEstimate || 0;
+    const promptTokens = metrics?.promptEvalCount || 0;
+    const tps = metrics?.tokensPerSecond || 0;
+
+    const tokStr = evalTokens > 1000 ? `${(evalTokens / 1000).toFixed(1)}k` : String(evalTokens);
+    const promptStr = promptTokens > 0 ? ` ${icons.dot} ${promptTokens > 1000 ? `${(promptTokens / 1000).toFixed(1)}k` : promptTokens} prompt` : '';
+    const tpsStr = tps > 0 ? ` ${icons.dot} ${tps} tok/s` : '';
 
     this.addMessage({
       role: 'system',
-      content: `${theme.dim(`${icons.toolDone}  Build ${icons.dot} ${model} ${icons.dot} ${toolCount} tool calls ${icons.dot} ${tokStr} tokens ${icons.dot} ${secs}s`)}`,
+      content: `${theme.dim(`${icons.toolDone}  Build ${icons.dot} ${model} ${icons.dot} ${toolCount} tool calls ${icons.dot} ${tokStr} tokens${promptStr}${tpsStr} ${icons.dot} ${secs}s`)}`,
     });
 
     this.turnTracker = null;
@@ -477,8 +519,8 @@ export class TUI {
   }
 
   private renderMessages(startRow: number, endRow: number, cols: number): void {
-    const maxWidth = Math.min(cols - 4, 100);
-    const leftPad = Math.max(2, Math.floor((cols - maxWidth) / 2));
+    const maxWidth = cols - 4;
+    const leftPad = 2;
 
     let row = startRow;
 
@@ -507,19 +549,21 @@ export class TUI {
       }
     }
 
-    // Scroll: show from top when content fits. Auto-scroll to bottom only
-    // when content truly overflows. Never cut off the first user message
-    // for short conversations (< 20 messages).
+    // Scroll: auto-scroll to bottom unless user has scrolled up
     const visibleRows = endRow - startRow;
     let startLine = 0;
     if (renderedLines.length > visibleRows) {
-      if (allMessages.length <= 8) {
-        // Short conversation — keep first message visible, clip at bottom
-        startLine = 0;
+      const maxScroll = renderedLines.length - visibleRows;
+      if (this.scrollOffset > 0) {
+        // User has scrolled up — respect their offset
+        this.scrollOffset = Math.min(this.scrollOffset, maxScroll);
+        startLine = maxScroll - this.scrollOffset;
       } else {
-        // Long conversation — auto-scroll to show latest
-        startLine = renderedLines.length - visibleRows;
+        // Auto-scroll to show latest content
+        startLine = maxScroll;
       }
+    } else {
+      this.scrollOffset = 0; // content fits, reset scroll
     }
 
     for (let i = startLine; i < renderedLines.length && row <= endRow; i++) {
@@ -551,10 +595,17 @@ export class TUI {
 
       case 'tool_result': {
         const icon = msg.success ? theme.success(icons.check) : theme.error(icons.cross);
-        const lines = msg.content.split('\n').slice(0, 4);
-        return lines.map((line, i) =>
-          (i === 0 ? `  ${icon} ` : '    ') + theme.dim(truncate(line, maxWidth - 6))
-        );
+        const lines = msg.content.split('\n').slice(0, 8);
+        return lines.map((line, i) => {
+          const prefix = i === 0 ? `  ${icon} ` : '    ';
+          // Colorize diff lines
+          if (line.startsWith('+ ')) {
+            return prefix + chalk.green(truncate(line, maxWidth - 6));
+          } else if (line.startsWith('- ')) {
+            return prefix + chalk.red(truncate(line, maxWidth - 6));
+          }
+          return prefix + theme.dim(truncate(line, maxWidth - 6));
+        });
       }
 
       case 'thinking': {
@@ -594,8 +645,8 @@ export class TUI {
   private renderTurnTracker(startRow: number, cols: number): void {
     if (!this.turnTracker) return;
 
-    const maxWidth = Math.min(cols - 4, 100);
-    const leftPad = Math.max(2, Math.floor((cols - maxWidth) / 2));
+    const maxWidth = cols - 4;
+    const leftPad = 2;
     const elapsed = ((Date.now() - this.turnTracker.startTime) / 1000).toFixed(1);
     const toolCount = this.turnTracker.toolCalls.length;
     const tokStr = this.turnTracker.tokensEstimate > 1000
@@ -646,8 +697,8 @@ export class TUI {
   }
 
   private renderInputBox(topRow: number, cols: number): void {
-    const boxWidth = Math.min(cols - 4, 90);
-    const leftPad = Math.max(2, Math.floor((cols - boxWidth) / 2));
+    const boxWidth = cols - 4;
+    const leftPad = 2;
 
     // Layout:
     // topRow+0: ╭─── top border
@@ -784,6 +835,22 @@ export class TUI {
   private handleKey(data: Buffer): void {
     const key = data.toString();
 
+    // Mouse wheel events (SGR extended: \x1b[<button;x;yM or m)
+    const sgrMatch = key.match(/\x1b\[<(\d+);\d+;\d+[Mm]/);
+    if (sgrMatch) {
+      const button = parseInt(sgrMatch[1], 10);
+      if (button === 64) {
+        // Scroll up
+        this.scrollOffset += 3;
+        this.render();
+      } else if (button === 65) {
+        // Scroll down
+        this.scrollOffset = Math.max(0, this.scrollOffset - 3);
+        this.render();
+      }
+      return;
+    }
+
     // Permission prompt mode
     if (this.permissionResolve) {
       if (key === 'y' || key === 'Y') {
@@ -806,6 +873,10 @@ export class TUI {
         this.input.text = '';
         this.input.cursor = 0;
         this.render();
+      } else if (this.abortHandler) {
+        // During agent execution, abort the stream
+        this.abortHandler();
+        this.showInfo(theme.warning('Interrupted.'));
       }
       return;
     }
@@ -932,7 +1003,18 @@ export class TUI {
 
     // ─── Normal input handling ───────────────────────────────────────
 
-    // Enter — submit
+    // Shift+Enter or Alt+Enter — insert newline for multi-line input
+    if (key === '\x1b\r' || key === '\x1b\n') {
+      this.input.text =
+        this.input.text.slice(0, this.input.cursor) +
+        '\n' +
+        this.input.text.slice(this.input.cursor);
+      this.input.cursor++;
+      this.render();
+      return;
+    }
+
+    // Enter — submit (but if text has newlines and cursor isn't at end, insert newline)
     if (key === '\r' || key === '\n') {
       const text = this.input.text.trim();
       if (text) {
@@ -943,6 +1025,19 @@ export class TUI {
         this.resolveInput = null;
         this.rejectInput = null;
       }
+      return;
+    }
+
+    // Paste detection — if data is multi-char and contains newlines, insert as multi-line
+    if (key.length > 1 && key.includes('\n') && !key.startsWith('\x1b')) {
+      // Pasted text — insert with newlines preserved
+      const cleanPaste = key.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      this.input.text =
+        this.input.text.slice(0, this.input.cursor) +
+        cleanPaste +
+        this.input.text.slice(this.input.cursor);
+      this.input.cursor += cleanPaste.length;
+      this.render();
       return;
     }
 
@@ -981,6 +1076,20 @@ export class TUI {
     if (key === '\x0c') {
       this.messages = [];
       this.state = 'welcome';
+      this.render();
+      return;
+    }
+
+    // Scroll conversation: Shift+Up/Down or Page Up/Down
+    if (key === '\x1b[1;2A' || key === '\x1b[5~') {
+      // Shift+Up or Page Up — scroll up
+      this.scrollOffset += (key === '\x1b[5~' ? 10 : 3);
+      this.render();
+      return;
+    }
+    if (key === '\x1b[1;2B' || key === '\x1b[6~') {
+      // Shift+Down or Page Down — scroll down
+      this.scrollOffset = Math.max(0, this.scrollOffset - (key === '\x1b[6~' ? 10 : 3));
       this.render();
       return;
     }

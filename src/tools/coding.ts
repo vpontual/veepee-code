@@ -1,7 +1,7 @@
 import { readFile, writeFile, stat, readdir } from 'fs/promises';
 import { resolve, relative, join } from 'path';
 import { existsSync } from 'fs';
-import { execSync, spawn } from 'child_process';
+import { execSync, execFileSync, spawn } from 'child_process';
 import { glob as globFn } from 'glob';
 import { z } from 'zod';
 import type { ToolDef, ToolResult } from './types.js';
@@ -17,6 +17,7 @@ export function registerCodingTools(): ToolDef[] {
     createBashTool(),
     createGitTool(),
     createListFilesTool(),
+    createUpdateMemoryTool(),
   ];
 }
 
@@ -100,9 +101,18 @@ function createEditFileTool(): ToolDef {
         const updated = content.replace(oldStr, newStr);
         await writeFile(filePath, updated, 'utf-8');
 
-        const addedLines = newStr.split('\n').length;
-        const removedLines = oldStr.split('\n').length;
-        return ok(`Edited ${relative(process.cwd(), filePath)}: -${removedLines} +${addedLines} lines`);
+        // Generate a readable diff
+        const relPath = relative(process.cwd(), filePath);
+        const oldLines = oldStr.split('\n');
+        const newLines = newStr.split('\n');
+        const diffLines: string[] = [`Edited ${relPath}:`];
+        for (const line of oldLines) {
+          diffLines.push(`- ${line}`);
+        }
+        for (const line of newLines) {
+          diffLines.push(`+ ${line}`);
+        }
+        return ok(diffLines.join('\n'));
       } catch (err) {
         return fail(`Cannot edit file: ${(err as Error).message}`);
       }
@@ -159,24 +169,28 @@ function createGrepTool(): ToolDef {
         const searchPath = resolve((params.path as string) || '.');
         const include = params.include as string | undefined;
         const maxResults = (params.max_results as number) || 50;
+        const pattern = params.pattern as string;
 
-        // Use ripgrep if available, otherwise grep
+        // Use ripgrep if available, otherwise grep — with arg arrays to prevent injection
         const hasRg = (() => {
           try { execSync('which rg', { stdio: 'pipe' }); return true; } catch { return false; }
         })();
 
-        let cmd: string;
+        let bin: string;
+        let args: string[];
         if (hasRg) {
-          cmd = `rg -n --max-count ${maxResults} --no-heading`;
-          if (include) cmd += ` --glob "${include}"`;
-          cmd += ` "${params.pattern}" "${searchPath}"`;
+          bin = 'rg';
+          args = ['-n', '--max-count', String(maxResults), '--no-heading'];
+          if (include) args.push('--glob', include);
+          args.push('--', pattern, searchPath);
         } else {
-          cmd = `grep -rn --max-count=${maxResults}`;
-          if (include) cmd += ` --include="${include}"`;
-          cmd += ` -E "${params.pattern}" "${searchPath}"`;
+          bin = 'grep';
+          args = ['-rn', `--max-count=${maxResults}`];
+          if (include) args.push(`--include=${include}`);
+          args.push('-E', '--', pattern, searchPath);
         }
 
-        const output = execSync(cmd, {
+        const output = execFileSync(bin, args, {
           encoding: 'utf-8',
           maxBuffer: 10 * 1024 * 1024,
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -255,7 +269,11 @@ function createGitTool(): ToolDef {
     execute: async (params) => {
       try {
         const cwd = resolve((params.cwd as string) || process.cwd());
-        const output = execSync(`git ${params.args}`, {
+        // Parse args string into array to avoid shell injection
+        // Uses a simple split that respects quoted strings
+        const argsStr = (params.args as string) || '';
+        const gitArgs = parseArgs(argsStr);
+        const output = execFileSync('git', gitArgs, {
           cwd,
           encoding: 'utf-8',
           maxBuffer: 10 * 1024 * 1024,
@@ -268,6 +286,27 @@ function createGitTool(): ToolDef {
       }
     },
   };
+}
+
+/** Parse a command string into an array, respecting quoted strings */
+function parseArgs(str: string): string[] {
+  const args: string[] = [];
+  let current = '';
+  let inQuote: string | null = null;
+  for (const ch of str) {
+    if (inQuote) {
+      if (ch === inQuote) { inQuote = null; }
+      else { current += ch; }
+    } else if (ch === '"' || ch === "'") {
+      inQuote = ch;
+    } else if (ch === ' ' || ch === '\t') {
+      if (current) { args.push(current); current = ''; }
+    } else {
+      current += ch;
+    }
+  }
+  if (current) args.push(current);
+  return args;
 }
 
 function createListFilesTool(): ToolDef {
@@ -301,6 +340,21 @@ function createListFilesTool(): ToolDef {
       } catch (err) {
         return fail(`Cannot list directory: ${(err as Error).message}`);
       }
+    },
+  };
+}
+
+function createUpdateMemoryTool(): ToolDef {
+  return {
+    name: 'update_memory',
+    description: 'Store an important fact, decision, or context in the conversation knowledge state. Use this when you learn something important that should persist across the conversation. Keys: fact, decision, question, project, current_task, or any custom key.',
+    schema: z.object({
+      key: z.string().describe('Category: fact, decision, question, project, current_task, or custom key'),
+      value: z.string().describe('The information to remember'),
+    }),
+    execute: async (params) => {
+      // Actual storage is handled by the agent (intercepted before reaching here)
+      return ok(`Stored: ${params.key} = ${params.value}`);
     },
   };
 }

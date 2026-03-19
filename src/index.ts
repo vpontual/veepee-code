@@ -12,6 +12,8 @@ import { TUI, theme, icons } from './tui/index.js';
 import { validateIntegrations, formatSetupReport } from './setup.js';
 import { saveSession, listSessions, findSession, formatSessionList, autoName } from './sessions.js';
 import { MoeEngine, type MoeStrategy } from './moe.js';
+import { KnowledgeState } from './knowledge.js';
+import { createWorktree, listWorktrees, cleanupWorktrees, isGitRepo } from './worktree.js';
 
 // Tool registrations
 import { registerCodingTools } from './tools/coding.js';
@@ -22,39 +24,17 @@ import { registerSocialTools } from './tools/social.js';
 import { registerGoogleTools } from './tools/google.js';
 import { registerNewsTools } from './tools/news.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
-const INIT_PROMPT = `Analyze this codebase and create a VEEPEE.md file in the project root. This file will be automatically loaded into your system prompt on every session, so it must be high-quality and useful.
-
-The file should contain (~150 lines):
-
-1. **Project overview** — What this project does, in 2-3 sentences.
-
-2. **Tech stack** — Language, framework, key libraries/dependencies.
-
-3. **Build/lint/test commands** — The exact commands to build, lint, typecheck, and test this project. Especially include how to run a SINGLE test file or test case (this is critical for agent workflows).
-
-4. **Code style guidelines** — Import ordering, formatting rules, naming conventions (camelCase vs snake_case, etc.), type usage, error handling patterns. Infer these from the existing code — don't guess.
-
-5. **Architecture notes** — Key directories, where to find what, important patterns (e.g., "all API routes are in src/routes/", "we use repository pattern for DB access").
-
-6. **Common gotchas** — Things an agent might get wrong (e.g., "always run migrations before tests", "this project uses pnpm not npm", "env vars must be in both .env and docker-compose.yml").
-
-To create this file:
-- Use glob and list_files to understand the project structure
-- Read package.json, Cargo.toml, requirements.txt, pyproject.toml, or equivalent for dependencies and scripts
-- Read a few representative source files to understand code style
-- Check for existing config files: .eslintrc, .prettierrc, tsconfig.json, ruff.toml, .editorconfig, etc.
-- Check for existing instruction files: .cursor/rules/, .cursorrules, .github/copilot-instructions.md, CLAUDE.md, AGENTS.md, OpenCode.md, GEMINI.md — incorporate relevant content
-- Check README.md for project description and setup instructions
-
-Write the VEEPEE.md file using write_file. Be specific and actionable — vague guidelines are useless. Every line should help an agent write better code in this specific project.`;
 
 async function main() {
   const config = loadConfig();
 
-  // Discover models (before TUI starts, so we can show loading)
-  // Discover models (quick — just fetches /api/tags)
+  // Check for -p / --print mode (non-interactive, output to stdout)
+  const printIdx = process.argv.findIndex(a => a === '-p' || a === '--print');
+  const printQuery = printIdx >= 0 ? process.argv[printIdx + 1] : null;
+
+  // Discover models
   const modelManager = new ModelManager(config);
   try {
     await modelManager.discover();
@@ -89,11 +69,56 @@ async function main() {
 
   // Create agent
   const agent = new Agent(config, registry, modelManager, permissions);
+  agent.getContext().setRegisteredTools(registry.names());
   agent.getContext().setSystemPrompt(defaultModel);
 
+  // Print mode: run query, output to stdout, exit
+  if (printQuery) {
+    const jsonSchemaArg = process.argv.find(a => a.startsWith('--json-schema='));
+    const jsonSchemaFile = jsonSchemaArg?.split('=')[1];
+
+    // Auto-allow all permissions in print mode
+    permissions.setPromptHandler(async () => 'y');
+    let output = '';
+    for await (const event of agent.run(printQuery)) {
+      if (event.type === 'text' && event.content) {
+        output += event.content;
+        if (!jsonSchemaFile) process.stdout.write(event.content);
+      } else if (event.type === 'error') {
+        process.stderr.write(`Error: ${event.error}\n`);
+      }
+    }
+
+    // If --json-schema was provided, validate and output as JSON
+    if (jsonSchemaFile) {
+      try {
+        // Try to extract JSON from the response
+        const jsonMatch = output.match(/```json\s*([\s\S]*?)```/) || output.match(/\{[\s\S]*\}/);
+        const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : output;
+        const parsed = JSON.parse(jsonStr.trim());
+        process.stdout.write(JSON.stringify(parsed, null, 2));
+      } catch {
+        // If can't parse as JSON, wrap the raw output
+        process.stdout.write(JSON.stringify({ result: output.trim() }));
+      }
+    }
+
+    process.stdout.write('\n');
+    process.exit(0);
+  }
+
+  // Parse CLI flags
+  const cliPort = process.argv.find(a => a.startsWith('--port='))?.split('=')[1];
+  const cliHost = process.argv.find(a => a.startsWith('--host='))?.split('=')[1];
+
   // Start API server
-  const apiPort = parseInt(process.env.VEEPEE_CODE_API_PORT || '8484', 10);
-  const api = startApiServer({ port: apiPort, agent, modelManager, registry });
+  const apiPort = parseInt(cliPort || process.env.VEEPEE_CODE_API_PORT || '8484', 10);
+  const apiHost = cliHost || process.env.VEEPEE_CODE_API_HOST || '127.0.0.1';
+  const api = startApiServer({ port: apiPort, host: apiHost, agent, modelManager, registry });
+
+  // Wait a tick for port fallback to resolve, then use actual bound port
+  await new Promise(r => setTimeout(r, 50));
+  const actualApiPort = api.port;
 
   // Initialize TUI
   const tui = new TUI();
@@ -103,13 +128,16 @@ async function main() {
     toolCount: registry.count(),
     modelCount: allModels.length,
     version: VERSION,
-    apiPort,
+    apiPort: actualApiPort,
   });
 
   // Override permission prompting to use TUI
   permissions.setPromptHandler(async (toolName, args, reason) => {
     return tui.promptPermission(toolName, args, reason);
   });
+
+  // Wire Ctrl+C abort
+  tui.setAbortHandler(() => agent.abort());
 
   // First-launch: smart benchmark all models, build roster
   const benchmarker = new Benchmarker(config.proxyUrl);
@@ -175,16 +203,61 @@ async function main() {
     }
   }
 
-  // Handle --resume CLI argument
+  // First-run onboarding: show what makes VEEPEE Code different
+  const isFirstRun = !existingRoster;
+  if (isFirstRun) {
+    tui.showInfo([
+      '',
+      `${theme.accent('Welcome to VEEPEE Code')} — your local AI coding assistant.`,
+      '',
+      `  ${theme.dim('What makes this different:')}`,
+      `  ${theme.success('●')} ${theme.textBold('Local-first')} — your models, your hardware, your data`,
+      `  ${theme.success('●')} ${theme.textBold('Benchmarked')} — auto-ranked model roster per role (act/plan/chat/code/search)`,
+      `  ${theme.success('●')} ${theme.textBold('${registry.count()} tools')} — coding, web, devops, home, social, news`,
+      `  ${theme.success('●')} ${theme.textBold('Multi-agent')} — MoE mode, sub-agents on lighter models`,
+      '',
+      `  ${theme.dim('Connect other tools to VEEPEE Code:')}`,
+      `  ${theme.accent('Claude Code:')} CLAUDE_CODE_USE_BEDROCK=0 claude --model openai/MODEL --api-base http://localhost:${actualApiPort}/v1`,
+      `  ${theme.accent('OpenCode:')}   Set provider URL to http://localhost:${actualApiPort}/v1`,
+      '',
+      `  ${theme.dim('Run /setup to check integrations | /help for all commands')}`,
+      '',
+    ].join('\n'));
+
+    // Auto-run setup check on first launch
+    tui.showInfo(theme.dim('Checking integrations...'));
+    try {
+      const setupResults = await validateIntegrations(config);
+      const active = setupResults.filter(r => r.status === 'active').length;
+      const total = setupResults.length;
+      const missing = setupResults.filter(r => r.status === 'missing_config');
+      tui.showInfo(`  ${theme.success(`${active}/${total} integrations active`)}${missing.length > 0 ? theme.dim(` | ${missing.length} need config — run /setup for details`) : ''}`);
+    } catch {
+      tui.showInfo(theme.dim('  Setup check skipped.'));
+    }
+    tui.showInfo('');
+  }
+
+  // Handle --resume / -c CLI arguments
   let currentSessionId: string | null = null;
+  const continueFlag = process.argv.includes('-c') || process.argv.includes('--continue');
   const resumeArg = process.argv.find(a => a === '--resume' || a.startsWith('--resume='));
   if (resumeArg) {
     const query = resumeArg.includes('=') ? resumeArg.split('=')[1] : process.argv[process.argv.indexOf('--resume') + 1];
     if (query) {
       const session = await findSession(query);
       if (session) {
-        // Restore conversation
-        for (const msg of session.messages) {
+        // Restore knowledge state if available
+        if (session.knowledgeState) {
+          const savedKs = await KnowledgeState.load(session.id);
+          if (savedKs) {
+            agent.getContext().setKnowledgeState(savedKs);
+          }
+        }
+
+        // Only restore recent messages (sliding window)
+        const recentMessages = session.messages.slice(-6);
+        for (const msg of recentMessages) {
           if (msg.role === 'user') {
             agent.getContext().addUser(msg.content || '');
             tui.addUserMessage(msg.content || '');
@@ -198,10 +271,43 @@ async function main() {
           const profile = modelManager.getProfile(session.model);
           if (profile) agent.setModel(session.model);
         }
-        tui.showInfo(`${theme.success('Resumed session:')} ${theme.accent(session.name)} (${session.messageCount} messages)`);
+        tui.showInfo(`${theme.success('Resumed session:')} ${theme.accent(session.name)} (${session.messageCount} messages, knowledge state restored)`);
       } else {
         tui.showInfo(`${theme.error('Session not found:')} ${query}`);
       }
+    }
+  }
+
+  // -c / --continue: resume the most recent session
+  if (continueFlag && !currentSessionId) {
+    const sessions = await listSessions();
+    if (sessions.length > 0) {
+      const session = sessions[0]; // newest first
+      if (session.knowledgeState) {
+        const savedKs = await KnowledgeState.load(session.id);
+        if (savedKs) agent.getContext().setKnowledgeState(savedKs);
+      }
+      const recentMessages = session.messages.slice(-6);
+      for (const msg of recentMessages) {
+        if (msg.role === 'user') {
+          agent.getContext().addUser(msg.content || '');
+          tui.addUserMessage(msg.content || '');
+        } else if (msg.role === 'assistant') {
+          agent.getContext().addAssistant(msg.content || '');
+          tui.showInfo(msg.content || '');
+        }
+      }
+      currentSessionId = session.id;
+      if (session.model) {
+        const profile = modelManager.getProfile(session.model);
+        if (profile) {
+          agent.setModel(session.model);
+          tui.updateModel(session.model);
+        }
+      }
+      tui.showInfo(`${theme.success('Continued:')} ${theme.accent(session.name)} (${session.messageCount} messages)`);
+    } else {
+      tui.showInfo(theme.dim('No sessions to continue.'));
     }
   }
 
@@ -230,7 +336,9 @@ async function main() {
 
     // Handle commands
     if (trimmed.startsWith('/')) {
-      const result = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, apiPort, currentSessionId);
+      // Show the command in the chat and clear the input box immediately
+      tui.addUserMessage(trimmed);
+      const result = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId);
       if (result === true) break; // quit
       if (typeof result === 'string' && result.startsWith('session:')) {
         currentSessionId = result.slice(8) || null;
@@ -283,7 +391,11 @@ async function main() {
 
         case 'done':
           tui.endStream();
-          tui.showCompletionBadge(modelManager.getCurrentModel(), Date.now() - turnStart);
+          tui.showCompletionBadge(modelManager.getCurrentModel(), Date.now() - turnStart, {
+            evalCount: event.evalCount,
+            promptEvalCount: event.promptEvalCount,
+            tokensPerSecond: event.tokensPerSecond,
+          });
           break;
       }
     }
@@ -334,7 +446,9 @@ async function handleCommand(
         `  ${theme.accent('/status')}           Session info       ${theme.accent('/quit')}       Exit`,
         `  ${theme.accent('/init')}             Create VEEPEE.md    ${theme.accent('/setup')}       Validate tools`,
         `  ${theme.accent('/save [name]')}      Save session        ${theme.accent('/sessions')}    List saved sessions`,
-        `  ${theme.accent('/resume <name>')}    Resume a session`,
+        `  ${theme.accent('/resume <name>')}    Resume a session    ${theme.accent('/rename <name>')} Rename session`,
+        `  ${theme.accent('/add-dir <path>')}   Add working dir     ${theme.accent('/worktree')}     Git worktree isolation`,
+        `  ${theme.accent('/effort low|med|hi')} Set response depth`,
         '',
         `${theme.textBold('Modes:')}`,
         `  ${theme.accent('/plan')}   Plan mode — thinking ON, heavy model, clarifying questions first`,
@@ -346,10 +460,11 @@ async function handleCommand(
         '',
         `${theme.textBold('Benchmark:')}`,
         `  ${theme.accent('/benchmark')}        Benchmark all      ${theme.accent('/benchmark heavy')}  Heavy only`,
-        `  ${theme.accent('/benchmark results')} Show results      ${theme.accent('/benchmark summary')}`,
+        `  ${theme.accent('/benchmark results')} Show results      ${theme.accent('/benchmark context')} Probe context sizes`,
         '',
         `${theme.textBold('Keys:')}`,
-        `  ${theme.dim('Enter')} submit  ${theme.dim('Tab')} tools  ${theme.dim('Ctrl+P')} commands  ${theme.dim('Ctrl+L')} clear  ${theme.dim('Ctrl+D')} quit  ${theme.dim('Up/Down')} history`,
+        `  ${theme.dim('Enter')} submit  ${theme.dim('Shift+Enter')} newline  ${theme.dim('Tab')} tools  ${theme.dim('Ctrl+P')} commands  ${theme.dim('Ctrl+C')} interrupt`,
+        `  ${theme.dim('Ctrl+L')} clear  ${theme.dim('Ctrl+D')} quit  ${theme.dim('Up/Down')} history  ${theme.dim('Scroll/PgUp/PgDn')} scroll`,
       ].join('\n'));
       return false;
 
@@ -359,13 +474,79 @@ async function handleCommand(
       tui.showInfo('Conversation cleared.');
       return false;
 
-    case '/compact':
-      if (agent.getContext().compact()) {
-        tui.showInfo('Conversation compacted.');
+    case '/effort': {
+      const level = parts[1]?.toLowerCase();
+      if (!level || !['low', 'medium', 'high'].includes(level)) {
+        const current = agent.getEffort();
+        tui.showInfo([
+          `${theme.textBold('Effort:')} ${theme.accent(current)}`,
+          `  ${theme.dim('low')}    — fast, short responses (256 tok, temp 0.3)`,
+          `  ${theme.dim('medium')} — balanced (1024 tok, temp 0.5) [default]`,
+          `  ${theme.dim('high')}   — thorough, detailed (4096 tok, temp 0.7)`,
+          '',
+          `  Usage: /effort low|medium|high`,
+        ].join('\n'));
+        return false;
+      }
+      agent.setEffort(level as 'low' | 'medium' | 'high');
+      tui.showInfo(`${theme.success('Effort set to:')} ${theme.accent(level)}`);
+      return false;
+    }
+
+    case '/compact': {
+      const ctx = agent.getContext();
+      if (ctx.messageCount() <= 6) {
+        tui.showInfo('No compaction needed — conversation is short.');
+        return false;
+      }
+
+      // Ask the model to verify/update the knowledge state before compacting
+      tui.showInfo(theme.dim('Summarizing conversation into knowledge state...'));
+      const ks = ctx.getKnowledgeState();
+      const currentState = ks.serialize();
+      const allMsgs = ctx.getAllMessages();
+
+      try {
+        const { Ollama: OllamaClient } = await import('ollama');
+        const ollamaCompact = new OllamaClient({ host: config.proxyUrl });
+        const summaryResp = await ollamaCompact.chat({
+          model: modelManager.getCurrentModel(),
+          messages: [
+            { role: 'user', content: `Here is the current knowledge state of our conversation:\n\n${currentState}\n\nAnd here are the full messages (${allMsgs.length} total). Review them and output an UPDATED knowledge state in the same format. Add any missing decisions, facts, files, or context. Only output the knowledge state, nothing else.\n\nMessages:\n${allMsgs.slice(0, -6).map(m => `[${m.role}] ${(m.content || '').slice(0, 200)}`).join('\n')}` },
+          ],
+          keep_alive: '30m',
+          options: { num_predict: 512 },
+        } as never) as unknown as { message: { content: string } };
+
+        // Parse the model's updated state
+        if (summaryResp.message.content) {
+          const updated = summaryResp.message.content;
+          // Try to extract key-value pairs from the response
+          for (const line of updated.split('\n')) {
+            const colonIdx = line.indexOf(':');
+            if (colonIdx === -1) continue;
+            const key = line.slice(0, colonIdx).trim();
+            const val = line.slice(colonIdx + 1).trim();
+            if (key === 'FACTS' || key === 'DECISIONS' || key === 'OPEN_QUESTIONS') {
+              const items = val.replace(/^\[/, '').replace(/\]$/, '').split(',').map(s => s.trim()).filter(Boolean);
+              for (const item of items) {
+                ks.updateMemory(key.toLowerCase().replace('_', ''), item);
+              }
+            }
+          }
+        }
+      } catch {
+        // Non-critical — compact without AI summary
+      }
+
+      if (ctx.compact()) {
+        await ks.save();
+        tui.showInfo(`${theme.success('Compacted:')} ${ctx.messageCount()} messages kept, knowledge state updated.`);
       } else {
         tui.showInfo('No compaction needed.');
       }
       return false;
+    }
 
     case '/model': {
       const modelArg = parts[1];
@@ -442,6 +623,26 @@ async function handleCommand(
         return false;
       }
 
+      if (subCmd === 'context') {
+        tui.showInfo('Running context probing on all benchmarked models... This will take a while.');
+        const b = new Benchmarker(config.proxyUrl);
+        const existing = await b.loadLatest();
+        if (!existing) {
+          tui.showInfo('No benchmark results. Run /benchmark first.');
+          return false;
+        }
+        const candidates = modelManager.getAllModels()
+          .filter(m => existing.some(r => r.model === m.name));
+        const results = await b.benchmarkAll(candidates, {
+          skipContextProbing: false,
+          onProgress: (model, test, mi, mt, ti, tt) => {
+            tui.showInfo(`[${mi}/${mt}] ${model} — ${test} (${ti}/${tt})`);
+          },
+        });
+        tui.showInfo(Benchmarker.formatTable(results));
+        return false;
+      }
+
       const filter = (['heavy', 'standard', 'light'] as const).find(t => t === subCmd) || undefined;
       const candidates = modelManager.getAllModels()
         .filter(m => !m.capabilities.includes('embedding') || m.capabilities.length > 1)
@@ -452,6 +653,7 @@ async function handleCommand(
       const b = new Benchmarker(config.proxyUrl);
       const results = await b.benchmarkAll(candidates, {
         filter,
+        skipContextProbing: true, // fast by default, use /benchmark context for full probing
         onProgress: (model, test, mi, mt, ti, tt) => {
           tui.showInfo(`[${mi}/${mt}] ${model} — ${test} (${ti}/${tt})`);
         },
@@ -517,7 +719,7 @@ async function handleCommand(
         `${theme.accent('Act mode activated')} (all tools, coding-ready)`,
         `  ${theme.dim('Model:')} ${modelManager.getCurrentModel()}`,
         `  ${theme.dim('Thinking:')} OFF — fast execution`,
-        `  ${theme.dim('Tools:')} All 25 tools available`,
+        `  ${theme.dim('Tools:')} All ${registry.count()} tools available`,
       ].join('\n'));
       return false;
     }
@@ -529,10 +731,13 @@ async function handleCommand(
       }
       const { model: chatModel } = agent.enterChatMode();
       tui.updateModel(chatModel);
+      // Show only actually registered chat tools
+      const chatToolNames = ['web_search', 'web_fetch', 'http_request', 'weather', 'news']
+        .filter(t => registry.has(t));
       tui.showInfo([
         `${theme.accent('Chat mode activated')}`,
         `  ${theme.dim('Model:')} ${chatModel} (fast, conversational)`,
-        `  ${theme.dim('Tools:')} web_search, web_fetch, weather, news (no file access)`,
+        `  ${theme.dim('Tools:')} ${chatToolNames.length > 0 ? chatToolNames.join(', ') : '(none — configure SearXNG for web search)'}`,
         `  ${theme.dim('Exit:')} /act to switch back to coding mode`,
       ].join('\n'));
       return false;
@@ -621,77 +826,209 @@ async function handleCommand(
       return false;
     }
 
+    case '/worktree': {
+      const subCmd = parts[1]?.toLowerCase();
+      if (!isGitRepo()) {
+        tui.showError('Not a git repository — worktrees require git.');
+        return false;
+      }
+
+      if (subCmd === 'list' || !subCmd) {
+        const wts = listWorktrees();
+        if (wts.length === 0) {
+          tui.showInfo(theme.dim('No active worktrees. Use /worktree create [name] to create one.'));
+        } else {
+          tui.showInfo(theme.textBold(`  ${wts.length} worktree(s):`));
+          for (const wt of wts) {
+            tui.showInfo(`  ${theme.accent(wt.branch)} → ${theme.dim(wt.path)}`);
+          }
+        }
+      } else if (subCmd === 'create') {
+        const taskName = parts.slice(2).join(' ') || undefined;
+        try {
+          const wt = createWorktree(taskName);
+          tui.showInfo([
+            `${theme.success('Worktree created:')}`,
+            `  ${theme.dim('Branch:')} ${theme.accent(wt.branch)}`,
+            `  ${theme.dim('Path:')} ${wt.path}`,
+            `  ${theme.dim('Base:')} ${wt.baseBranch}`,
+            '',
+            theme.dim('  Agent tasks in this worktree won\'t affect your working tree.'),
+            theme.dim(`  cd ${wt.path} to work there, or /worktree cleanup when done.`),
+          ].join('\n'));
+        } catch (err) {
+          tui.showError(`Failed: ${(err as Error).message}`);
+        }
+      } else if (subCmd === 'cleanup') {
+        const count = cleanupWorktrees();
+        tui.showInfo(count > 0
+          ? `${theme.success(`Cleaned up ${count} worktree(s).`)}`
+          : theme.dim('No worktrees to clean up.'));
+      } else {
+        tui.showInfo('Usage: /worktree [list|create [name]|cleanup]');
+      }
+      return false;
+    }
+
     case '/init': {
-      const llamaMdPath = `${process.cwd()}/VEEPEE.md`;
       const fs = await import('fs');
+      const path = await import('path');
+      const { glob: globFn } = await import('glob');
+      const llamaMdPath = path.resolve(process.cwd(), 'VEEPEE.md');
       const exists = fs.existsSync(llamaMdPath);
+
+      tui.showInfo(`Analyzing project to ${exists ? 'improve' : 'create'} VEEPEE.md...`);
+      const turnStart = Date.now();
+
+      // ── Phase 1: Gather data programmatically (no model needed) ──
+      const cwd = process.cwd();
+      const gathered: string[] = [];
+
+      // File tree
+      tui.showInfo(theme.dim('  Scanning file tree...'));
+      try {
+        const files = await globFn('**/*', {
+          cwd, ignore: ['node_modules/**', '.git/**', 'dist/**', 'build/**', '.next/**', '__pycache__/**', 'venv/**', '.venv/**'],
+          maxDepth: 3, mark: true,
+        });
+        gathered.push(`## File Tree (${files.length} entries)\n${files.slice(0, 150).join('\n')}`);
+      } catch { /* skip */ }
+
+      // Package manifests
+      const manifests = ['package.json', 'Cargo.toml', 'requirements.txt', 'pyproject.toml', 'go.mod', 'Gemfile', 'pom.xml', 'build.gradle'];
+      for (const m of manifests) {
+        const mPath = path.resolve(cwd, m);
+        if (fs.existsSync(mPath)) {
+          tui.showInfo(theme.dim(`  Reading ${m}...`));
+          try {
+            const content = fs.readFileSync(mPath, 'utf-8');
+            gathered.push(`## ${m}\n\`\`\`\n${content.slice(0, 3000)}\n\`\`\``);
+          } catch { /* skip */ }
+        }
+      }
+
+      // Config files
+      const configs = ['tsconfig.json', '.eslintrc.json', '.eslintrc.js', '.prettierrc', 'ruff.toml', '.editorconfig', 'Makefile', 'Dockerfile', 'docker-compose.yml'];
+      for (const c of configs) {
+        const cPath = path.resolve(cwd, c);
+        if (fs.existsSync(cPath)) {
+          tui.showInfo(theme.dim(`  Reading ${c}...`));
+          try {
+            const content = fs.readFileSync(cPath, 'utf-8');
+            gathered.push(`## ${c}\n\`\`\`\n${content.slice(0, 1500)}\n\`\`\``);
+          } catch { /* skip */ }
+        }
+      }
+
+      // README
+      const readmePath = path.resolve(cwd, 'README.md');
+      if (fs.existsSync(readmePath)) {
+        tui.showInfo(theme.dim('  Reading README.md...'));
+        try {
+          gathered.push(`## README.md\n${fs.readFileSync(readmePath, 'utf-8').slice(0, 2000)}`);
+        } catch { /* skip */ }
+      }
+
+      // Existing instruction files
+      const instructionFiles = ['CLAUDE.md', 'AGENTS.md', 'OpenCode.md', 'GEMINI.md', '.cursorrules'];
+      for (const f of instructionFiles) {
+        const fPath = path.resolve(cwd, f);
+        if (fs.existsSync(fPath)) {
+          tui.showInfo(theme.dim(`  Reading ${f}...`));
+          try {
+            gathered.push(`## ${f} (existing instructions)\n${fs.readFileSync(fPath, 'utf-8').slice(0, 2000)}`);
+          } catch { /* skip */ }
+        }
+      }
+
+      // Sample source files (first 3 .ts/.js/.py/.rs/.go files)
+      try {
+        const sourceFiles = await globFn('src/**/*.{ts,js,py,rs,go}', { cwd, maxDepth: 3 });
+        for (const sf of sourceFiles.slice(0, 3)) {
+          tui.showInfo(theme.dim(`  Reading ${sf}...`));
+          try {
+            const content = fs.readFileSync(path.resolve(cwd, sf), 'utf-8');
+            gathered.push(`## Sample source: ${sf}\n\`\`\`\n${content.slice(0, 1500)}\n\`\`\``);
+          } catch { /* skip */ }
+        }
+      } catch { /* skip */ }
+
+      // Existing VEEPEE.md
+      if (exists) {
+        try {
+          gathered.push(`## Existing VEEPEE.md (improve this)\n${fs.readFileSync(llamaMdPath, 'utf-8')}`);
+        } catch { /* skip */ }
+      }
+
+      tui.showInfo(theme.dim(`  Gathered ${gathered.length} sections. Asking model to synthesize...`));
+
+      // ── Phase 2: Ask model to produce VEEPEE.md content (no tools needed) ──
       const { Ollama } = await import('ollama');
       const ollama = new Ollama({ host: config.proxyUrl });
 
-      const initMsg = INIT_PROMPT + (exists ? '\n\nThere is already a VEEPEE.md. Read it and improve it.' : '');
-      tui.showInfo(`Analyzing project to ${exists ? 'improve' : 'create'} VEEPEE.md...`);
+      const synthesisPrompt = `Based on the project data below, write the content of a VEEPEE.md file (~150 lines). This file is loaded into an AI coding assistant's system prompt, so it must be specific and actionable.
 
-      // Direct Ollama call — ONLY the init prompt, no system prompt, no history
-      const turnStart = Date.now();
-      let fullContent = '';
-      let turnToolCalls = 0;
+Sections to include:
+1. Project overview (2-3 sentences — what it does)
+2. Tech stack (language, framework, key libraries)
+3. Build/lint/test commands (exact commands, especially how to run a SINGLE test)
+4. Code style (naming conventions, imports, formatting — infer from the sample code)
+5. Architecture (key directories, patterns, where to find what)
+6. Common gotchas (things an agent might get wrong)
 
-      // Simple agent loop: send prompt → model calls tools → feed results → repeat
-      const messages: Array<{role: string; content: string; tool_calls?: unknown[]}> = [
-        { role: 'user', content: initMsg },
-      ];
+Rules:
+- Be specific to THIS project. Generic advice is useless.
+- Include exact file paths and command names.
+- Output ONLY the markdown content. No preamble, no explanation, no code fences around the whole thing.
 
-      for (let turn = 0; turn < 15; turn++) {
-        tui.showInfo(theme.dim(`Turn ${turn + 1}...`));
+${gathered.join('\n\n')}`;
 
+      let veepeeContent = '';
+      try {
         const stream = await ollama.chat({
           model: modelManager.getCurrentModel(),
-          messages: messages as never,
-          tools: registry.toOllamaTools(),
+          messages: [
+            { role: 'system', content: 'You are a technical writer. Output only the requested markdown content. No preamble.' },
+            { role: 'user', content: synthesisPrompt },
+          ],
           stream: true,
+          think: false,
           keep_alive: '30m',
+          options: { num_predict: 2048 },
         } as never);
 
-        let turnContent = '';
-        let toolCalls: Array<{function: {name: string; arguments: Record<string, unknown>}}> = [];
-
+        tui.startStream();
         for await (const chunk of stream) {
           if (chunk.message.content) {
-            turnContent += chunk.message.content;
-            // Don't stream init text to TUI — just show tool calls
-          }
-          if (chunk.message.tool_calls?.length) {
-            toolCalls = chunk.message.tool_calls as typeof toolCalls;
+            veepeeContent += chunk.message.content;
+            tui.appendStream(chunk.message.content);
           }
         }
+        tui.endStream();
+      } catch (err) {
+        tui.showError(`Model failed: ${(err as Error).message}`);
+        return false;
+      }
 
-        messages.push({ role: 'assistant', content: turnContent, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) });
+      // ── Phase 3: Write the file ourselves (no tool dependency) ──
+      if (veepeeContent.trim().length > 50) {
+        // Strip any code fences the model may have wrapped around the content
+        let cleaned = veepeeContent.trim();
+        if (cleaned.startsWith('```markdown')) cleaned = cleaned.slice(11);
+        else if (cleaned.startsWith('```md')) cleaned = cleaned.slice(5);
+        else if (cleaned.startsWith('```')) cleaned = cleaned.slice(3);
+        if (cleaned.endsWith('```')) cleaned = cleaned.slice(0, -3);
+        cleaned = cleaned.trim();
 
-        if (toolCalls.length === 0) {
-          fullContent = turnContent;
-          break; // no more tool calls — done
-        }
-
-        // Execute tool calls
-        for (const call of toolCalls) {
-          const toolName = call.function.name;
-          const toolArgs = (call.function.arguments || {}) as Record<string, unknown>;
-          turnToolCalls++;
-
-          tui.showToolCall(toolName, toolArgs);
-          const result = await registry.execute(toolName, toolArgs);
-          tui.showToolResult(toolName, result.success, result.success ? result.output : (result.error || ''));
-
-          messages.push({ role: 'tool' as string, content: result.success ? result.output : `Error: ${result.error}` });
-        }
+        fs.writeFileSync(llamaMdPath, cleaned, 'utf-8');
+        tui.showInfo(`${theme.success(`VEEPEE.md ${exists ? 'updated' : 'created'}`)} (${cleaned.split('\n').length} lines)`);
+      } else {
+        tui.showError('Model produced insufficient content. Try again or create VEEPEE.md manually.');
+        return false;
       }
 
       const elapsed = Date.now() - turnStart;
       tui.showCompletionBadge(modelManager.getCurrentModel(), elapsed);
-
-      if (fullContent) {
-        tui.showInfo(fullContent.slice(0, 200) + '...');
-      }
 
       // Auto-add VEEPEE.md to .gitignore
       try {
@@ -715,19 +1052,23 @@ async function handleCommand(
 
     // ─── Session Commands ─────────────────────────────────────────────
     case '/save': {
-      const name = parts.slice(1).join(' ') || autoName(agent.getContext().getMessages());
+      const name = parts.slice(1).join(' ') || autoName(agent.getContext().getAllMessages());
       if (agent.getContext().messageCount() === 0) {
         tui.showInfo('Nothing to save — start a conversation first.');
         return;
       }
+      const ks = agent.getContext().getKnowledgeState();
       const session = await saveSession(
         name,
-        agent.getContext().getMessages(),
+        agent.getContext().getAllMessages(),
         modelManager.getCurrentModel(),
         agent.getMode(),
         process.cwd(),
         currentSessionId || undefined,
+        ks.getData(),
       );
+      // Also save the knowledge state file
+      await ks.save();
       tui.showInfo(`${theme.success('Saved:')} ${theme.accent(session.name)} ${theme.dim(`(ID: ${session.id})`)}`);
       return `session:${session.id}`;
     }
@@ -735,6 +1076,62 @@ async function handleCommand(
     case '/sessions': {
       const sessions = await listSessions();
       tui.showInfo(formatSessionList(sessions));
+      return;
+    }
+
+    case '/rename': {
+      const newName = parts.slice(1).join(' ');
+      if (!newName) {
+        tui.showInfo('Usage: /rename <new name>');
+        return;
+      }
+      if (!currentSessionId) {
+        // Auto-save first, then rename
+        const autoSaveName = autoName(agent.getContext().getAllMessages());
+        const session = await saveSession(
+          newName,
+          agent.getContext().getAllMessages(),
+          modelManager.getCurrentModel(),
+          agent.getMode(),
+          process.cwd(),
+          undefined,
+          agent.getContext().getKnowledgeState().getData(),
+        );
+        tui.showInfo(`${theme.success('Saved and named:')} ${theme.accent(newName)}`);
+        return `session:${session.id}`;
+      }
+      // Re-save with new name
+      const session = await saveSession(
+        newName,
+        agent.getContext().getAllMessages(),
+        modelManager.getCurrentModel(),
+        agent.getMode(),
+        process.cwd(),
+        currentSessionId,
+        agent.getContext().getKnowledgeState().getData(),
+      );
+      tui.showInfo(`${theme.success('Renamed to:')} ${theme.accent(newName)}`);
+      return `session:${session.id}`;
+    }
+
+    case '/add-dir': {
+      const dirPath = parts.slice(1).join(' ');
+      if (!dirPath) {
+        tui.showInfo('Usage: /add-dir <path>');
+        return;
+      }
+      const { existsSync: dirExists } = await import('fs');
+      const { resolve: resolvePath } = await import('path');
+      const resolved = resolvePath(dirPath);
+      if (!dirExists(resolved)) {
+        tui.showError(`Directory not found: ${resolved}`);
+        return;
+      }
+      // Add to knowledge state and invalidate project tree cache
+      agent.getContext().getKnowledgeState().updateMemory('fact', `Additional working directory: ${resolved}`);
+      agent.getContext().invalidateProjectTree();
+      tui.showInfo(`${theme.success('Added directory:')} ${resolved}`);
+      tui.showInfo(theme.dim('The model will be aware of this directory. Use @file paths relative to it.'));
       return;
     }
 
@@ -760,7 +1157,20 @@ async function handleCommand(
 
       // Clear current conversation and restore
       agent.clear();
-      for (const msg of session.messages) {
+
+      // Restore knowledge state if available (instead of replaying full history)
+      if (session.knowledgeState) {
+        const ks = new KnowledgeState(session.id);
+        // Rebuild from saved data by loading it
+        const savedKs = await KnowledgeState.load(session.id);
+        if (savedKs) {
+          agent.getContext().setKnowledgeState(savedKs);
+        }
+      }
+
+      // Only restore recent messages (the sliding window worth)
+      const recentMessages = session.messages.slice(-6);
+      for (const msg of recentMessages) {
         if (msg.role === 'user') {
           agent.getContext().addUser(msg.content || '');
           tui.addUserMessage(msg.content || '');
@@ -781,7 +1191,7 @@ async function handleCommand(
         }
       }
 
-      tui.showInfo(`${theme.success('Resumed:')} ${theme.accent(session.name)} (${session.messageCount} messages)`);
+      tui.showInfo(`${theme.success('Resumed:')} ${theme.accent(session.name)} (${session.messageCount} messages, knowledge state restored)`);
       return `session:${session.id}`;
     }
 

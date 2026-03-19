@@ -1,4 +1,6 @@
 import chalk from 'chalk';
+import { readFileSync, existsSync } from 'fs';
+import { resolve } from 'path';
 import type { Config } from './config.js';
 
 export interface ModelProfile {
@@ -244,8 +246,6 @@ export class ModelManager {
   /** Select default model from benchmark results — best overall that's fast enough */
   private selectFromBenchmarks(): string | null {
     try {
-      const { readFileSync, existsSync } = require('fs') as typeof import('fs');
-      const { resolve } = require('path') as typeof import('path');
       const latestPath = resolve(process.env.HOME || '~', '.veepee-code', 'benchmarks', 'latest.json');
       if (!existsSync(latestPath)) return null;
 

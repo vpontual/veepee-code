@@ -1,6 +1,7 @@
 import type { Message } from 'ollama';
 import type { ConversationSignals } from './models.js';
 import type { AgentMode } from './agent.js';
+import { KnowledgeState } from './knowledge.js';
 import { readdirSync, readFileSync, statSync, existsSync } from 'fs';
 import { join, relative } from 'path';
 
@@ -120,100 +121,33 @@ function loadLlamaMd(cwd: string): string {
 // ─── System Prompt ───────────────────────────────────────────────────────────
 // Synthesized from: Claude Code, OpenCode, Codex, Gemini CLI, RooCode, Llama Rider
 
-const SYSTEM_PROMPT = `You are VEEPEE Code, a CLI coding assistant powered by local Ollama models. You help users with software engineering tasks directly in their terminal.
+const SYSTEM_PROMPT = `You are VEEPEE Code, a CLI coding assistant powered by local Ollama models.
 
 ## Environment
-- **Date:** {{DATE}}
-- **Model:** {{MODEL}} (knowledge cutoff: ~{{CUTOFF}})
-- **Working directory:** {{CWD}}
-- **Platform:** {{PLATFORM}}
-- **Mode:** {{MODE}}
+- Date: {{DATE}} | Model: {{MODEL}} (cutoff: ~{{CUTOFF}}) | Mode: {{MODE}}
+- CWD: {{CWD}} | Platform: {{PLATFORM}}
 {{PROJECT_TREE}}{{LLAMA_MD}}
-## Knowledge Cutoff — CRITICAL
+## Rules
 
-Your training data cuts off at approximately {{CUTOFF}}. Today is {{DATE}}.
+**Cutoff: {{CUTOFF}}.** For anything post-cutoff (versions, events, APIs, news), use web_search BEFORE answering. Never say "as of my last update."
 
-- NEVER present post-cutoff information as fact.
-- NEVER say "as of my last update" or "my knowledge cutoff is..." — ALWAYS search first, then answer.
-- If the user asks about ANYTHING that may have changed after {{CUTOFF}} — events, software versions, API changes, library docs, news — use web_search BEFORE answering.
-- When discussing frameworks, libraries, or APIs: VERIFY the latest version/docs with web_search before giving advice.
-- If the user says "today", "this week", "recently", "latest", "current" — that's a signal to search.
+**Be concise.** Lead with the answer. No preamble, no postamble, no filler. One sentence beats three.
 
-## Tone & Output
+**Act first.** Call tools proactively for read-only actions. Come back with answers, not questions.
 
-You MUST be concise. Keep text output to fewer than 4 lines unless the user asks for detail.
-- Lead with the answer or action, not the reasoning.
-- One-word or one-line answers are ideal when they suffice.
-- No preamble ("Great question!", "I'd be happy to help!", "Certainly!").
-- No postamble (don't summarize what you just did unless asked).
-- No filler. Skip "The answer is...", "Here is...", "Based on...".
-- If you can say it in one sentence, don't use three.
+**Read before editing.** Always read a file before modifying it. Follow existing code style and conventions.
 
-Focus text output on:
-- Decisions that need user input
-- High-level status at natural milestones
-- Errors or blockers that change the plan
+**Minimal changes.** Don't add features, refactor, or "improve" beyond what's asked. No unnecessary comments, docstrings, or type annotations.
 
-<examples>
-user: 2 + 2
-assistant: 4
+**Tools:** glob first (filenames), then grep (content). Use edit_file for exact string replacement. Prefer dedicated tools over bash. If a tool fails, try a different approach.
 
-user: what command lists files?
-assistant: ls
+**Safety:** Destructive/external actions (rm -rf, push, post, email) — confirm first. Read-only — do freely. Never commit unless asked.
 
-user: what files are in src/?
-assistant: [uses list_files tool, sees foo.ts, bar.ts, baz.ts]
-src/foo.ts, src/bar.ts, src/baz.ts
+## Knowledge State
 
-user: write tests for the auth module
-assistant: [uses glob to find test files, reads existing tests, reads auth module, writes new tests]
-</examples>
-
-## Core Behavior
-
-**Be resourceful.** Use your tools to figure it out. Read files, run commands, search the web. Come back with answers, not questions. NEVER say "I don't have access" when you have a tool that can do it.
-
-**Act first, explain after.** Call the tool, get the result, give a concise answer. Don't ask permission for safe read-only actions.
-
-**Read before modifying.** Always read a file before editing it. Understand existing code before suggesting changes.
-
-**Follow conventions.** Mimic existing code style, use existing libraries, follow existing patterns.
-- NEVER assume a library is available. Check package.json, requirements.txt, Cargo.toml, etc. first.
-- When creating new components, study existing ones for naming, typing, and framework conventions.
-- Follow security best practices. Never introduce code that exposes secrets or keys.
-
-**Inquiry vs Directive.** If the user asks "how would I..." or "what's the best way to...", answer the question first. Don't jump into implementation unless explicitly asked.
-
-**No unnecessary changes.** Don't add features, refactor code, or make "improvements" beyond what was asked. Don't add comments, docstrings, or type annotations to code you didn't change. A bug fix doesn't need surrounding cleanup.
-
-**No over-engineering.** Don't create helpers or abstractions for one-time operations. Don't design for hypothetical future requirements. Three similar lines is better than a premature abstraction.
-
-## Tool Usage
-
-- Call tools proactively. Don't narrate routine tool calls — just call them.
-- If a tool fails, try a different approach rather than retrying the same call.
-- Batch independent tool calls together in parallel when possible.
-- When searching code: glob first (filename patterns), then grep (content search).
-- When editing: use edit_file with exact string matching (old_string → new_string).
-- For web research: web_search for lookups, web_fetch for reading specific pages.
-- Prefer dedicated tools over bash equivalents (use glob not \`find\`, grep not \`rg\`, read_file not \`cat\`).
-
-## Context Efficiency
-
-Be strategic to minimize context usage:
-- Combine turns by doing parallel searches and reads.
-- Prefer grep with enough context lines to skip separate reads.
-- Read small files in full; use line ranges for large files.
-- Your primary goal is quality work. Efficiency is secondary but important.
-
-## Safety
-
-- Internal/read-only actions: do freely (reading files, searching, checking status).
-- Destructive actions: confirm first (rm -rf, force push, reset --hard, drop tables).
-- External/visible actions: confirm first (pushing code, posting to social media, sending emails, device control).
-- NEVER revert existing changes you didn't make unless explicitly asked.
-- NEVER commit unless explicitly asked.
-- When in doubt, ask. Measure twice, cut once.
+Your knowledge state contains everything important from our conversation. Only the last few messages are shown. Use \`update_memory\` to store key decisions, facts, or context:
+- \`update_memory(key: "fact", value: "project uses pnpm not npm")\`
+- \`update_memory(key: "decision", value: "using JWT for auth")\`
 `;
 
 // ─── Mode-specific Prompts ───────────────────────────────────────────────────
@@ -235,12 +169,15 @@ You are in PLANNING mode. Think deeply before acting.
 - Only start implementing when the user explicitly approves (e.g., "looks good", "go ahead").
 `;
 
-const CHAT_PROMPT = `
+// Chat mode tool whitelist — only these are available in chat mode
+export const CHAT_TOOLS = ['web_search', 'web_fetch', 'http_request', 'weather', 'news'];
+
+const CHAT_PROMPT_TEMPLATE = `
 ## Chat Mode (ACTIVE)
 
 You are in CHAT mode — a knowledgeable conversational assistant with web access.
 
-**Available tools:** web_search, web_fetch, http_request, weather, news.
+**Available tools:** {{CHAT_TOOLS}}.
 **NOT available:** file editing, shell, git, docker, home automation, social media.
 
 **Proactive web searching is MANDATORY.** You MUST search automatically based on what's being discussed:
@@ -251,10 +188,9 @@ You are in CHAT mode — a knowledgeable conversational assistant with web acces
 - Any factual claim you're not 100% certain about → web_search to verify
 - Any topic where information may have changed since {{CUTOFF}} → web_search
 
-Do NOT wait to be asked to search. If the topic could benefit from current information, search proactively. The user chose chat mode for conversation — make it seamlessly informed.
+Do NOT wait to be asked to search. If the topic could benefit from current information, search proactively.
 
-Cite sources briefly when you search (e.g., "According to the React 19 docs...").
-For timeless topics (math, general knowledge, opinions) — answer directly.
+Cite sources briefly when you search. For timeless topics — answer directly.
 Be conversational, natural, and helpful.
 `;
 
@@ -266,12 +202,23 @@ export class ContextManager {
   private mode: AgentMode = 'act';
   private currentModel = '';
   private maxTokenEstimate = 32000;
-  private filesModified = new Set<string>();
+  private filesRead = new Set<string>();
+  private filesWritten = new Set<string>();
   private errorCount = 0;
   private lastTurnToolCalls = 0;
   private projectTreeCache: string | null = null;
+  private knowledgeState: KnowledgeState;
+  private slidingWindowSize = 6; // last N messages sent to API
+  private registeredToolNames: string[] = [];
 
-  constructor() {}
+  constructor(sessionId?: string) {
+    this.knowledgeState = new KnowledgeState(sessionId || Date.now().toString(36));
+  }
+
+  /** Set the list of actually registered tool names (for dynamic prompt generation) */
+  setRegisteredTools(names: string[]): void {
+    this.registeredToolNames = names;
+  }
 
   setSystemPrompt(model: string): void {
     this.currentModel = model;
@@ -331,24 +278,53 @@ export class ContextManager {
     }
 
     if (this.mode === 'chat') {
-      this.systemPrompt += CHAT_PROMPT
+      // Build live tool list — only show tools that are actually registered
+      const availableChatTools = CHAT_TOOLS.filter(t => this.registeredToolNames.includes(t));
+      const toolList = availableChatTools.length > 0 ? availableChatTools.join(', ') : '(none — configure SearXNG for web search)';
+
+      this.systemPrompt += CHAT_PROMPT_TEMPLATE
         .replace(/\{\{CUTOFF\}\}/g, cutoff)
-        .replace(/\{\{DATE\}\}/g, new Date().toISOString().split('T')[0]);
+        .replace(/\{\{DATE\}\}/g, new Date().toISOString().split('T')[0])
+        .replace(/\{\{CHAT_TOOLS\}\}/g, toolList);
     }
   }
 
   getSystemPrompt(): string {
-    return this.systemPrompt;
+    // Inject knowledge state into system prompt
+    const ksBlock = this.knowledgeState.toSystemPromptBlock();
+    return this.systemPrompt + ksBlock;
   }
 
+  /** Get only the sliding window of recent messages (sent to API) */
   getMessages(): Message[] {
+    if (this.messages.length <= this.slidingWindowSize) {
+      return [...this.messages];
+    }
+    return this.messages.slice(-this.slidingWindowSize);
+  }
+
+  /** Get ALL messages (for session save, not for API calls) */
+  getAllMessages(): Message[] {
     return [...this.messages];
+  }
+
+  getKnowledgeState(): KnowledgeState {
+    return this.knowledgeState;
+  }
+
+  setKnowledgeState(ks: KnowledgeState): void {
+    this.knowledgeState = ks;
   }
 
   addUser(content: string): void {
     this.messages.push({ role: 'user', content });
     this.lastTurnToolCalls = 0;
+    // Track pending tool results for this turn
+    this._pendingToolResults = [];
   }
+
+  private _pendingToolCalls: Message['tool_calls'] | undefined;
+  private _pendingToolResults: Array<{ name: string; content: string; success: boolean }> = [];
 
   addAssistant(content: string, toolCalls?: Message['tool_calls']): void {
     const msg: Message = { role: 'assistant', content };
@@ -357,17 +333,50 @@ export class ContextManager {
       this.lastTurnToolCalls = toolCalls.length;
     }
     this.messages.push(msg);
+    this._pendingToolCalls = toolCalls;
+
+    // If no tool calls, update knowledge state now (turn is complete)
+    if (!toolCalls || toolCalls.length === 0) {
+      this.updateKnowledgeAfterTurn(content);
+    }
   }
 
-  addToolResult(toolName: string, result: string): void {
+  addToolResult(toolName: string, result: string, filePath?: string): void {
     this.messages.push({ role: 'tool', content: result });
-    if (['read_file', 'write_file', 'edit_file'].includes(toolName)) {
-      this.filesModified.add(toolName);
-      this.invalidateProjectTree(); // new files may have been created
+    if (toolName === 'read_file' && filePath) {
+      this.filesRead.add(filePath);
+    }
+    if (['write_file', 'edit_file'].includes(toolName) && filePath) {
+      this.filesWritten.add(filePath);
+      this.invalidateProjectTree();
     }
     if (result.toLowerCase().includes('error')) {
       this.errorCount++;
     }
+
+    // Track for knowledge state update
+    const isError = result.toLowerCase().includes('error');
+    this._pendingToolResults.push({ name: toolName, content: result, success: !isError });
+  }
+
+  /** Called after all tool results for a turn are collected */
+  flushKnowledgeUpdate(assistantContent: string): void {
+    this.updateKnowledgeAfterTurn(assistantContent);
+  }
+
+  private updateKnowledgeAfterTurn(assistantContent: string): void {
+    // Find the latest user message
+    const userMessages = this.messages.filter(m => m.role === 'user');
+    const lastUserMsg = userMessages[userMessages.length - 1]?.content || null;
+
+    this.knowledgeState.update(
+      lastUserMsg,
+      assistantContent,
+      this._pendingToolCalls,
+      this._pendingToolResults,
+    );
+    this._pendingToolResults = [];
+    this._pendingToolCalls = undefined;
   }
 
   getSignals(): ConversationSignals {
@@ -376,43 +385,43 @@ export class ContextManager {
       ? userMessages.reduce((sum, m) => sum + (m.content?.length || 0), 0) / userMessages.length
       : 0;
     return {
-      fileOpsCount: this.filesModified.size,
+      fileOpsCount: this.filesWritten.size,
       errorCount: this.errorCount,
       toolCallsLastTurn: this.lastTurnToolCalls,
       avgUserMessageLength: avgLength,
-      uniqueFilesTouched: this.filesModified.size,
+      uniqueFilesTouched: this.filesRead.size + this.filesWritten.size,
     };
   }
 
   estimateTokens(): number {
-    let chars = this.systemPrompt.length;
-    for (const msg of this.messages) {
+    // Estimate what actually gets sent to the API: system prompt + knowledge state + sliding window
+    let chars = this.getSystemPrompt().length; // includes knowledge state
+    for (const msg of this.getMessages()) { // sliding window only
       chars += (msg.content?.length || 0) + 20;
     }
     return Math.ceil(chars / 4);
   }
 
   compact(): boolean {
-    const tokens = this.estimateTokens();
-    if (tokens < this.maxTokenEstimate * 0.8) return false;
-    if (this.messages.length <= 12) return false;
+    // With knowledge state + sliding window, compaction is less critical.
+    // But if we've accumulated a huge full history in memory, trim old messages
+    // that are outside the sliding window and already captured in knowledge state.
+    if (this.messages.length <= this.slidingWindowSize * 2) return false;
 
-    const first = this.messages[0];
-    const recent = this.messages.slice(-10);
-    const droppedCount = this.messages.length - 11;
-    const summary: Message = {
-      role: 'user',
-      content: `[Earlier conversation with ${droppedCount} messages was compacted. Recent conversation follows.]`,
-    };
-    this.messages = [first, summary, ...recent];
+    // Keep only the sliding window — knowledge state has the rest
+    const recent = this.messages.slice(-this.slidingWindowSize);
+    const droppedCount = this.messages.length - this.slidingWindowSize;
+    this.messages = recent;
     return true;
   }
 
   clear(): void {
     this.messages = [];
-    this.filesModified.clear();
+    this.filesRead.clear();
+    this.filesWritten.clear();
     this.errorCount = 0;
     this.lastTurnToolCalls = 0;
+    this.knowledgeState = new KnowledgeState(Date.now().toString(36));
   }
 
   messageCount(): number {

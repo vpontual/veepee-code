@@ -346,7 +346,7 @@ export class Benchmarker {
   }
 
   /** Run full benchmark suite against a single model */
-  async benchmarkModel(model: ModelProfile, onProgress?: (test: string, idx: number, total: number) => void): Promise<BenchmarkResult> {
+  async benchmarkModel(model: ModelProfile, onProgress?: (test: string, idx: number, total: number) => void, options?: { skipContextProbing?: boolean }): Promise<BenchmarkResult> {
     const errors: string[] = [];
     const categoryScores: Record<string, { total: number; weight: number }> = {
       toolCalling: { total: 0, weight: 0 },
@@ -454,9 +454,14 @@ export class Benchmarker {
       timeToFirstToken: testCount > 0 ? Math.round(firstTokenTotal / testCount) : 0,
     };
 
-    // Context size probing
-    onProgress?.('Context probing', TEST_SUITE.length + 1, TEST_SUITE.length + 1);
-    const context = await this.probeContextSizes(model.name);
+    // Context size probing (optional — very slow, ~5 min per model)
+    let context: BenchmarkResult['context'];
+    if (options?.skipContextProbing) {
+      context = { optimalSize: 8192, maxUsable: 32768, speedByContext: {} };
+    } else {
+      onProgress?.('Context probing', TEST_SUITE.length + 1, TEST_SUITE.length + 1);
+      context = await this.probeContextSizes(model.name);
+    }
 
     return {
       model: model.name,
@@ -553,7 +558,7 @@ export class Benchmarker {
   /** Run benchmarks against all models (or a filtered set) */
   async benchmarkAll(
     models: ModelProfile[],
-    options: { filter?: 'heavy' | 'standard' | 'light'; maxModels?: number; onProgress?: (model: string, test: string, modelIdx: number, totalModels: number, testIdx: number, totalTests: number) => void } = {},
+    options: { filter?: 'heavy' | 'standard' | 'light'; maxModels?: number; skipContextProbing?: boolean; onProgress?: (model: string, test: string, modelIdx: number, totalModels: number, testIdx: number, totalTests: number) => void } = {},
   ): Promise<BenchmarkResult[]> {
     let candidates = models
       .filter(m => !m.capabilities.includes('embedding') || m.capabilities.length > 1); // skip embedding-only
@@ -572,7 +577,7 @@ export class Benchmarker {
       const model = candidates[mi];
       const result = await this.benchmarkModel(model, (test, testIdx, totalTests) => {
         options.onProgress?.(model.name, test, mi + 1, candidates.length, testIdx, totalTests);
-      });
+      }, { skipContextProbing: options.skipContextProbing });
       results.push(result);
     }
 
@@ -613,6 +618,22 @@ export class Benchmarker {
       onProgress?.('speed-check', `Testing ${model.name} (${model.parameterSize})...`);
 
       try {
+        // First, preload the model so we don't penalize it for swapping time
+        onProgress?.('speed-check', `  Loading ${model.name}...`);
+        try {
+          await this.ollama.chat({
+            model: model.name,
+            messages: [{ role: 'user', content: 'hi' }],
+            keep_alive: '30m',
+            options: { num_predict: 1 },
+          });
+        } catch {
+          // If preload fails completely, skip this model
+          onProgress?.('speed-check', `  ✗ ${model.name}: failed to load`);
+          continue;
+        }
+
+        // Now measure actual generation speed with model already loaded
         const start = Date.now();
         let ttft = 0;
         let tokenCount = 0;
@@ -634,8 +655,8 @@ export class Benchmarker {
             }
             tokenCount++;
           }
-          // Abort if model takes >60s to start generating (truly broken/huge)
-          if (ttft === 0 && Date.now() - start > 60000) break;
+          // Abort if model takes >90s to start generating
+          if (ttft === 0 && Date.now() - start > 90000) break;
         }
 
         const genTime = genStart > 0 ? Date.now() - genStart : 0;
@@ -667,7 +688,7 @@ export class Benchmarker {
       const model = responsive[mi];
       const result = await this.benchmarkModel(model, (test, testIdx, totalTests) => {
         onProgress?.('benchmark', `[${mi + 1}/${responsive.length}] ${model.name} — ${test} (${testIdx}/${totalTests})`);
-      });
+      }, { skipContextProbing: true }); // skip on first launch — run /benchmark context later
       results.push(result);
     }
 
