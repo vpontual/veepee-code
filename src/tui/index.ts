@@ -163,6 +163,11 @@ export class TUI {
   private turnTracker: TurnTracker | null = null;
   private turnTrackerInterval: ReturnType<typeof setInterval> | null = null;
   private abortHandler: (() => void) | null = null;
+  private progressBarInterval: ReturnType<typeof setInterval> | null = null;
+  private progressBarPos = 0;
+  private progressBarDir = 1;
+  private queuedInput = '';
+  private queuedCursor = 0;
 
   constructor() {
     this.currentTip = Math.floor(Math.random() * this.tips.length);
@@ -196,6 +201,7 @@ export class TUI {
 
   stop(): void {
     if (this.turnTrackerInterval) clearInterval(this.turnTrackerInterval);
+    this.stopProgressBar();
     // Disable mouse tracking
     process.stdout.write('\x1b[?1006l');
     process.stdout.write('\x1b[?1000l');
@@ -209,6 +215,20 @@ export class TUI {
 
   /** Wait for user input. Returns the entered text. */
   getInput(placeholder?: string): Promise<string> {
+    // If user typed ahead while agent was working, auto-submit the queued text
+    if (this.queuedInput.trim()) {
+      const queued = this.queuedInput.trim();
+      this.queuedInput = '';
+      this.queuedCursor = 0;
+      this.input.text = '';
+      this.input.cursor = 0;
+      this.state = this.messages.length > 0 ? 'conversation' : 'welcome';
+      this.input.history.unshift(queued);
+      if (this.input.history.length > 100) this.input.history.pop();
+      this.input.historyIdx = -1;
+      return Promise.resolve(queued);
+    }
+
     this.input.text = '';
     this.input.cursor = 0;
     this.state = this.messages.length > 0 ? 'conversation' : 'welcome';
@@ -287,6 +307,60 @@ export class TUI {
   startStream(): void {
     this.streamBuffer = '';
     this.streamActive = true;
+    this.startProgressBar();
+  }
+
+  /** Start the bouncing progress bar on row 1 */
+  private startProgressBar(): void {
+    if (this.progressBarInterval) return;
+    this.progressBarPos = 0;
+    this.progressBarDir = 1;
+    this.progressBarInterval = setInterval(() => {
+      this.renderProgressBar();
+      const cols = getSize().cols;
+      this.progressBarPos += this.progressBarDir * 3;
+      if (this.progressBarPos >= cols - 12) this.progressBarDir = -1;
+      if (this.progressBarPos <= 0) this.progressBarDir = 1;
+    }, 30); // ~33fps for smooth animation
+  }
+
+  /** Stop and clear the progress bar */
+  private stopProgressBar(): void {
+    if (this.progressBarInterval) {
+      clearInterval(this.progressBarInterval);
+      this.progressBarInterval = null;
+    }
+    // Clear row 1
+    const cols = getSize().cols;
+    moveTo(1, 1);
+    process.stdout.write(' '.repeat(cols));
+  }
+
+  /** Render the bouncing progress bar segment on row 1 */
+  private renderProgressBar(): void {
+    const cols = getSize().cols;
+    const segmentLen = 12;
+    const pos = Math.max(0, Math.min(this.progressBarPos, cols - segmentLen));
+
+    moveTo(1, 1);
+    // Build the line: dim background + bright blue segment
+    let line = '';
+    for (let i = 0; i < cols; i++) {
+      if (i >= pos && i < pos + segmentLen) {
+        // Bright segment with gradient fade at edges
+        const distFromCenter = Math.abs(i - pos - segmentLen / 2) / (segmentLen / 2);
+        if (distFromCenter < 0.3) {
+          line += chalk.hex('#85C7F2')('━'); // bright center
+        } else if (distFromCenter < 0.7) {
+          line += chalk.hex('#4A8AB5')('━'); // mid fade
+        } else {
+          line += chalk.hex('#2A5A7A')('━'); // edge fade
+        }
+      } else {
+        line += chalk.hex('#1A1A2E')('─'); // dim background
+      }
+    }
+    process.stdout.write(line);
   }
 
   /** Append streaming text */
@@ -297,6 +371,7 @@ export class TUI {
 
   /** End streaming and commit as message */
   endStream(): void {
+    this.stopProgressBar();
     if (this.streamBuffer.trim()) {
       this.addMessage({ role: 'assistant', content: this.streamBuffer.trim() });
     }
@@ -308,6 +383,7 @@ export class TUI {
 
   /** Show a tool call */
   showToolCall(name: string, args: Record<string, unknown>): void {
+    this.startProgressBar(); // keep bouncing during tool execution
     const argsStr = Object.entries(args)
       .map(([k, v]) => {
         const val = typeof v === 'string'
@@ -713,17 +789,32 @@ export class TUI {
     );
     writeAt(topRow, leftPad, topBorder);
 
-    // Input line
-    const inputText = this.input.text || '';
+    // Input line — show queued text if agent is running, otherwise normal input
+    const isQueuing = !this.resolveInput && this.queuedInput.length > 0;
+    const inputText = isQueuing ? this.queuedInput : (this.input.text || '');
     const contentWidth = boxWidth - 4;
     let displayLine: string;
 
-    if (inputText) {
-      // User text — no ANSI codes, padEnd works correctly
+    if (isQueuing) {
+      // Queued text — show with a "queued" indicator
+      const label = chalk.hex('#E8A87C')('⏳ ');
+      const availWidth = contentWidth - 3; // account for emoji+space
+      const truncated = inputText.length > availWidth ? inputText.slice(0, availWidth - 1) + '…' : inputText;
+      const textPart = truncated.replace(/\n/g, '↵');
+      displayLine = label + textPart + ' '.repeat(Math.max(0, availWidth - textPart.length));
+    } else if (inputText) {
+      // Normal user text
       const truncated = inputText.length > contentWidth ? inputText.slice(0, contentWidth - 1) + '…' : inputText;
-      displayLine = truncated + ' '.repeat(Math.max(0, contentWidth - truncated.length));
+      const textPart = truncated.replace(/\n/g, '↵');
+      displayLine = textPart + ' '.repeat(Math.max(0, contentWidth - textPart.length));
+    } else if (!this.resolveInput) {
+      // Agent running, no queued text — show hint
+      const hint = 'Type ahead — your message will send when the model finishes';
+      const visual = hint.slice(0, contentWidth);
+      const padding = ' '.repeat(Math.max(0, contentWidth - visual.length));
+      displayLine = theme.dimmer(visual) + padding;
     } else {
-      // Placeholder — has ANSI codes, must pad by visual width
+      // Normal placeholder
       const placeholderText = 'Ask anything... "Fix the bug in auth.ts"';
       const visual = placeholderText.slice(0, contentWidth);
       const padding = ' '.repeat(Math.max(0, contentWidth - visual.length));
@@ -795,6 +886,10 @@ export class TUI {
       showCursor();
       // Text line is at topRow+1. Cursor column: border(1) + space(1) + typed chars
       moveTo(topRow + 1, leftPad + 2 + this.input.cursor);
+    } else if (this.queuedInput.length > 0) {
+      // Show cursor for type-ahead input (offset by queued indicator "⏳ ")
+      showCursor();
+      moveTo(topRow + 1, leftPad + 2 + 3 + this.queuedCursor);
     } else {
       hideCursor();
     }
@@ -840,6 +935,57 @@ export class TUI {
   }
 
   // ─── Tip rotation ──────────────────────────────────────────────────
+
+  /** Handle keystrokes while agent is running — type-ahead queue */
+  private handleQueuedInput(key: string): void {
+    // Regular printable character
+    if (key.length === 1 && key.charCodeAt(0) >= 32) {
+      this.queuedInput =
+        this.queuedInput.slice(0, this.queuedCursor) +
+        key +
+        this.queuedInput.slice(this.queuedCursor);
+      this.queuedCursor++;
+      this.render(); // re-render to show queued text in input box
+      return;
+    }
+
+    // Backspace
+    if (key === '\x7f' || key === '\b') {
+      if (this.queuedCursor > 0) {
+        this.queuedInput =
+          this.queuedInput.slice(0, this.queuedCursor - 1) +
+          this.queuedInput.slice(this.queuedCursor);
+        this.queuedCursor--;
+        this.render();
+      }
+      return;
+    }
+
+    // Newlines (Shift+Enter / Alt+Enter)
+    if (key === '\x1b\r' || key === '\x1b\n' || key === '\x1b[13;2u' || key === '\x1b[27;2;13~') {
+      this.queuedInput =
+        this.queuedInput.slice(0, this.queuedCursor) + '\n' +
+        this.queuedInput.slice(this.queuedCursor);
+      this.queuedCursor++;
+      this.render();
+      return;
+    }
+
+    // Left/Right arrows
+    if (key === '\x1b[C') { this.queuedCursor = Math.min(this.queuedCursor + 1, this.queuedInput.length); this.render(); return; }
+    if (key === '\x1b[D') { this.queuedCursor = Math.max(this.queuedCursor - 1, 0); this.render(); return; }
+
+    // Paste detection
+    if (key.length > 1 && key.includes('\n') && !key.startsWith('\x1b')) {
+      const cleanPaste = key.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      this.queuedInput =
+        this.queuedInput.slice(0, this.queuedCursor) + cleanPaste +
+        this.queuedInput.slice(this.queuedCursor);
+      this.queuedCursor += cleanPaste.length;
+      this.render();
+      return;
+    }
+  }
 
   private getTip(): string {
     const tip = this.tips[this.currentTip % this.tips.length];
@@ -907,8 +1053,11 @@ export class TUI {
       return;
     }
 
-    // Only process further if we're waiting for input
-    if (!this.resolveInput) return;
+    // Type-ahead: if agent is running, collect keystrokes into queue
+    if (!this.resolveInput) {
+      this.handleQueuedInput(key);
+      return;
+    }
 
     // ─── Command menu navigation ─────────────────────────────────────
     if (this.commandMenuVisible) {

@@ -123,6 +123,29 @@ Components:
 
 The tracker disappears when the agent completes, replaced by the completion badge in the message area.
 
+## Progress Bar
+
+While the agent is working, a bouncing blue progress indicator appears on row 1 of the terminal. A bright segment with a gradient fade bounces left-to-right and back at approximately 33fps:
+
+- **Center**: `#85C7F2` (sky blue)
+- **Mid fade**: `#4A8AB5`
+- **Edge fade**: `#2A5A7A`
+- **Background**: `#1A1A2E`
+
+The progress bar starts when streaming begins or a tool call is dispatched, and stops when the agent completes its turn or the user interrupts with `Ctrl+C`.
+
+## Type-Ahead Input
+
+Users can type while the agent is running. Keystrokes are collected into a queue buffer and displayed in the input box with a `⏳` indicator. When the agent finishes its turn, the queued text auto-submits as the next message.
+
+Full editing is supported while typing ahead:
+- `Backspace` deletes characters
+- `Left` / `Right` arrow keys move the cursor
+- Paste inserts text at the cursor position
+- `Shift+Enter` inserts newlines for multi-line messages
+
+Hint text is shown in the input box while the agent is running: *"Type ahead — your message will send when the model finishes"*
+
 ## Streaming
 
 Assistant text streams token-by-token into the message area. During streaming:

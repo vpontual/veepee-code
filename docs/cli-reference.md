@@ -393,6 +393,10 @@ When the command palette is open (after typing `/` or pressing `Ctrl+P`):
 | `Esc` | Close command palette |
 | Typing | Filters the command list |
 
+### Type-Ahead
+
+You can type while the model is working. Your message queues and auto-sends when the turn completes. The input box shows a `⏳` indicator and hint text while queuing. Full editing (backspace, arrows, paste, Shift+Enter for newlines) is supported.
+
 ### Permission Prompt Keys
 
 When a permission prompt is active:
