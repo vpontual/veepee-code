@@ -14,6 +14,7 @@ import { saveSession, listSessions, findSession, formatSessionList, autoName } f
 import { MoeEngine, type MoeStrategy } from './moe.js';
 import { KnowledgeState } from './knowledge.js';
 import { createWorktree, listWorktrees, cleanupWorktrees, isGitRepo } from './worktree.js';
+import { needsWizard, runWizard } from './wizard.js';
 
 // Tool registrations
 import { registerCodingTools } from './tools/coding.js';
@@ -28,6 +29,12 @@ const VERSION = '0.2.0';
 
 
 async function main() {
+  // Run setup wizard on first launch or with --wizard flag
+  const forceWizard = process.argv.includes('--wizard');
+  if (forceWizard || needsWizard()) {
+    await runWizard();
+  }
+
   const config = loadConfig();
 
   // Check for -p / --print mode (non-interactive, output to stdout)
@@ -856,6 +863,20 @@ async function handleCommand(
     }
 
     case '/setup': {
+      if (parts[1] === 'wizard' || parts[1] === '--wizard') {
+        tui.stop();
+        await runWizard();
+        tui.showInfo(theme.success('Configuration updated. Restart vcode to apply changes.'));
+        tui.start({
+          model: modelManager.getCurrentModel(),
+          modelSize: modelManager.getProfile(modelManager.getCurrentModel())?.parameterSize || '',
+          toolCount: registry.count(),
+          modelCount: modelManager.getAllModels().length,
+          version: VERSION,
+          apiPort,
+        });
+        return false;
+      }
       tui.showInfo('Validating integrations...');
       const results = await validateIntegrations(config);
       tui.showInfo(formatSetupReport(results));

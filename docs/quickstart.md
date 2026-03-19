@@ -67,6 +67,7 @@ vcode -p "explain this codebase"   # Print mode: one-shot, non-interactive
 vcode -c                           # Continue: resume the last session
 vcode --resume my-session          # Resume a named session
 vcode --host 0.0.0.0 --port 9000  # Bind API server to custom host/port
+vcode --wizard                    # Re-run the guided setup wizard
 ```
 
 ## First Run
@@ -80,13 +81,14 @@ vcode
 
 On first launch, VEEPEE Code will:
 
-1. **Connect to the proxy** -- It contacts the Ollama proxy URL from your config (default: `http://localhost:11434`).
-2. **Discover models** -- It queries the proxy for available models and (if configured) the Fleet Manager dashboard for loaded model status and capabilities.
-3. **Select an initial model** -- The highest-scoring model with tool-calling support becomes the temporary default.
-4. **Register tools** -- All 26 tools are initialized based on your `.env` configuration. Tools with missing credentials are silently skipped.
-5. **Start the API server** -- An OpenAI-compatible API server starts on port 8484 (configurable).
-6. **Launch the TUI** -- The full-screen terminal interface appears with the VEEPEE CODE logo and input box.
-7. **Run the first-launch benchmark** -- Automatically inside the TUI with live progress:
+1. **Run the setup wizard** -- A guided onboarding walks you through all configuration step-by-step: GitHub authentication, Ollama proxy connection, model preferences, and optional integrations (Home Assistant, Mastodon, Spotify, Google Workspace, SearXNG, Newsfeed). Each step explains what it does, which tools it enables, and whether it's required or optional. Optional steps can be skipped by pressing Enter.
+2. **Connect to the proxy** -- It contacts the Ollama proxy URL from your config.
+3. **Discover models** -- It queries the proxy for available models and (if configured) the Fleet Manager dashboard for loaded model status and capabilities.
+5. **Select an initial model** -- The highest-scoring model with tool-calling support becomes the temporary default.
+6. **Register tools** -- All 26 tools are initialized based on your `.env` configuration. Tools with missing credentials are silently skipped.
+7. **Start the API server** -- An OpenAI-compatible API server starts on port 8484 (configurable).
+8. **Launch the TUI** -- The full-screen terminal interface appears with the VEEPEE CODE logo and input box.
+9. **Run the first-launch benchmark** -- Automatically inside the TUI with live progress:
    - **Phase 1:** Quick responsiveness check on all models with tool support. Sends a prompt, allows up to 60 seconds for cold-start model loading, then measures generation speed (tok/s). Models with <1 tok/s are filtered out.
    - **Phase 2:** Full benchmark on surviving models (tool calling, code generation, code editing, instruction following, reasoning, context probing). Note: context probing is optional and skipped on first launch to speed up initial setup.
    - **Phase 3:** Builds a **model roster** -- assigns the best model per role (act, plan, chat, code, search) based on benchmark scores and speed. The act model becomes the new default.
@@ -94,7 +96,7 @@ On first launch, VEEPEE Code will:
 
 ## Configuring the Proxy URL
 
-If your Ollama instance is not at the default address, edit the config:
+The setup wizard configures this automatically on first launch. To change it later, either re-run the wizard (`vcode --wizard` or `/setup wizard`) or edit the config directly:
 
 ```bash
 # Edit the global config
@@ -194,10 +196,11 @@ vcode --resume my-refactor
 Run the setup validation command to check which integrations are active:
 
 ```
-/setup
+/setup            # Check integration status
+/setup wizard     # Re-run the guided setup wizard
 ```
 
-This tests connectivity to your proxy, SearXNG, Home Assistant, Mastodon, Spotify, Google Workspace, and news feed. Each integration shows its status (active, missing config, or error) and which tools it provides.
+`/setup` tests connectivity to your proxy, SearXNG, Home Assistant, Mastodon, Spotify, Google Workspace, and news feed. Each integration shows its status (active, missing config, or error) and which tools it provides. Use `/setup wizard` to reconfigure any integration interactively.
 
 ## Creating Project Instructions
 

@@ -104,6 +104,7 @@ const COMMANDS = [
   { name: '/moe fastest', args: '', description: 'MoE fastest — first response wins' },
   { name: '/init', args: '', description: 'Create VEEPEE.md for this project' },
   { name: '/setup', args: '', description: 'Validate all tool integrations' },
+  { name: '/setup wizard', args: '', description: 'Re-run the guided setup wizard' },
   { name: '/benchmark', args: '[tier]', description: 'Run benchmarks on all models' },
   { name: '/benchmark results', args: '', description: 'Show latest benchmark results' },
   { name: '/benchmark summary', args: '', description: 'Show benchmark summary' },
