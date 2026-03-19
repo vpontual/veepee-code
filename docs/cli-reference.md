@@ -329,6 +329,126 @@ Probe optimal context sizes per model. Sends progressively larger prompts to eac
 /benchmark context
 ```
 
+### Sandbox
+
+#### /sandbox
+
+List files in the sandbox directory.
+
+```
+/sandbox
+```
+
+Output shows file names and sizes.
+
+#### /sandbox keep <file> [destination]
+
+Move a file from the sandbox to the working directory (or a custom destination).
+
+```
+/sandbox keep test.py                 # Move to cwd/test.py
+/sandbox keep test.py src/test.py     # Move to src/test.py
+```
+
+#### /sandbox clean
+
+Remove all files from the sandbox directory.
+
+```
+/sandbox clean
+```
+
+#### /sandbox preview <file>
+
+Preview a sandbox file (run a script or serve HTML).
+
+```
+/sandbox preview calculator.py
+```
+
+### Preview / Run
+
+#### /preview <file>
+
+Preview or run a file. HTML files are served via a local static file server and opened in the browser. Script files (.py, .sh, .js, .ts, .rb) are executed with their interpreter.
+
+```
+/preview index.html         # Serve HTML, open browser
+/preview sandbox:test.py    # Run a sandbox script
+/run test.py                # Alias for /preview
+```
+
+Supports `sandbox:` prefix to resolve paths relative to the sandbox directory.
+
+#### /preview stop
+
+Stop the preview server.
+
+```
+/preview stop
+```
+
+### Sync
+
+#### /sync push [all]
+
+Push session files to the configured WebDAV server.
+
+```
+/sync push        # Push current session only
+/sync push all    # Push all sessions
+```
+
+#### /sync pull
+
+Pull sessions from the WebDAV server. Newer remote files overwrite older local files.
+
+```
+/sync pull
+```
+
+#### /sync auto
+
+Toggle auto-sync (push after `/save`, pull before `/sessions`).
+
+```
+/sync auto
+```
+
+#### /sync status
+
+Show sync configuration (URL, user, auto-sync state).
+
+```
+/sync status
+```
+
+### Remote Connect
+
+#### /rc
+
+Show Remote Connect status and URL.
+
+```
+/rc
+```
+
+Output:
+
+```
+Remote Connect: active
+  http://10.0.153.99:8484/rc
+  Access via Twingate from any device
+```
+
+#### /rc qr
+
+Show the Remote Connect URL for easy access from a phone.
+
+```
+/rc qr
+```
+
 ### Help
 
 #### /help
@@ -437,4 +557,17 @@ When a permission prompt is active:
 | `/benchmark context` | Probe optimal context sizes |
 | `/benchmark results` | Show results |
 | `/benchmark summary` | Show summary |
+| `/sandbox` | List sandbox files |
+| `/sandbox keep <file>` | Move file from sandbox |
+| `/sandbox clean` | Clean sandbox |
+| `/sandbox preview <file>` | Preview sandbox file |
+| `/preview <file>` | Preview/run a file |
+| `/preview stop` | Stop preview server |
+| `/run <file>` | Run a script (alias for /preview) |
+| `/sync push [all]` | Push sessions to WebDAV |
+| `/sync pull` | Pull sessions from WebDAV |
+| `/sync auto` | Toggle auto-sync |
+| `/sync status` | Show sync config |
+| `/rc` | Show Remote Connect URL |
+| `/rc qr` | Show RC URL for phone |
 | `/quit` / `/exit` / `/q` | Exit |

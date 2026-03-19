@@ -25,6 +25,11 @@ veepee-code/
 │   ├── subagent.ts        # SubAgent + SubAgentManager (search/review/summarize roles)
 │   ├── worktree.ts        # Git worktree create/list/cleanup
 │   ├── sessions.ts        # Session save/load/resume/list
+│   ├── sandbox.ts         # SandboxManager — per-session temp directory
+│   ├── preview.ts         # PreviewManager — run scripts, serve HTML
+│   ├── sync.ts            # SyncManager — WebDAV push/pull sessions
+│   ├── rc.ts              # Remote Connect route handlers, SSE, permission queue
+│   ├── rc-ui.ts           # Remote Connect web UI (inline HTML/CSS/JS)
 │   ├── setup.ts           # Integration validation
 │   ├── render.ts          # Markdown rendering and legacy formatters
 │   ├── types.d.ts         # Module declarations
@@ -73,7 +78,12 @@ index.ts
 ├── subagent.ts ── agent.ts, models.ts, tools/registry.ts
 ├── worktree.ts ── (standalone, shells out to git)
 ├── permissions.ts
-├── api.ts ────── agent.ts, models.ts, tools/registry.ts
+├── sandbox.ts ── (standalone, fs operations)
+├── preview.ts ── sandbox.ts (for path resolution)
+├── sync.ts ───── sessions.ts (getSessionDir)
+├── rc.ts ─────── agent.ts, permissions.ts, preview.ts, sessions.ts, rc-ui.ts
+├── rc-ui.ts ──── (standalone, returns HTML string)
+├── api.ts ────── agent.ts, models.ts, tools/registry.ts, rc.ts (optional)
 ├── benchmark.ts ─ models.ts
 ├── sessions.ts ── agent.ts (types only), tui/theme.ts
 ├── setup.ts ──── config.ts, tui/theme.ts
@@ -263,6 +273,63 @@ The `SubAgent` and `SubAgentManager` enable the main agent to delegate specializ
 
 Each sub-agent gets a role-specific system prompt and a limited tool set. The `SubAgentManager` handles lifecycle, ensuring sub-agents are spun up and torn down cleanly.
 
+### Sandbox Manager (`sandbox.ts`)
+
+Provides a per-session scratch directory at `~/.veepee-code/sandbox/{sessionId}/` for temporary files, experiments, and scratch code.
+
+**Key operations:**
+- `getPath()` — Lazy-creates and returns the sandbox directory
+- `list()` — Returns file info (name, size, modified date)
+- `keep(file, dest?)` — Moves a file from sandbox to the real workspace (rename or copy+unlink for cross-filesystem)
+- `clean()` — Removes the entire session sandbox directory
+- `cleanupStale()` — Static method called on startup to remove sandbox dirs older than 24 hours
+- `resolvePath(input)` — Resolves `sandbox:filename` prefixed paths
+
+The sandbox path is injected into the system prompt via the `{{SANDBOX}}` placeholder so the model knows about it.
+
+### Preview Manager (`preview.ts`)
+
+Runs scripts and serves HTML files for inline preview.
+
+**Script execution:** Dispatches by file extension (`.py` → `python3`, `.sh` → `bash`, `.js` → `node`, `.ts` → `npx tsx`, `.rb` → `ruby`). Scripts run with a 30-second timeout and capture stdout+stderr.
+
+**Static file server:** A Node.js `http.createServer` that serves files from a directory with proper MIME types. Auto-picks a port from 8485+ (increments on EADDRINUSE). Used for HTML preview and reused by Remote Connect.
+
+**Cross-platform browser open:** Uses `open` on macOS and `xdg-open` on Linux.
+
+### Sync Manager (`sync.ts`)
+
+Pushes and pulls session files to/from a WebDAV server (Nextcloud, ownCloud, etc.) using Node.js built-in `https`/`http` modules — no additional dependencies.
+
+**WebDAV operations (~100 lines):**
+- `webdavPut(url, body)` — Upload a file
+- `webdavGet(url)` — Download a file
+- `webdavPropfind(url)` — List directory contents (parses XML response)
+- `webdavMkcol(url)` — Create remote directory
+
+**Conflict resolution:** Compares `updatedAt` timestamps — newer wins. Local files are only overwritten if the remote version is more recent.
+
+**What syncs:** Session JSON files and knowledge state files. Sandbox files are NOT synced (ephemeral by design).
+
+### Remote Connect (`rc.ts` + `rc-ui.ts`)
+
+A phone-accessible web chat UI that shares the TUI session. One agent, two views.
+
+**`rc-ui.ts`:** A single function that returns ~340 lines of inline HTML/CSS/JS as a template literal. Mobile-first responsive design, dark theme matching TUI colors, EventSource for SSE streaming, token auth via localStorage.
+
+**`rc.ts` routes:**
+- `GET /rc` — Serve the web UI HTML
+- `GET /rc/stream` — SSE event stream mirroring agent events (text, tool_call, tool_result, done, error, permission_request)
+- `POST /rc/send` — Send a user message to the agent
+- `GET /rc/sessions` — List sessions
+- `POST /rc/resume` — Resume a session
+- `POST /rc/approve` — Approve/deny a tool permission request
+- `POST /rc/preview` — Preview a file
+
+**Permission handling:** When RC clients are connected and a tool needs permission, a `permission_request` SSE event is emitted. The web UI shows approve/deny/always buttons. 60-second timeout auto-denies. TUI takes priority if both are active.
+
+**Networking:** When RC is enabled, the API server binds to `0.0.0.0` instead of `127.0.0.1`, and CORS allows any origin (auth via token protects access). Designed for use with Twingate or direct LAN access.
+
 ### Git Worktree Manager (`worktree.ts`)
 
 Manages Git worktrees for parallel branch work without disturbing the main working directory.
@@ -343,7 +410,7 @@ A raw Node.js `http.createServer` (no Express, no framework). Endpoints:
 - `/api/status` -- Session state snapshot
 - `/health` -- Liveness probe
 
-The server binds to `127.0.0.1` (localhost only) by default. Use `--host` and `--port` CLI flags to override. Auto-increments the port if `EADDRINUSE`. Bearer token auth is supported via `VEEPEE_CODE_API_TOKEN`. CORS is restricted to localhost origins.
+The server binds to `127.0.0.1` (localhost only) by default. When Remote Connect is enabled (`VEEPEE_CODE_RC_ENABLED=1`), it binds to `0.0.0.0` and CORS allows any origin. Auto-increments the port if `EADDRINUSE`. Bearer token auth is supported via `VEEPEE_CODE_API_TOKEN`. RC routes (`/rc/*`) are handled by `rc.ts` when enabled, taking priority over other route matching.
 
 ### TUI (`tui/`)
 

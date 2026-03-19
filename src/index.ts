@@ -16,6 +16,10 @@ import { MoeEngine, type MoeStrategy } from './moe.js';
 import { KnowledgeState } from './knowledge.js';
 import { createWorktree, listWorktrees, cleanupWorktrees, isGitRepo } from './worktree.js';
 import { needsWizard, runWizard, runWizardForStep, getWizardStepIds } from './wizard.js';
+import { SandboxManager, formatSize } from './sandbox.js';
+import { PreviewManager } from './preview.js';
+import { SyncManager } from './sync.js';
+import { registerRcRoutes, generateRcToken } from './rc.js';
 
 // Tool registrations
 import { registerCodingTools } from './tools/coding.js';
@@ -26,7 +30,7 @@ import { registerSocialTools } from './tools/social.js';
 import { registerGoogleTools } from './tools/google.js';
 import { registerNewsTools } from './tools/news.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 
 async function main() {
@@ -120,6 +124,20 @@ async function main() {
   agent.getContext().setRegisteredTools(registry.names());
   agent.getContext().setSystemPrompt(defaultModel);
 
+  // Initialize sandbox
+  const sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const sandbox = new SandboxManager(sessionId);
+  agent.getContext().setSandboxPath(sandbox.getPathSync());
+
+  // Initialize preview manager
+  const preview = new PreviewManager(sandbox);
+
+  // Initialize sync manager (if configured)
+  const syncManager = config.sync ? new SyncManager(config.sync.url, config.sync.user, config.sync.pass) : null;
+
+  // Cleanup stale sandbox dirs on startup (>24h old)
+  SandboxManager.cleanupStale().catch(() => {});
+
   // Print mode: run query, output to stdout, exit
   if (printQuery) {
     const jsonSchemaArg = process.argv.find(a => a.startsWith('--json-schema='));
@@ -195,10 +213,30 @@ async function main() {
   const cliPort = process.argv.find(a => a.startsWith('--port='))?.split('=')[1];
   const cliHost = process.argv.find(a => a.startsWith('--host='))?.split('=')[1];
 
+  // Set up RC routes if enabled
+  const rcEnabled = !!config.rc?.enabled;
+  const apiToken = process.env.VEEPEE_CODE_API_TOKEN || null;
+  let rcHandler: ((req: import('http').IncomingMessage, res: import('http').ServerResponse, url: URL) => Promise<boolean>) | undefined;
+  let rcInstallPermissions: (() => void) | undefined;
+
+  if (rcEnabled) {
+    const rc = registerRcRoutes(agent, permissions, preview, parseInt(cliPort || process.env.VEEPEE_CODE_API_PORT || '8484', 10), apiToken);
+    rcHandler = rc.handleRequest;
+    rcInstallPermissions = rc.installPermissionHandler;
+  }
+
   // Start API server
   const apiPort = parseInt(cliPort || process.env.VEEPEE_CODE_API_PORT || '8484', 10);
   const apiHost = cliHost || process.env.VEEPEE_CODE_API_HOST || '127.0.0.1';
-  const api = startApiServer({ port: apiPort, host: apiHost, agent, modelManager, registry });
+  const api = startApiServer({
+    port: apiPort,
+    host: apiHost,
+    agent,
+    modelManager,
+    registry,
+    rcEnabled,
+    rcRequestHandler: rcHandler,
+  });
 
   // Wait a tick for port fallback to resolve, then use actual bound port
   await new Promise(r => setTimeout(r, 50));
@@ -219,6 +257,11 @@ async function main() {
   permissions.setPromptHandler(async (toolName, args, reason) => {
     return tui.promptPermission(toolName, args, reason);
   });
+
+  // Install RC permission handler (wraps TUI handler, routes to web when RC clients are connected)
+  if (rcInstallPermissions) {
+    rcInstallPermissions();
+  }
 
   // Wire Tab → show tools (without going through the input pipeline)
   tui.onTabTools = () => {
@@ -437,7 +480,7 @@ async function main() {
     if (trimmed.startsWith('/')) {
       // Show the command in the chat and clear the input box immediately
       tui.addUserMessage(trimmed);
-      const result = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId);
+      const result = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId, sandbox, preview, syncManager);
       if (result === true) break; // quit
       if (typeof result === 'string' && result.startsWith('session:')) {
         currentSessionId = result.slice(8) || null;
@@ -509,6 +552,15 @@ async function main() {
   }
 
   // Cleanup
+  preview.stopServer();
+  if (await sandbox.hasFiles()) {
+    tui.showInfo(theme.warning('Sandbox has files. Cleaning up...'));
+    const files = await sandbox.list();
+    for (const f of files) {
+      tui.showInfo(theme.dim(`  Removed: ${f.name} (${formatSize(f.size)})`));
+    }
+  }
+  await sandbox.clean();
   api.close();
   tui.stop();
   process.exit(0);
@@ -524,6 +576,9 @@ async function handleCommand(
   config: ReturnType<typeof loadConfig>,
   apiPort: number,
   currentSessionId: string | null,
+  sandbox: SandboxManager,
+  preview: PreviewManager,
+  syncManager: SyncManager | null,
 ): Promise<boolean | string | void> {
   // Returns: true = quit, 'session:<id>' = set session ID, void = continue
   const parts = input.split(/\s+/);
@@ -560,6 +615,16 @@ async function handleCommand(
         `${theme.textBold('Benchmark:')}`,
         `  ${theme.accent('/benchmark')}        Benchmark all      ${theme.accent('/benchmark heavy')}  Heavy only`,
         `  ${theme.accent('/benchmark results')} Show results      ${theme.accent('/benchmark context')} Probe context sizes`,
+        '',
+        `${theme.textBold('Sandbox & Preview:')}`,
+        `  ${theme.accent('/sandbox')}          List files        ${theme.accent('/sandbox keep <f>')} Move file out`,
+        `  ${theme.accent('/preview <file>')}   Preview/run       ${theme.accent('/preview stop')}     Stop server`,
+        `  ${theme.accent('/run <file>')}       Run script        ${theme.accent('/sandbox clean')}    Clean sandbox`,
+        '',
+        `${theme.textBold('Sync & Remote:')}`,
+        `  ${theme.accent('/sync push [all]')} Push sessions     ${theme.accent('/sync pull')}    Pull sessions`,
+        `  ${theme.accent('/sync auto')}       Toggle auto-sync  ${theme.accent('/sync status')}  Show config`,
+        `  ${theme.accent('/rc')}              Remote Connect    ${theme.accent('/rc qr')}        Show URL`,
         '',
         `${theme.textBold('Keys:')}`,
         `  ${theme.dim('Enter')} submit  ${theme.dim('Shift+Enter')} newline  ${theme.dim('Tab')} tools  ${theme.dim('Ctrl+P')} commands  ${theme.dim('Ctrl+C')} interrupt`,
@@ -1315,10 +1380,224 @@ ${gathered.join('\n\n')}`;
       return `session:${session.id}`;
     }
 
+    // ─── Sandbox Commands ──────────────────────────────────────────────
+    case '/sandbox': {
+      const subCmd = parts[1]?.toLowerCase();
+
+      if (subCmd === 'keep') {
+        const file = parts[2];
+        const dest = parts[3];
+        if (!file) {
+          tui.showInfo('Usage: /sandbox keep <file> [destination]');
+          return;
+        }
+        try {
+          const destPath = await sandbox.keep(file, dest);
+          tui.showInfo(`${theme.success('Kept:')} ${file} ${icons.arrow} ${destPath}`);
+        } catch (err) {
+          tui.showError((err as Error).message);
+        }
+        return;
+      }
+
+      if (subCmd === 'clean') {
+        await sandbox.clean();
+        tui.showInfo(theme.success('Sandbox cleaned.'));
+        return;
+      }
+
+      if (subCmd === 'preview') {
+        const file = parts[2];
+        if (!file) {
+          tui.showInfo('Usage: /sandbox preview <file>');
+          return;
+        }
+        const filePath = sandbox.resolvePath(`sandbox:${file}`);
+        try {
+          const result = await preview.run(filePath);
+          if (result.type === 'url') {
+            tui.showInfo(`${theme.success('Preview:')} ${theme.accent(result.content)}`);
+          } else {
+            tui.showInfo(result.content);
+          }
+        } catch (err) {
+          tui.showError((err as Error).message);
+        }
+        return;
+      }
+
+      // Default: list sandbox contents
+      const files = await sandbox.list();
+      if (files.length === 0) {
+        tui.showInfo(theme.dim('Sandbox is empty.'));
+      } else {
+        const lines = files.map(f =>
+          `  ${theme.accent(f.name.padEnd(30))} ${theme.dim(formatSize(f.size))}`
+        );
+        tui.showInfo(`${theme.textBold('Sandbox files:')}\n${lines.join('\n')}`);
+        tui.showInfo(theme.dim(`  Path: ${sandbox.getPathSync()}`));
+      }
+      return;
+    }
+
+    // ─── Preview / Run Commands ─────────────────────────────────────────
+    case '/preview':
+    case '/run': {
+      const fileArg = parts[1];
+      if (!fileArg) {
+        tui.showInfo('Usage: /preview <file> | /preview stop | /run <file>');
+        return;
+      }
+
+      if (fileArg === 'stop') {
+        preview.stopServer();
+        tui.showInfo(theme.success('Preview server stopped.'));
+        return;
+      }
+
+      const filePath = sandbox.resolvePath(fileArg);
+      try {
+        const result = await preview.run(filePath);
+        if (result.type === 'url') {
+          tui.showInfo(`${theme.success('Serving:')} ${theme.accent(result.content)}`);
+        } else {
+          tui.showInfo(result.content);
+        }
+      } catch (err) {
+        tui.showError((err as Error).message);
+      }
+      return;
+    }
+
+    // ─── Sync Commands ──────────────────────────────────────────────────
+    case '/sync': {
+      if (!syncManager) {
+        tui.showInfo([
+          theme.error('Sync not configured.'),
+          theme.dim('  Set in ~/.veepee-code/.env:'),
+          theme.dim('  VEEPEE_CODE_SYNC_URL=https://cloud.example.com/remote.php/dav/files/user/veepee-code/'),
+          theme.dim('  VEEPEE_CODE_SYNC_USER=username'),
+          theme.dim('  VEEPEE_CODE_SYNC_PASS=password'),
+        ].join('\n'));
+        return;
+      }
+
+      const subCmd = parts[1]?.toLowerCase();
+
+      if (subCmd === 'push') {
+        const pushAll = parts[2] === 'all';
+        tui.showInfo(theme.dim(pushAll ? 'Pushing all sessions...' : 'Pushing current session...'));
+        try {
+          if (pushAll) {
+            await syncManager.push();
+          } else if (currentSessionId) {
+            await syncManager.push(currentSessionId);
+          } else {
+            tui.showInfo(theme.warning('No active session. Use /sync push all or /save first.'));
+            return;
+          }
+          tui.showInfo(theme.success('Push complete.'));
+        } catch (err) {
+          tui.showError(`Sync push failed: ${(err as Error).message}`);
+        }
+        return;
+      }
+
+      if (subCmd === 'pull') {
+        tui.showInfo(theme.dim('Pulling sessions...'));
+        try {
+          const pulled = await syncManager.pull();
+          tui.showInfo(`${theme.success('Pull complete.')} ${pulled} session(s) updated.`);
+        } catch (err) {
+          tui.showError(`Sync pull failed: ${(err as Error).message}`);
+        }
+        return;
+      }
+
+      if (subCmd === 'auto') {
+        const currentAuto = config.sync?.auto ?? false;
+        syncManager.setAutoSync(!currentAuto);
+        tui.showInfo(`Auto-sync ${!currentAuto ? theme.success('enabled') : theme.dim('disabled')}`);
+        return;
+      }
+
+      if (subCmd === 'status') {
+        const s = config.sync!;
+        tui.showInfo([
+          `${theme.textBold('Sync:')}`,
+          `  URL:  ${theme.accent(s.url)}`,
+          `  User: ${s.user}`,
+          `  Auto: ${s.auto ? theme.success('on') : theme.dim('off')}`,
+        ].join('\n'));
+        return;
+      }
+
+      // Default: show help
+      tui.showInfo([
+        `${theme.textBold('Sync commands:')}`,
+        `  ${theme.accent('/sync push')}       Push current session to WebDAV`,
+        `  ${theme.accent('/sync push all')}   Push all sessions`,
+        `  ${theme.accent('/sync pull')}       Pull sessions from WebDAV`,
+        `  ${theme.accent('/sync auto')}       Toggle auto-sync`,
+        `  ${theme.accent('/sync status')}     Show sync config`,
+      ].join('\n'));
+      return;
+    }
+
+    // ─── Remote Connect Commands ────────────────────────────────────────
+    case '/rc': {
+      const subCmd = parts[1]?.toLowerCase();
+
+      if (!config.rc?.enabled) {
+        tui.showInfo([
+          theme.error('Remote Connect is disabled.'),
+          theme.dim('  Set VEEPEE_CODE_RC_ENABLED=1 in ~/.veepee-code/.env'),
+          theme.dim('  Also set VEEPEE_CODE_API_TOKEN for authentication'),
+        ].join('\n'));
+        return;
+      }
+
+      if (subCmd === 'qr') {
+        // Simple ASCII QR-like display of URL
+        const url = `http://${getLocalIp()}:${apiPort}/rc`;
+        tui.showInfo([
+          `${theme.textBold('Remote Connect URL:')}`,
+          `  ${theme.accent(url)}`,
+          theme.dim('  Open this URL on your phone (via Twingate)'),
+        ].join('\n'));
+        return;
+      }
+
+      // Default: show RC status
+      const url = `http://${getLocalIp()}:${apiPort}/rc`;
+      tui.showInfo([
+        `${theme.textBold('Remote Connect:')} ${theme.success('active')}`,
+        `  ${theme.accent(url)}`,
+        theme.dim('  Access via Twingate from any device'),
+      ].join('\n'));
+      return;
+    }
+
     default:
       tui.showInfo(`Unknown command: ${cmd}. Type /help for commands.`);
       return;
   }
+}
+
+/** Get local IP for RC URL display */
+function getLocalIp(): string {
+  try {
+    const { networkInterfaces } = require('os');
+    const nets = networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name] || []) {
+        if (net.family === 'IPv4' && !net.internal) {
+          return net.address;
+        }
+      }
+    }
+  } catch { /* fallback */ }
+  return '127.0.0.1';
 }
 
 // Handle signals gracefully

@@ -22,6 +22,11 @@ export interface Session {
 
 const SESSIONS_DIR = resolve(process.env.HOME || '~', '.veepee-code', 'sessions');
 
+/** Get the sessions directory path (used by sync) */
+export function getSessionDir(): string {
+  return SESSIONS_DIR;
+}
+
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }

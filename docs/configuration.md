@@ -109,6 +109,25 @@ Must be set to enable the `web_search` tool. Without it, the agent can still use
 
 Must be set to enable the `news` tool.
 
+### Session Sync (Optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VEEPEE_CODE_SYNC_URL` | *(none)* | WebDAV URL for session sync (e.g., `https://cloud.example.com/remote.php/dav/files/user/veepee-code/`). |
+| `VEEPEE_CODE_SYNC_USER` | *(none)* | WebDAV username. |
+| `VEEPEE_CODE_SYNC_PASS` | *(none)* | WebDAV password. |
+| `VEEPEE_CODE_SYNC_AUTO` | `false` | Enable auto-sync (push after `/save`, pull before `/sessions`). Set to `true` or `1`. |
+
+All three URL/user/pass must be set to enable the `/sync` commands. Uses Node.js built-in `https`/`http` modules — no additional dependencies.
+
+### Remote Connect (Optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VEEPEE_CODE_RC_ENABLED` | `0` | Set to `1` to enable the `/rc` web UI endpoints. When enabled, the API server binds to `0.0.0.0` instead of `127.0.0.1`. |
+
+Requires `VEEPEE_CODE_API_TOKEN` to be set for authentication. Access the web UI at `http://{your-ip}:{port}/rc`.
+
 ## Example .env File
 
 The installer creates `~/.veepee-code/.env` with this template:
@@ -157,6 +176,15 @@ VEEPEE_CODE_API_PORT=8484
 
 # AI Newsfeed
 # NEWSFEED_URL=http://localhost:3333
+
+# ─── Session Sync (WebDAV) ──────────────────────────────────────────────────
+# VEEPEE_CODE_SYNC_URL=https://cloud.example.com/remote.php/dav/files/user/veepee-code/
+# VEEPEE_CODE_SYNC_USER=
+# VEEPEE_CODE_SYNC_PASS=
+# VEEPEE_CODE_SYNC_AUTO=false
+
+# ─── Remote Connect (Web UI) ────────────────────────────────────────────────
+# VEEPEE_CODE_RC_ENABLED=0     # Set to 1 to enable /rc web UI (binds to 0.0.0.0)
 ```
 
 ## Directory Structure
@@ -173,6 +201,8 @@ The home directory stores persistent state:
 ├── sessions/               # Saved conversation sessions
 │   ├── abc123-my-refactor.json
 │   └── def456-auth-fix.json
+├── sandbox/                # Per-session scratch directories (auto-cleaned)
+│   └── {sessionId}/        # Temp files created by the AI
 └── benchmarks/
     ├── roster.json         # Model roster (best model per role)
     ├── latest.json         # Most recent benchmark results

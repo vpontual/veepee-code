@@ -1,7 +1,7 @@
 
 # VEEPEE Code
 
-AI coding assistant powered by your own Ollama fleet — a Claude Code-style CLI with 26 tools, zero API costs, and full data privacy.
+AI coding assistant powered by your own Ollama fleet — a Claude Code-style CLI with 26 tools, zero API costs, full data privacy, and cross-device sync.
 
 ![VEEPEE Code TUI](docs/screenshots/tui-main.png)
 
@@ -13,6 +13,9 @@ VEEPEE Code is a full-screen terminal AI assistant that connects to your own [Ol
 - **Full data privacy** — nothing leaves your network
 - **26 integrated tools** — coding, web, devops, home automation, social, productivity
 - **Smart model routing** — auto-benchmarks your models and picks the best one per task
+- **Cross-device sync** — push/pull sessions via WebDAV (Nextcloud, etc.)
+- **Remote Connect** — phone-accessible web UI for mobile coding
+- **Sandbox & Preview** — scratch space for experiments + inline script execution
 
 ## Install
 
@@ -101,6 +104,24 @@ After setup, VEEPEE Code runs a **smart benchmark** on all your models and build
 /save my-refactor     # Save conversation
 /sessions             # List saved sessions
 /resume my-refactor   # Resume a session
+```
+
+### Sandbox & Preview
+
+```
+/sandbox              # List sandbox files
+/sandbox keep file.py # Move to working directory
+/run sandbox:test.py  # Run a sandbox script
+/preview index.html   # Serve HTML in browser
+/preview stop         # Stop preview server
+```
+
+### Sync & Remote Connect
+
+```
+/sync push            # Push current session to WebDAV
+/sync pull            # Pull sessions from WebDAV
+/rc                   # Show Remote Connect URL
 ```
 
 ### Project instructions
@@ -209,6 +230,8 @@ Full documentation is in the [`docs/`](docs/) directory:
 - [TUI](docs/tui.md)
 - [CLI Reference](docs/cli-reference.md)
 - [API](docs/api.md)
+- [Sandbox & Preview](docs/sandbox-preview.md)
+- [Sync & Remote Connect](docs/sync-rc.md)
 
 ## License
 

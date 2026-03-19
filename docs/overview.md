@@ -6,7 +6,7 @@ weight: 1
 
 # VEEPEE Code
 
-VEEPEE Code (v0.2.0) is an AI coding assistant that runs entirely on your own hardware. It connects to your local [Ollama](https://ollama.com/) instance (or an [Ollama Fleet Manager](https://github.com/vpontual/llm-traffic-manager) proxy), giving you a Claude Code-style terminal experience with zero API costs, full data privacy, and 26 integrated tools.
+VEEPEE Code (v0.3.0) is an AI coding assistant that runs entirely on your own hardware. It connects to your local [Ollama](https://ollama.com/) instance (or an [Ollama Fleet Manager](https://github.com/vpontual/llm-traffic-manager) proxy), giving you a Claude Code-style terminal experience with zero API costs, full data privacy, 26 integrated tools, cross-device session sync, and a phone-accessible web UI.
 
 ```
 ██╗   ██╗███████╗███████╗██████╗ ███████╗███████╗
@@ -42,7 +42,13 @@ VEEPEE Code (v0.2.0) is an AI coding assistant that runs entirely on your own ha
 
 - **Sub-Agents** -- Spawn lighter models from the roster for specialized tasks like search, code review, and summarization, keeping the primary model focused on the main task.
 
-- **Security Hardened** -- API authentication, shell injection prevention, and localhost-only binding protect the agent and API server from unauthorized access.
+- **Sandbox & Preview** -- A per-session sandbox directory (`~/.veepee-code/sandbox/{sessionId}/`) gives the AI a scratch space for experiments. Auto-cleaned on session end, with `/sandbox keep` to move files to the real workspace. `/preview` and `/run` execute scripts inline or serve HTML in the browser.
+
+- **Cross-Device Session Sync** -- Push and pull sessions via WebDAV (Nextcloud, ownCloud, or any WebDAV server). Resume a Mac conversation on Linux or vice versa. Conflict resolution by timestamp. Optional auto-sync on save.
+
+- **Remote Connect (/rc)** -- A phone-accessible web UI served at `http://{ip}:{port}/rc`. Mobile-first dark theme matching the TUI. Shared session — phone and TUI see the same conversation. SSE streaming, tool call approve/deny from the web, session picker. Secured by API token, accessed via Twingate or LAN.
+
+- **Security Hardened** -- API authentication, shell injection prevention, and localhost-only binding (unless RC is enabled) protect the agent and API server from unauthorized access.
 
 - **Image Input** -- Vision-capable models can accept image input for screenshot analysis, diagram reading, and visual debugging.
 

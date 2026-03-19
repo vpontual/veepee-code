@@ -13,7 +13,7 @@ VEEPEE Code runs an HTTP API server alongside the TUI, enabling other tools and 
 - **Default port:** 8484 (configurable via `VEEPEE_CODE_API_PORT` or `--port` CLI flag)
 - **Bind address:** `127.0.0.1` (localhost only by default; override with `--host` CLI flag)
 - **Auto-fallback:** If the port is in use, VEEPEE Code automatically tries port + 1
-- **CORS:** Restricted to localhost origins (`http://localhost:*` and `http://127.0.0.1:*`)
+- **CORS:** Restricted to localhost origins by default. When Remote Connect is enabled (`VEEPEE_CODE_RC_ENABLED=1`), CORS allows any origin (auth via token protects access).
 
 The API starts automatically when VEEPEE Code launches. No separate process needed.
 
@@ -324,6 +324,67 @@ result = requests.post("http://127.0.0.1:8484/v1/chat/completions", json={
     "messages": [{"role": "user", "content": "Find and fix all TODO items in the codebase"}]
 })
 print(result.json()["choices"][0]["message"]["content"])
+```
+
+## Remote Connect Endpoints
+
+When `VEEPEE_CODE_RC_ENABLED=1`, the following endpoints are available. All `/rc/*` routes (except `GET /rc`) require Bearer token auth.
+
+### GET /rc
+
+Serve the Remote Connect web UI. Returns an HTML page with inline CSS and JavaScript — no build step required.
+
+### GET /rc/stream?token=\<token\>
+
+SSE event stream mirroring agent events to web clients. Event types:
+
+| Event | Data |
+|-------|------|
+| `text` | `{ content: string }` |
+| `tool_call` | `{ name: string, args: object }` |
+| `tool_result` | `{ name: string, success: boolean, output: string }` |
+| `done` | `{ evalCount: number, tokensPerSecond: number }` |
+| `error_event` | `{ error: string }` |
+| `permission_request` | `{ callId: string, toolName: string, args: object, reason?: string }` |
+
+Includes 15-second keepalive pings.
+
+### POST /rc/send
+
+Send a user message to the agent. The response streams via SSE to all connected clients.
+
+```json
+{ "message": "Fix the bug in auth.ts" }
+```
+
+### GET /rc/sessions
+
+List sessions (up to 20, newest first).
+
+### POST /rc/resume
+
+Resume a session by ID.
+
+```json
+{ "sessionId": "abc123" }
+```
+
+### POST /rc/approve
+
+Approve or deny a pending tool permission request.
+
+```json
+{ "callId": "hex-string", "decision": "y" }
+```
+
+Decisions: `y` (allow once), `a` (always allow), `n` (deny). Unanswered requests auto-deny after 60 seconds.
+
+### POST /rc/preview
+
+Preview a file (returns URL or script output).
+
+```json
+{ "file": "/path/to/file.html" }
 ```
 
 ## Error Handling

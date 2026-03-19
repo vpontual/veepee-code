@@ -10,6 +10,8 @@ interface ApiConfig {
   modelManager: ModelManager;
   registry: ToolRegistry;
   apiToken?: string; // optional auth token; if set, all requests must include it
+  rcEnabled?: boolean; // enable Remote Connect (wider CORS, 0.0.0.0 bind)
+  rcRequestHandler?: (req: IncomingMessage, res: ServerResponse, url: URL) => Promise<boolean>;
 }
 
 /**
@@ -29,9 +31,11 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
   const apiToken = config.apiToken || process.env.VEEPEE_CODE_API_TOKEN || null;
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    // CORS — localhost only
+    // CORS — allow any origin when RC is enabled, localhost only otherwise
     const origin = req.headers.origin || '';
-    if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
+    if (config.rcEnabled) {
+      res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    } else if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
       res.setHeader('Access-Control-Allow-Origin', origin);
     }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -57,6 +61,12 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
     const path = url.pathname;
 
     try {
+      // RC routes — handle first if enabled
+      if (config.rcRequestHandler) {
+        const handled = await config.rcRequestHandler(req, res, url);
+        if (handled) return;
+      }
+
       // OpenAI-compatible chat completions
       if (path === '/v1/chat/completions' && req.method === 'POST') {
         const body = await readBody(req);
@@ -307,11 +317,13 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
     if (err.code === 'EADDRINUSE') {
       console.error(`  API port ${config.port} in use — trying ${config.port + 1}`);
       config.port++;
-      server.listen(config.port, config.host || '127.0.0.1');
+      const bindHost = config.rcEnabled ? '0.0.0.0' : (config.host || '127.0.0.1');
+  server.listen(config.port, bindHost);
     }
   });
 
-  server.listen(config.port, config.host || '127.0.0.1');
+  const bindHost = config.rcEnabled ? '0.0.0.0' : (config.host || '127.0.0.1');
+  server.listen(config.port, bindHost);
 
   return {
     get port() { return config.port; },

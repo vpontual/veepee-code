@@ -96,7 +96,7 @@ Messages are rendered with distinct visual styles:
 
 The command palette opens when you type `/` as the first character or press `Ctrl+P`. It appears as a bordered menu above the input box, similar to OpenCode's command palette:
 
-- Shows all available commands with descriptions (includes `/rename`, `/add-dir`, `/worktree`, `/effort`, `/benchmark context` among others)
+- Shows all available commands with descriptions (includes `/sandbox`, `/preview`, `/run`, `/sync`, `/rc`, `/rename`, `/add-dir`, `/worktree`, `/effort`, `/benchmark context` among others)
 - Filters as you type (e.g., `/be` shows only `/benchmark` commands)
 - Navigate with `Up/Down` arrows
 - `Enter` selects and submits immediately (for commands without arguments)

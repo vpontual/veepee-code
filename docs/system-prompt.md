@@ -33,6 +33,7 @@ The base prompt uses template variables that are resolved at build time:
 | `{{MODE}}` | Current mode label | `Act (execution)` |
 | `{{PROJECT_TREE}}` | File tree (see below) | *(tree output)* |
 | `{{LLAMA_MD}}` | VEEPEE.md project instructions (see below) | *(VEEPEE.md content)* |
+| `{{SANDBOX}}` | Sandbox directory path (if initialized) | `Sandbox: ~/.veepee-code/sandbox/abc123/ — use for scratch files...` |
 
 ## Base Prompt Sections
 

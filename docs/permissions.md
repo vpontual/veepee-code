@@ -147,6 +147,15 @@ The prompt offers three choices:
 | `a` / `A` | Always allow | Persistent. The tool is added to the always-allowed list, saved to `~/.veepee-code/permissions.json`. Applies to all future sessions. |
 | `n` / `N` / `Esc` | Deny | The tool call is skipped. The agent receives a "Permission denied" message and continues with the next step. |
 
+## Remote Connect Permission Handling
+
+When Remote Connect (`/rc`) is enabled and web clients are connected, permission requests are routed to the web UI instead of the TUI. The web UI shows a permission card with approve/deny/always buttons. If no web clients are connected, the TUI prompt is used as a fallback.
+
+- Permission requests are emitted as `permission_request` SSE events with a unique `callId`
+- The web client responds via `POST /rc/approve` with the `callId` and decision (`y`, `a`, or `n`)
+- Unanswered requests auto-deny after 60 seconds
+- TUI takes priority if both TUI and web clients are active
+
 ## API Mode Behavior
 
 When tool calls are made through the API server (port 8484) rather than the interactive TUI, the permission system auto-allows all calls. This is by design -- the API is intended for programmatic use by other tools (Claude Code, Gemini CLI, custom scripts) that handle their own permission logic.

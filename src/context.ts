@@ -142,7 +142,7 @@ const SYSTEM_PROMPT = `You are VEEPEE Code, a CLI coding assistant powered by lo
 **Tools:** glob first (filenames), then grep (content). Use edit_file for exact string replacement. Prefer dedicated tools over bash. If a tool fails, try a different approach.
 
 **Safety:** Destructive/external actions (rm -rf, push, post, email) — confirm first. Read-only — do freely. Never commit unless asked.
-
+{{SANDBOX}}
 ## Knowledge State
 
 Your knowledge state contains everything important from our conversation. Only the last few messages are shown. Use \`update_memory\` to store key decisions, facts, or context:
@@ -211,6 +211,7 @@ export class ContextManager {
   private slidingWindowSize = 6; // last N messages sent to API
   private registeredToolNames: string[] = [];
   private additionalDirs: string[] = [];
+  private sandboxPath: string | null = null;
 
   constructor(sessionId?: string) {
     this.knowledgeState = new KnowledgeState(sessionId || Date.now().toString(36));
@@ -231,6 +232,11 @@ export class ContextManager {
   /** Get all search directories (cwd + additional) */
   getSearchDirs(): string[] {
     return [process.cwd(), ...this.additionalDirs];
+  }
+
+  /** Set sandbox directory path (shown in system prompt) */
+  setSandboxPath(path: string): void {
+    this.sandboxPath = path;
   }
 
   setSystemPrompt(model: string): void {
@@ -284,7 +290,10 @@ export class ContextManager {
       .replace(/\{\{PLATFORM\}\}/g, process.platform)
       .replace(/\{\{MODE\}\}/g, modeLabel)
       .replace(/\{\{PROJECT_TREE\}\}/g, projectTree)
-      .replace(/\{\{LLAMA_MD\}\}/g, llamaMd);
+      .replace(/\{\{LLAMA_MD\}\}/g, llamaMd)
+      .replace(/\{\{SANDBOX\}\}/g, this.sandboxPath
+        ? `\n**Sandbox:** \`${this.sandboxPath}\` — use for scratch files, experiments, temp code. Auto-cleaned on session end.\n`
+        : '');
 
     if (this.mode === 'plan') {
       this.systemPrompt += PLAN_PROMPT;

@@ -16,6 +16,8 @@ export interface Config {
   google: { clientId: string; clientSecret: string; refreshToken: string } | null;
   newsfeedUrl: string | null;
   searxngUrl: string | null;
+  sync: { url: string; user: string; pass: string; auto: boolean } | null;
+  rc: { enabled: boolean } | null;
 }
 
 export function loadConfig(): Config {
@@ -49,5 +51,16 @@ export function loadConfig(): Config {
       ? { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, refreshToken: env.GOOGLE_REFRESH_TOKEN } : null,
     newsfeedUrl: env.NEWSFEED_URL || null,
     searxngUrl: env.SEARXNG_URL || null,
+    sync: env.VEEPEE_CODE_SYNC_URL && env.VEEPEE_CODE_SYNC_USER && env.VEEPEE_CODE_SYNC_PASS
+      ? {
+          url: env.VEEPEE_CODE_SYNC_URL,
+          user: env.VEEPEE_CODE_SYNC_USER,
+          pass: env.VEEPEE_CODE_SYNC_PASS,
+          auto: env.VEEPEE_CODE_SYNC_AUTO === 'true' || env.VEEPEE_CODE_SYNC_AUTO === '1',
+        }
+      : null,
+    rc: env.VEEPEE_CODE_RC_ENABLED === '1' || env.VEEPEE_CODE_RC_ENABLED === 'true'
+      ? { enabled: true }
+      : null,
   };
 }

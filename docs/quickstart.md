@@ -166,6 +166,17 @@ The agent uses `web_search` (via SearXNG) to find current information, then summ
 /worktree            # Manage git worktrees
 /rename              # Rename the current session
 /add-dir             # Add a directory to the working context
+
+# Sandbox & Preview
+/sandbox             # List sandbox files
+/sandbox keep file   # Move file to cwd
+/preview index.html  # Serve HTML in browser
+/run test.py         # Execute a script
+
+# Sync & Remote
+/sync push           # Push session to WebDAV
+/sync pull           # Pull sessions from WebDAV
+/rc                  # Show Remote Connect URL
 ```
 
 Or resume from the command line:
@@ -219,3 +230,5 @@ The agent analyzes your project structure, reads config files and source code, a
 - [Tools Reference](tools.md) -- All 26 tools with usage examples
 - [Models](models.md) -- Model discovery, ranking, and the model roster
 - [Benchmarking](benchmark.md) -- Smart benchmark, roster building, and interpreting results
+- [Sandbox & Preview](sandbox-preview.md) -- Scratch space, script execution, HTML preview
+- [Sync & Remote Connect](sync-rc.md) -- Cross-device sync and phone web UI
