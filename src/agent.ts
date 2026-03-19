@@ -57,6 +57,7 @@ export class Agent {
   private config: Config;
   private abortController: AbortController | null = null;
   private effort: EffortLevel = 'medium';
+  private allowedTools: Set<string> | null = null; // null = all allowed
 
   constructor(config: Config, registry: ToolRegistry, modelManager: ModelManager, permissions: PermissionManager) {
     this.ollama = new Ollama({ host: config.proxyUrl });
@@ -201,23 +202,31 @@ export class Agent {
   }
 
   /** Expand @file mentions in user messages — reads the file and appends content */
+  /** Expand @file mentions — searches cwd + additional dirs */
   private async expandFileMentions(message: string): Promise<string> {
     const mentionPattern = /@([\w./-]+(?:\.\w+))/g;
     const mentions = [...message.matchAll(mentionPattern)];
     if (mentions.length === 0) return message;
 
+    const searchDirs = this.context.getSearchDirs();
     const fileContents: string[] = [];
     for (const match of mentions) {
-      const filePath = resolve(process.cwd(), match[1]);
-      if (existsSync(filePath)) {
-        try {
-          const content = await readFileAsync(filePath, 'utf-8');
-          const lines = content.split('\n');
-          const preview = lines.length > 200
-            ? lines.slice(0, 200).join('\n') + `\n... (${lines.length - 200} more lines)`
-            : content;
-          fileContents.push(`\n<file path="${relative(process.cwd(), filePath)}">\n${preview}\n</file>`);
-        } catch { /* skip unreadable files */ }
+      // Try each search directory until we find the file
+      let found = false;
+      for (const dir of searchDirs) {
+        const filePath = resolve(dir, match[1]);
+        if (existsSync(filePath)) {
+          try {
+            const content = await readFileAsync(filePath, 'utf-8');
+            const lines = content.split('\n');
+            const preview = lines.length > 200
+              ? lines.slice(0, 200).join('\n') + `\n... (${lines.length - 200} more lines)`
+              : content;
+            fileContents.push(`\n<file path="${relative(process.cwd(), filePath)}">\n${preview}\n</file>`);
+            found = true;
+            break;
+          } catch { /* skip unreadable */ }
+        }
       }
     }
 
@@ -269,6 +278,11 @@ export class Agent {
 
   getSubAgents(): SubAgentManager | null {
     return this.subAgents;
+  }
+
+  /** Restrict tools to a specific set (for API requests with client-defined tools) */
+  setAllowedTools(names: string[] | null): void {
+    this.allowedTools = names ? new Set(names) : null;
   }
 
   setEffort(level: EffortLevel): void {
@@ -384,12 +398,17 @@ export class Agent {
         // act:  thinking OFF, all tools, auto-switch model
         // chat: thinking OFF, web/search tools only, standard model
         const useThinking = this.mode === 'plan';
-        const tools = this.mode === 'chat'
+        let tools = this.mode === 'chat'
           ? this.registry.toOllamaTools().filter(t => {
               const name = t.function?.name || '';
               return CHAT_TOOLS.includes(name);
             })
           : this.registry.toOllamaTools();
+
+        // Filter tools for API requests with client-constrained tool sets
+        if (this.allowedTools) {
+          tools = tools.filter(t => this.allowedTools!.has(t.function?.name || ''));
+        }
         const effortOpts = this.getEffortOptions();
         const stream = await this.ollama.chat({
           model: currentModel,
@@ -512,6 +531,13 @@ export class Agent {
       for (const call of toolCalls) {
         const toolName = call.function.name;
         const toolArgs = (call.function.arguments || {}) as Record<string, unknown>;
+
+        // Enforce tool allowlist (for API requests with client-constrained tools)
+        if (this.allowedTools && !this.allowedTools.has(toolName) && toolName !== 'update_memory') {
+          yield { type: 'tool_result', name: toolName, success: false, content: `Tool "${toolName}" is not in the allowed set for this request` };
+          this.context.addToolResult(toolName, `Tool "${toolName}" not allowed`);
+          continue;
+        }
 
         // Handle update_memory tool internally
         if (toolName === 'update_memory') {

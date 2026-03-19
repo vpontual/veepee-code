@@ -23,7 +23,7 @@ veepee-code                    # Alternative command name
 | `-c`, `--continue` | Resume the most recent session automatically. |
 | `--host=<addr>` | API bind address (default `127.0.0.1`). |
 | `--port=<port>` | API port (default `8484`). |
-| `--json-schema=<file>` | Structured JSON output mode. Requires `-p`. The agent's response is constrained to match the JSON schema defined in the given file. |
+| `--json-schema=<file>` | Validates output against JSON Schema file (loads schema, checks required fields and types, outputs clean JSON). Used with `-p`. |
 
 ## Commands
 
@@ -293,11 +293,11 @@ Manage git worktree isolation for experiments.
 ```
 /worktree              # Show current worktree status
 /worktree list         # List all worktrees
-/worktree create exp   # Create a new worktree named "exp" and switch into it
+/worktree create exp   # Create a new worktree named "exp" (prints path; cd into it manually)
 /worktree cleanup      # Remove merged/stale worktrees
 ```
 
-Worktrees let you experiment in an isolated branch without affecting your main working directory. Requires a git repository.
+Worktrees let you experiment in an isolated branch without affecting your main working directory. `/worktree create` prints the worktree path; you must `cd` into it manually. Requires a git repository.
 
 #### /rename <name>
 

@@ -10,6 +10,8 @@ VEEPEE Code includes 26 tools organized into eight categories. Core tools are al
 
 Run `/tools` to see which tools are active in your current session, or `/setup` to see the full integration status.
 
+> **Note:** Directories registered via `/add-dir` are searched by `@file` mentions and tool operations (read_file, glob, grep, etc.), extending the agent's working scope beyond the primary CWD.
+
 ## Coding Tools (Always Available)
 
 ### read_file

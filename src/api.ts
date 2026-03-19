@@ -82,18 +82,16 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
           return;
         }
 
-        // If client provides tool definitions, constrain to those tools only
-        // by prepending a system instruction (the agent always has all tools
-        // available but will respect this constraint)
-        let userContent = lastUserMsg.content;
+        // If client provides tool definitions, constrain agent to those tools only
+        const userContent = lastUserMsg.content;
+        let clientToolNames: string[] | null = null;
         if (data.tools && Array.isArray(data.tools) && data.tools.length > 0) {
-          const clientToolNames = data.tools
+          clientToolNames = data.tools
             .map((t: any) => t?.function?.name)
             .filter(Boolean) as string[];
-          if (clientToolNames.length > 0) {
-            userContent = `[System: For this request, only use these tools: ${clientToolNames.join(', ')}. Do not call any other tools.]\n\n${userContent}`;
-          }
         }
+        // Set tool filter before running (cleared after)
+        agent.setAllowedTools(clientToolNames);
 
         if (data.stream) {
           // Streaming response (SSE)
@@ -185,6 +183,7 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
             }
           }
 
+          agent.setAllowedTools(null); // clear filter
           res.end();
           return;
         }
@@ -222,6 +221,7 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
             total_tokens: 0,
           },
         });
+        agent.setAllowedTools(null); // clear filter
         return;
       }
 

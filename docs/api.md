@@ -51,7 +51,7 @@ OpenAI-compatible chat completions. The agent processes the last user message, e
 | `model` | string | No | Model to use. If specified and valid, the agent switches to it. Otherwise uses the current default. |
 | `messages` | array | Yes | Array of message objects with `role` and `content`. Only the last user message is processed. |
 | `stream` | boolean | No | Enable Server-Sent Events streaming (default false). |
-| `tools` | array | No | OpenAI-format tool definitions. If provided, constrains the agent to only use tools in this list (intersection with registered tools). |
+| `tools` | array | No | OpenAI-format tool definitions. If provided, constrains the agent to only use tools in this list (intersection with registered tools). Constraints are enforced at the registry level: only matching tools are sent to Ollama and execution is gated, not just prompt-based. |
 
 **Non-streaming response:**
 
@@ -85,20 +85,11 @@ OpenAI-compatible chat completions. The agent processes the last user message, e
     "prompt_tokens": 0,
     "completion_tokens": 0,
     "total_tokens": 0
-  },
-  "veepee_code": {
-    "tool_calls": [
-      {
-        "name": "read_file",
-        "args": { "path": "src/index.ts" },
-        "result": "..."
-      }
-    ]
   }
 }
 ```
 
-> **Note:** The `usage` field always returns zeros -- token counting is approximate and tracked separately in the context manager. The assistant message now includes a standard OpenAI `tool_calls` array alongside the legacy `veepee_code` extension for backwards compatibility.
+> **Note:** The `usage` field always returns zeros -- token counting is approximate and tracked separately in the context manager. The assistant message includes a standard OpenAI `tool_calls` array when tool calls were made.
 
 **Streaming response (SSE):**
 

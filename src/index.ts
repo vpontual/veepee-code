@@ -89,16 +89,52 @@ async function main() {
       }
     }
 
-    // If --json-schema was provided, validate and output as JSON
+    // If --json-schema was provided, extract JSON, validate against schema, and output
     if (jsonSchemaFile) {
       try {
-        // Try to extract JSON from the response
+        const { readFileSync, existsSync: schemaExists } = await import('fs');
+        const { resolve: resolvePath } = await import('path');
+
+        // Extract JSON from the model response
         const jsonMatch = output.match(/```json\s*([\s\S]*?)```/) || output.match(/\{[\s\S]*\}/);
         const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : output;
         const parsed = JSON.parse(jsonStr.trim());
+
+        // Load and validate against schema if the file exists
+        const schemaPath = resolvePath(jsonSchemaFile);
+        if (schemaExists(schemaPath)) {
+          const schema = JSON.parse(readFileSync(schemaPath, 'utf-8'));
+
+          // Lightweight validation: check required fields and types
+          const errors: string[] = [];
+          if (schema.required && Array.isArray(schema.required)) {
+            for (const field of schema.required) {
+              if (!(field in parsed)) {
+                errors.push(`Missing required field: ${field}`);
+              }
+            }
+          }
+          if (schema.properties && typeof schema.properties === 'object') {
+            for (const [key, prop] of Object.entries(schema.properties)) {
+              if (key in parsed && (prop as { type?: string }).type) {
+                const expectedType = (prop as { type: string }).type;
+                const actualType = Array.isArray(parsed[key]) ? 'array' : typeof parsed[key];
+                if (expectedType !== actualType && !(expectedType === 'integer' && actualType === 'number')) {
+                  errors.push(`Field "${key}": expected ${expectedType}, got ${actualType}`);
+                }
+              }
+            }
+          }
+
+          if (errors.length > 0) {
+            process.stderr.write(`Schema validation warnings:\n${errors.map(e => `  - ${e}`).join('\n')}\n`);
+          }
+        }
+
         process.stdout.write(JSON.stringify(parsed, null, 2));
-      } catch {
+      } catch (err) {
         // If can't parse as JSON, wrap the raw output
+        process.stderr.write(`JSON extraction failed: ${(err as Error).message}\n`);
         process.stdout.write(JSON.stringify({ result: output.trim() }));
       }
     }
@@ -1127,11 +1163,12 @@ ${gathered.join('\n\n')}`;
         tui.showError(`Directory not found: ${resolved}`);
         return;
       }
-      // Add to knowledge state and invalidate project tree cache
+      // Register as search path for @file resolution and tool operations
+      agent.getContext().addSearchDir(resolved);
       agent.getContext().getKnowledgeState().updateMemory('fact', `Additional working directory: ${resolved}`);
       agent.getContext().invalidateProjectTree();
       tui.showInfo(`${theme.success('Added directory:')} ${resolved}`);
-      tui.showInfo(theme.dim('The model will be aware of this directory. Use @file paths relative to it.'));
+      tui.showInfo(theme.dim('  @file mentions and tools will now search this directory too.'));
       return;
     }
 

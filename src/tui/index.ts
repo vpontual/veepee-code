@@ -800,8 +800,24 @@ export class TUI {
     }
   }
 
+  private lastRenderTime = 0;
+  private renderPending = false;
+
   private renderStreamArea(): void {
-    // Full re-render during streaming to keep everything in sync
+    // Throttle renders during streaming to avoid CPU thrashing on fast models
+    const now = Date.now();
+    if (now - this.lastRenderTime < 50) { // max 20fps
+      if (!this.renderPending) {
+        this.renderPending = true;
+        setTimeout(() => {
+          this.renderPending = false;
+          this.lastRenderTime = Date.now();
+          this.render();
+        }, 50);
+      }
+      return;
+    }
+    this.lastRenderTime = now;
     this.render();
   }
 
@@ -1004,7 +1020,19 @@ export class TUI {
     // ─── Normal input handling ───────────────────────────────────────
 
     // Shift+Enter or Alt+Enter — insert newline for multi-line input
-    if (key === '\x1b\r' || key === '\x1b\n') {
+    // Terminals send various sequences: ESC+CR, ESC+LF, CSI 13;2u (kitty), CSI 27;2;13~ (xterm)
+    if (key === '\x1b\r' || key === '\x1b\n' || key === '\x1b[13;2u' || key === '\x1b[27;2;13~') {
+      this.input.text =
+        this.input.text.slice(0, this.input.cursor) +
+        '\n' +
+        this.input.text.slice(this.input.cursor);
+      this.input.cursor++;
+      this.render();
+      return;
+    }
+
+    // Alt+Enter (some terminals send ESC followed by carriage return as two bytes)
+    if (key.length === 2 && key[0] === '\x1b' && (key[1] === '\r' || key[1] === '\n')) {
       this.input.text =
         this.input.text.slice(0, this.input.cursor) +
         '\n' +

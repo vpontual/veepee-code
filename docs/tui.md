@@ -127,7 +127,7 @@ The tracker disappears when the agent completes, replaced by the completion badg
 
 Assistant text streams token-by-token into the message area. During streaming:
 
-- The message area updates in real-time as tokens arrive (full re-render on each token)
+- The message area updates in real-time as tokens arrive (render-throttled to max 20fps to reduce CPU usage)
 - The stream buffer accumulates text that has not yet been committed as a message
 - When streaming ends (`endStream`), the buffer is committed as an assistant message
 - Tool calls interrupt the stream -- the current text is committed, the tool call is shown, and streaming resumes after the tool result
@@ -159,7 +159,7 @@ The TUI uses raw mode input (`process.stdin.setRawMode(true)`) to capture indivi
 | `Left` / `Right` | Move cursor |
 | `Home` / `Ctrl+A` | Move cursor to start |
 | `End` / `Ctrl+E` | Move cursor to end |
-| `Shift+Enter` | Insert a newline (multi-line input) |
+| `Shift+Enter` | Insert a newline (multi-line input). Handles multiple terminal key sequences: ESC+CR, CSI 13;2u (kitty protocol), and CSI 27;2;13~ (xterm). If Shift+Enter does not work in your terminal, use Alt+Enter or paste multi-line text. |
 | `Enter` | Submit input (if non-empty) |
 
 ### Navigation & Scrolling

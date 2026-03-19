@@ -210,6 +210,7 @@ export class ContextManager {
   private knowledgeState: KnowledgeState;
   private slidingWindowSize = 6; // last N messages sent to API
   private registeredToolNames: string[] = [];
+  private additionalDirs: string[] = [];
 
   constructor(sessionId?: string) {
     this.knowledgeState = new KnowledgeState(sessionId || Date.now().toString(36));
@@ -218,6 +219,18 @@ export class ContextManager {
   /** Set the list of actually registered tool names (for dynamic prompt generation) */
   setRegisteredTools(names: string[]): void {
     this.registeredToolNames = names;
+  }
+
+  /** Add an additional working directory for @file resolution */
+  addSearchDir(dir: string): void {
+    if (!this.additionalDirs.includes(dir)) {
+      this.additionalDirs.push(dir);
+    }
+  }
+
+  /** Get all search directories (cwd + additional) */
+  getSearchDirs(): string[] {
+    return [process.cwd(), ...this.additionalDirs];
   }
 
   setSystemPrompt(model: string): void {
