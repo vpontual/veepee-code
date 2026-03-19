@@ -173,6 +173,9 @@ export class TUI {
   private resolveInput: ((value: string) => void) | null = null;
   private rejectInput: ((reason: Error) => void) | null = null;
   private permissionResolve: ((value: string) => void) | null = null;
+  private permissionMenuSelection = 0;
+  private permissionToolName = '';
+  private permissionOptions: Array<{ label: string; value: string }> = [];
   onTabTools: (() => void) | null = null;
   private toolsShown = false;
   private streamBuffer = '';
@@ -258,28 +261,32 @@ export class TUI {
     });
   }
 
-  /** Show a permission prompt and wait for y/a/n */
+  /** Show a permission prompt with selectable menu (Claude Code-style) */
   async promptPermission(toolName: string, args: Record<string, unknown>, reason?: string): Promise<string> {
-    this.addMessage({
-      role: 'system',
-      content: `${icons.warn} Permission required: ${toolName}${reason ? ` (${reason})` : ''}`,
-    });
-
+    // Show what the tool wants to do
     const argsSummary = Object.entries(args)
       .map(([k, v]) => {
         const val = typeof v === 'string'
           ? (v.length > 80 ? v.slice(0, 77) + '...' : v)
           : JSON.stringify(v);
-        return `  ${theme.muted(k)}: ${val}`;
+        return `${theme.muted(k)}: ${val}`;
       })
-      .join('\n');
-    if (argsSummary) {
-      this.addMessage({ role: 'system', content: argsSummary });
-    }
+      .join('  ');
+
     this.addMessage({
       role: 'system',
-      content: `${theme.muted('[y] Yes  [a] Always allow')} ${theme.accent(toolName)} ${theme.muted(' [n] No')}`,
+      content: `${theme.warning(icons.warn)} ${theme.textBold(toolName)}${reason ? theme.muted(` (${reason})`) : ''}  ${argsSummary}`,
     });
+
+    // Set up the selectable menu
+    this.permissionToolName = toolName;
+    this.permissionMenuSelection = 0;
+    this.permissionOptions = [
+      { label: 'Yes', value: 'y' },
+      { label: `Yes, always allow ${theme.accent(toolName)}`, value: 'a' },
+      { label: 'No', value: 'n' },
+    ];
+
     this.render();
 
     return new Promise((resolve) => {
@@ -641,6 +648,25 @@ export class TUI {
       for (const line of wrapped) {
         renderedLines.push({ line, role: 'assistant' });
       }
+    }
+
+    // Add permission menu if active (Claude Code-style selectable list)
+    if (this.permissionResolve && this.permissionOptions.length > 0) {
+      renderedLines.push({ line: '', role: 'spacer' });
+      renderedLines.push({ line: theme.textBold('  Do you want to proceed?'), role: 'system' });
+      for (let i = 0; i < this.permissionOptions.length; i++) {
+        const opt = this.permissionOptions[i];
+        const isSelected = i === this.permissionMenuSelection;
+        const pointer = isSelected ? theme.accent(`${icons.arrow} `) : '  ';
+        const label = isSelected ? theme.textBold(stripAnsi(opt.label)) : theme.text(stripAnsi(opt.label));
+        const num = theme.muted(`${i + 1}. `);
+        renderedLines.push({ line: `  ${pointer}${num}${label}`, role: 'system' });
+      }
+      renderedLines.push({ line: '', role: 'spacer' });
+      renderedLines.push({
+        line: theme.dim(`  Esc cancel ${icons.dot} Up/Down navigate ${icons.dot} Enter select ${icons.dot} y/a/n quick keys`),
+        role: 'system',
+      });
     }
 
     // Scroll: auto-scroll to bottom unless user has scrolled up
@@ -1031,17 +1057,53 @@ export class TUI {
       return;
     }
 
-    // Permission prompt mode
+    // Permission prompt mode — selectable menu
     if (this.permissionResolve) {
+      // Arrow up/down — navigate menu
+      if (key === '\x1b[A') {
+        this.permissionMenuSelection = Math.max(0, this.permissionMenuSelection - 1);
+        this.render();
+        return;
+      }
+      if (key === '\x1b[B') {
+        this.permissionMenuSelection = Math.min(this.permissionOptions.length - 1, this.permissionMenuSelection + 1);
+        this.render();
+        return;
+      }
+      // Enter — select current option
+      if (key === '\r' || key === '\n') {
+        const selected = this.permissionOptions[this.permissionMenuSelection];
+        this.addMessage({ role: 'system', content: theme.dim(`  ${icons.arrow} ${stripAnsi(selected.label)}`) });
+        this.permissionResolve(selected.value);
+        this.permissionResolve = null;
+        this.permissionOptions = [];
+        this.render();
+        return;
+      }
+      // Quick keys still work
       if (key === 'y' || key === 'Y') {
+        this.addMessage({ role: 'system', content: theme.dim(`  ${icons.arrow} Yes`) });
         this.permissionResolve('y');
         this.permissionResolve = null;
-      } else if (key === 'a' || key === 'A') {
+        this.permissionOptions = [];
+        this.render();
+        return;
+      }
+      if (key === 'a' || key === 'A') {
+        this.addMessage({ role: 'system', content: theme.dim(`  ${icons.arrow} Always allow ${this.permissionToolName}`) });
         this.permissionResolve('a');
         this.permissionResolve = null;
-      } else if (key === 'n' || key === 'N' || key === '\x1b') {
+        this.permissionOptions = [];
+        this.render();
+        return;
+      }
+      if (key === 'n' || key === 'N' || key === '\x1b') {
+        this.addMessage({ role: 'system', content: theme.dim(`  ${icons.arrow} No`) });
         this.permissionResolve('n');
         this.permissionResolve = null;
+        this.permissionOptions = [];
+        this.render();
+        return;
       }
       return;
     }
