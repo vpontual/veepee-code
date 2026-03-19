@@ -48,7 +48,10 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
     }
 
     // Auth check — if token is configured, require Bearer token
-    if (apiToken) {
+    // Skip auth for GET /rc (serves login page) and GET /rc/stream (has its own token check via query param)
+    const reqPath = req.url?.split('?')[0] || '';
+    const skipAuth = (reqPath === '/rc' && req.method === 'GET') || (reqPath === '/rc/stream' && req.method === 'GET');
+    if (apiToken && !skipAuth) {
       const authHeader = req.headers.authorization || '';
       const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
       if (token !== apiToken) {

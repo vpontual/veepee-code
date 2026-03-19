@@ -218,11 +218,13 @@ async function main() {
   const apiToken = process.env.VEEPEE_CODE_API_TOKEN || null;
   let rcHandler: ((req: import('http').IncomingMessage, res: import('http').ServerResponse, url: URL) => Promise<boolean>) | undefined;
   let rcInstallPermissions: (() => void) | undefined;
+  let rcOnRemoteMessage: ((handler: (message: string, events: AsyncGenerator<import('./agent.js').AgentEvent>) => void) => void) | undefined;
 
   if (rcEnabled) {
     const rc = registerRcRoutes(agent, permissions, preview, parseInt(cliPort || process.env.VEEPEE_CODE_API_PORT || '8484', 10), apiToken);
     rcHandler = rc.handleRequest;
     rcInstallPermissions = rc.installPermissionHandler;
+    rcOnRemoteMessage = rc.onRemoteMessage;
   }
 
   // Start API server
@@ -261,6 +263,40 @@ async function main() {
   // Install RC permission handler (wraps TUI handler, routes to web when RC clients are connected)
   if (rcInstallPermissions) {
     rcInstallPermissions();
+  }
+
+  // Wire RC remote messages to TUI — when someone sends from the phone, render it in the terminal too
+  if (rcOnRemoteMessage) {
+    rcOnRemoteMessage(async (message, events) => {
+      tui.addUserMessage(`[RC] ${message}`);
+      tui.startStream();
+      for await (const event of events) {
+        switch (event.type) {
+          case 'text':
+            if (event.content) tui.appendStream(event.content);
+            break;
+          case 'tool_call':
+            tui.endStream();
+            tui.showToolCall(event.name!, event.args || {});
+            break;
+          case 'tool_result':
+            tui.showToolResult(event.name!, event.success!, event.content || event.error || '');
+            tui.startStream();
+            break;
+          case 'error':
+            tui.endStream();
+            tui.showError(event.error || 'Unknown error');
+            break;
+          case 'done':
+            tui.endStream();
+            tui.showCompletionBadge(modelManager.getCurrentModel(), 0, {
+              evalCount: event.evalCount,
+              tokensPerSecond: event.tokensPerSecond,
+            });
+            break;
+        }
+      }
+    });
   }
 
   // Wire Tab → show tools (without going through the input pipeline)

@@ -60,7 +60,10 @@ export function registerRcRoutes(
 ): {
   handleRequest: (req: IncomingMessage, res: ServerResponse, url: URL) => Promise<boolean>;
   installPermissionHandler: () => void;
+  onRemoteMessage: (handler: (message: string, events: AsyncGenerator<AgentEvent>) => void) => void;
 } {
+
+  let remoteMessageHandler: ((message: string, events: AsyncGenerator<AgentEvent>) => void) | null = null;
 
   /** Check auth for RC routes */
   function checkAuth(req: IncomingMessage): boolean {
@@ -124,6 +127,16 @@ export function registerRcRoutes(
       // Send initial keepalive
       res.write(': connected\n\n');
 
+      // Replay recent message history so the client catches up
+      const recentMessages = agent.getContext().getAllMessages().slice(-20);
+      for (const msg of recentMessages) {
+        if (msg.role === 'user' && msg.content) {
+          res.write(`event: history\ndata: ${JSON.stringify({ role: 'user', content: msg.content })}\n\n`);
+        } else if (msg.role === 'assistant' && msg.content) {
+          res.write(`event: history\ndata: ${JSON.stringify({ role: 'assistant', content: msg.content })}\n\n`);
+        }
+      }
+
       // Keepalive every 15s
       const keepalive = setInterval(() => {
         try { res.write(': keepalive\n\n'); } catch { /* */ }
@@ -151,14 +164,23 @@ export function registerRcRoutes(
       // Acknowledge receipt immediately
       sendJson(res, 200, { ok: true });
 
-      // Run agent asynchronously — events are broadcast via SSE
-      (async () => {
-        for await (const event of agent.run(data.message)) {
-          broadcastAgentEvent(event);
-        }
-      })().catch(err => {
-        broadcast('error_event', { error: String(err) });
-      });
+      // Add user message to agent context
+      agent.getContext().addUser(data.message);
+
+      // Run agent asynchronously — events are broadcast via SSE + TUI
+      const eventStream = agent.run(data.message);
+      if (remoteMessageHandler) {
+        remoteMessageHandler(data.message, eventStream);
+      } else {
+        // No TUI handler — just broadcast to SSE clients
+        (async () => {
+          for await (const event of eventStream) {
+            broadcastAgentEvent(event);
+          }
+        })().catch(err => {
+          broadcast('error_event', { error: String(err) });
+        });
+      }
 
       return true;
     }
@@ -304,5 +326,11 @@ export function registerRcRoutes(
     });
   }
 
-  return { handleRequest, installPermissionHandler };
+  return {
+    handleRequest,
+    installPermissionHandler,
+    onRemoteMessage: (handler: (message: string, events: AsyncGenerator<AgentEvent>) => void) => {
+      remoteMessageHandler = handler;
+    },
+  };
 }

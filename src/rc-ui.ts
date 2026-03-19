@@ -308,6 +308,11 @@ function connectStream() {
 
   eventSource = new EventSource(API_BASE + '/rc/stream?token=' + encodeURIComponent(token));
 
+  eventSource.addEventListener('history', (e) => {
+    const data = JSON.parse(e.data);
+    addMessage(data.role === 'user' ? 'user' : 'assistant', data.content);
+  });
+
   eventSource.addEventListener('text', (e) => {
     const data = JSON.parse(e.data);
     if (!currentStreamEl) {
