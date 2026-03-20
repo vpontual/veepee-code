@@ -560,7 +560,12 @@ export class TUI {
   }
 
   private renderWelcome(rows: number, cols: number): void {
-    clearScreen();
+    hideCursor();
+    // Clear by overwriting (avoids flash from clearScreen)
+    for (let r = 1; r <= rows; r++) {
+      moveTo(r, 1);
+      process.stdout.write(' '.repeat(cols));
+    }
 
     const logo = getLogo(cols);
     const logoHeight = logo.length;
@@ -584,13 +589,7 @@ export class TUI {
   }
 
   private renderConversation(rows: number, cols: number): void {
-    // Clear by overwriting each line
     hideCursor();
-    for (let r = 1; r <= rows; r++) {
-      moveTo(r, 1);
-      process.stdout.write(' '.repeat(cols));
-    }
-
 
     // Layout: turn tracker (if active), messages area, input box, status bar
     // Input box = 4 rows: border + text + model + border
@@ -603,12 +602,21 @@ export class TUI {
     const trackerHeight = this.turnTracker?.active ? Math.min(this.turnTracker.toolCalls.length + 2, 8) : 0;
     const messagesEndRow = rows - totalBottomHeight - trackerHeight - 1;
 
+    // Clear top rows (often clipped by terminal title/tab bar)
+    const blank = ' '.repeat(cols);
+    for (let r = 1; r <= 2; r++) {
+      writeAt(r, 1, blank);
+    }
+
     // Render messages (start at row 3 — rows 1-2 can be clipped by terminal title/tab bar)
     this.renderMessages(3, messagesEndRow, cols);
 
     // Render turn tracker (agent tree view) above input box
     if (this.turnTracker?.active && trackerHeight > 0) {
       this.renderTurnTracker(messagesEndRow + 1, cols);
+    } else {
+      // Clear the gap row between messages and input when tracker is inactive
+      writeAt(messagesEndRow + 1, 1, blank);
     }
 
     // Status bar FIRST (so cursor isn't left here)
@@ -687,7 +695,15 @@ export class TUI {
     }
 
     for (let i = startLine; i < renderedLines.length && row <= endRow; i++) {
-      writeAt(row, leftPad, renderedLines[i].line);
+      const line = renderedLines[i].line;
+      const visLen = stripAnsi(line).length;
+      const pad = Math.max(0, cols - leftPad - visLen);
+      writeAt(row, leftPad, line + ' '.repeat(pad));
+      row++;
+    }
+    // Clear any remaining rows in the message area to prevent stale content
+    while (row <= endRow) {
+      writeAt(row, 1, ' '.repeat(cols));
       row++;
     }
   }
@@ -779,7 +795,8 @@ export class TUI {
 
     // Header: Running... (3 tool calls · 1.2k tokens · 4.5s)
     const header = `${theme.accent(frame)} ${theme.textBold('Running...')} ${theme.muted(`(${toolCount} tool calls ${icons.dot} ${tokStr} tokens ${icons.dot} ${elapsed}s)`)}`;
-    writeAt(startRow, leftPad, header);
+    const headerLen = stripAnsi(header).length;
+    writeAt(startRow, leftPad, header + ' '.repeat(Math.max(0, cols - leftPad - headerLen)));
 
     // Tool call tree — show last N calls with tree connectors
     const maxVisible = 5;
@@ -789,7 +806,9 @@ export class TUI {
     let row = startRow + 1;
 
     if (hasMore) {
-      writeAt(row, leftPad, theme.muted(`  ${icons.dot}${icons.dot}${icons.dot} ${this.turnTracker.toolCalls.length - maxVisible} earlier`));
+      const moreText = theme.muted(`  ${icons.dot}${icons.dot}${icons.dot} ${this.turnTracker.toolCalls.length - maxVisible} earlier`);
+      const moreLen = stripAnsi(moreText).length;
+      writeAt(row, leftPad, moreText + ' '.repeat(Math.max(0, cols - leftPad - moreLen)));
       row++;
     }
 
@@ -811,7 +830,9 @@ export class TUI {
       }
 
       const elapsedStr = tc.elapsed ? theme.muted(` ${(tc.elapsed / 1000).toFixed(1)}s`) : '';
-      writeAt(row, leftPad, `  ${theme.muted(connector)} ${statusIcon} ${statusColor(tc.name)}${elapsedStr}`);
+      const tcLine = `  ${theme.muted(connector)} ${statusIcon} ${statusColor(tc.name)}${elapsedStr}`;
+      const tcLen = stripAnsi(tcLine).length;
+      writeAt(row, leftPad, tcLine + ' '.repeat(Math.max(0, cols - leftPad - tcLen)));
       row++;
     }
   }
@@ -922,7 +943,9 @@ export class TUI {
 
     // Keyboard hints below box
     const hints = `${theme.textBold('tab')} ${theme.muted('tools')}  ${theme.textBold('ctrl+p')} ${theme.muted('commands')}  ${theme.textBold('/help')} ${theme.muted('help')}`;
-    writeAt(topRow + 4, leftPad + 2, center(hints, boxWidth - 4));
+    const centeredHints = center(hints, boxWidth - 4);
+    const hintsLen = stripAnsi(centeredHints).length;
+    writeAt(topRow + 4, leftPad + 2, centeredHints + ' '.repeat(Math.max(0, cols - leftPad - 2 - hintsLen)));
 
     // CURSOR POSITIONING — absolute last action of this function.
     // This is the ONLY place cursor position is set. No other code touches it.
