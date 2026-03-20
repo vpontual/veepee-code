@@ -11,6 +11,7 @@ import { getLogo, getLogoHeight } from './logo.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ModelManager, ModelProfile } from '../models.js';
 
+
 export { theme, box, icons } from './theme.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -319,10 +320,10 @@ export class TUI {
       active: true,
     };
 
-    // Live-update the tracker display every 100ms
+    // Live-update the tracker display every 500ms (coalesced to avoid double-render)
     if (this.turnTrackerInterval) clearInterval(this.turnTrackerInterval);
     this.turnTrackerInterval = setInterval(() => {
-      if (this.turnTracker?.active) this.render();
+      if (this.turnTracker?.active) this.scheduleRender();
     }, 500);
 
     this.render();
@@ -599,31 +600,28 @@ export class TUI {
     const hintsHeight = 1;
     const inputBoxHeight = 4;  // ╭ border + text + model + ╰ border
     const totalBottomHeight = inputBoxHeight + hintsHeight + statusBarHeight;
-    const trackerHeight = this.turnTracker?.active ? Math.min(this.turnTracker.toolCalls.length + 2, 8) : 0;
+    const trackerHeight = this.turnTracker?.active ? Math.min(this.turnTracker.toolCalls.length + 1, 8) : 0;
     const messagesEndRow = rows - totalBottomHeight - trackerHeight - 1;
+    const inputRow = rows - totalBottomHeight;
 
-    // Clear top rows (often clipped by terminal title/tab bar)
+    // Clear entire screen to prevent any stale content
     const blank = ' '.repeat(cols);
-    for (let r = 1; r <= 2; r++) {
+    for (let r = 1; r <= rows; r++) {
       writeAt(r, 1, blank);
     }
 
     // Render messages (start at row 3 — rows 1-2 can be clipped by terminal title/tab bar)
     this.renderMessages(3, messagesEndRow, cols);
 
-    // Render turn tracker (agent tree view) above input box
+    // Render turn tracker above input box if active
     if (this.turnTracker?.active && trackerHeight > 0) {
       this.renderTurnTracker(messagesEndRow + 1, cols);
-    } else {
-      // Clear the gap row between messages and input when tracker is inactive
-      writeAt(messagesEndRow + 1, 1, blank);
     }
 
     // Status bar FIRST (so cursor isn't left here)
     this.renderStatusBar(rows, cols);
 
     // Input box LAST (its final action is positioning the cursor)
-    const inputRow = rows - totalBottomHeight;
     this.renderInputBox(inputRow, cols);
   }
 
@@ -963,24 +961,28 @@ export class TUI {
   }
 
   private lastRenderTime = 0;
-  private renderPending = false;
+  private renderPending: ReturnType<typeof setTimeout> | null = null;
+
+  /** Schedule a coalesced render — multiple calls within 50ms collapse into one */
+  private scheduleRender(): void {
+    if (this.renderPending) return; // already queued
+    const elapsed = Date.now() - this.lastRenderTime;
+    if (elapsed >= 50) {
+      // Enough time passed — render immediately
+      this.lastRenderTime = Date.now();
+      this.render();
+    } else {
+      // Too soon — defer to avoid overlapping renders
+      this.renderPending = setTimeout(() => {
+        this.renderPending = null;
+        this.lastRenderTime = Date.now();
+        this.render();
+      }, 50 - elapsed);
+    }
+  }
 
   private renderStreamArea(): void {
-    // Throttle renders during streaming to avoid CPU thrashing on fast models
-    const now = Date.now();
-    if (now - this.lastRenderTime < 50) { // max 20fps
-      if (!this.renderPending) {
-        this.renderPending = true;
-        setTimeout(() => {
-          this.renderPending = false;
-          this.lastRenderTime = Date.now();
-          this.render();
-        }, 50);
-      }
-      return;
-    }
-    this.lastRenderTime = now;
-    this.render();
+    this.scheduleRender();
   }
 
   private renderStatusBar(row: number, cols: number): void {

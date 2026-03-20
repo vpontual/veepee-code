@@ -86,6 +86,40 @@ describe('TUI rendering (no full-screen flash)', () => {
     expect(allOutput).not.toContain('\x1b[2J');
   });
 
+  it('concurrent render requests are coalesced into one render', async () => {
+    vi.useFakeTimers();
+    const { TUI } = await import('../src/tui/index.js');
+    const tui = new TUI();
+
+    (tui as any).state = 'conversation';
+    (tui as any).modelName = 'test-model';
+    (tui as any).modelSize = '8B';
+    (tui as any).version = '0.3.0';
+    (tui as any).streamActive = true;
+    (tui as any).streamBuffer = 'Hello';
+    (tui as any).turnTracker = {
+      startTime: Date.now(), toolCalls: [], tokensEstimate: 0,
+      model: 'test-model', active: true,
+    };
+
+    // First render to establish lastRenderTime
+    stdoutWrites = [];
+    (tui as any).lastRenderTime = Date.now();
+    const renderSpy = vi.spyOn(tui, 'render');
+
+    // Fire multiple scheduleRender calls rapidly (simulating stream + tracker race)
+    (tui as any).scheduleRender();
+    (tui as any).scheduleRender();
+    (tui as any).scheduleRender();
+
+    // Only one deferred render should be queued, not three
+    vi.advanceTimersByTime(60);
+    expect(renderSpy.mock.calls.length).toBeLessThanOrEqual(1);
+
+    renderSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
   it('messages area pads lines to full width', async () => {
     const { TUI } = await import('../src/tui/index.js');
     const tui = new TUI();
