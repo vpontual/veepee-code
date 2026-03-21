@@ -4,3 +4,6 @@ dist/
 *.tsbuildinfo
 .DS_Store
 .continue/
+
+# VEEPEE Code project instructions
+VEEPEE.md

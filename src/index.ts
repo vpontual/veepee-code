@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from 'path';
+import { execSync } from 'child_process';
 import chalk from 'chalk';
 import { loadConfig } from './config.js';
 import { ModelManager } from './models.js';
@@ -515,6 +516,16 @@ async function main() {
     const trimmed = input.trim();
     if (!trimmed) continue;
 
+    // Shell escape: !command runs in terminal without touching the AI
+    if (trimmed.startsWith('!')) {
+      const shellCmd = trimmed.slice(1).trim();
+      if (shellCmd) {
+        tui.addCommandMessage(trimmed);
+        await runShellCommand(shellCmd, tui);
+      }
+      continue;
+    }
+
     // Handle commands
     if (trimmed.startsWith('/')) {
       // Show the command in the chat (but don't start the turn tracker — commands don't go to the LLM)
@@ -605,6 +616,46 @@ async function main() {
   process.exit(0);
 }
 
+// ─── Shell Escape ─────────────────────────────────────────────────────────────
+
+async function runShellCommand(cmd: string, tui: TUI): Promise<void> {
+  try {
+    const output = execSync(cmd, {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      timeout: 30_000,
+      maxBuffer: 10 * 1024 * 1024,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const result = output.trim();
+    tui.showInfo(result || theme.dim('(no output)'));
+  } catch (err: any) {
+    const stderr = err.stderr?.trim() || '';
+    const stdout = err.stdout?.trim() || '';
+    const output = stderr || stdout || err.message;
+    tui.showInfo(theme.error(`Exit ${err.status ?? 1}: ${output}`));
+  }
+}
+
+async function runShellMode(tui: TUI): Promise<void> {
+  tui.showInfo([
+    theme.textBold('Shell mode') + theme.dim(' — type commands, they run in your terminal'),
+    theme.dim('Type "exit" or press Ctrl+C to return to VEEPEE Code'),
+  ].join('\n'));
+
+  while (true) {
+    const input = await tui.getInput('$ ');
+    const trimmed = input.trim();
+    if (!trimmed) continue;
+    if (trimmed === 'exit' || trimmed === 'quit') {
+      tui.showInfo(theme.dim('Back to VEEPEE Code'));
+      return;
+    }
+    tui.addCommandMessage(`$ ${trimmed}`);
+    await runShellCommand(trimmed, tui);
+  }
+}
+
 async function handleCommand(
   input: string,
   tui: TUI,
@@ -654,6 +705,9 @@ async function handleCommand(
         `${theme.textBold('Benchmark:')}`,
         `  ${theme.accent('/benchmark')}        Benchmark all      ${theme.accent('/benchmark heavy')}  Heavy only`,
         `  ${theme.accent('/benchmark results')} Show results      ${theme.accent('/benchmark context')} Probe context sizes`,
+        '',
+        `${theme.textBold('Shell:')}`,
+        `  ${theme.accent('!<command>')}        Run shell command   ${theme.accent('/shell')}         Interactive shell mode`,
         '',
         `${theme.textBold('Sandbox & Preview:')}`,
         `  ${theme.accent('/sandbox')}          List files        ${theme.accent('/sandbox keep <f>')} Move file out`,
@@ -1434,6 +1488,12 @@ ${gathered.join('\n\n')}`;
       tui.showInfo(`${theme.success('Resumed:')} ${theme.accent(session.name)} (${session.messageCount} messages, knowledge state restored)`);
       return `session:${session.id}`;
     }
+
+    // ─── Shell Commands ───────────────────────────────────────────────
+    case '/shell':
+    case '/sh':
+      await runShellMode(tui);
+      return;
 
     // ─── Sandbox Commands ──────────────────────────────────────────────
     case '/sandbox': {

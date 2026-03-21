@@ -123,6 +123,7 @@ const COMMANDS = [
   { name: '/worktree', args: '[cmd]', description: 'Git worktree isolation (create/list/cleanup)' },
   { name: '/effort', args: '<level>', description: 'Set effort level (low/medium/high)' },
   { name: '/benchmark context', args: '', description: 'Probe optimal context sizes per model' },
+  { name: '/shell', args: '', description: 'Enter interactive shell mode (exit to return)' },
   { name: '/sandbox', args: '', description: 'List sandbox files' },
   { name: '/sandbox keep', args: '<file> [dest]', description: 'Move sandbox file to working directory' },
   { name: '/sandbox clean', args: '', description: 'Clean sandbox directory' },
@@ -168,6 +169,7 @@ export class TUI {
     'Model auto-switches based on task complexity',
     'API on localhost:8484 lets Claude Code collaborate',
     '/models shows all available models with scores',
+    'Type !command for quick shell access, /shell for interactive mode',
     'Press Ctrl+C to interrupt, /quit to exit',
   ];
   private currentTip = 0;
