@@ -91,9 +91,8 @@ function formatAssistantMarkdown(content: string, maxWidth: number): string[] {
 // ─── Command Definitions ─────────────────────────────────────────────────────
 
 const COMMANDS = [
-  { name: '/model', args: '<name>', description: 'Switch to a specific model' },
-  { name: '/model auto', args: '', description: 'Re-enable auto model switching' },
-  { name: '/models', args: '', description: 'List all available models with rankings' },
+  { name: '/models', args: '[name]', description: 'Browse and select models interactively' },
+  { name: '/models auto', args: '', description: 'Re-enable auto model switching' },
   { name: '/tools', args: '', description: 'List all available tools' },
   { name: '/plan', args: '', description: 'Plan mode — thinking ON, heavy model' },
   { name: '/act', args: '', description: 'Act/Code mode — all tools, coding-ready (default)' },
@@ -153,6 +152,7 @@ export class TUI {
   private state: 'welcome' | 'conversation' | 'waiting' = 'welcome';
   private modelName = '';
   private modelSize = '';
+  private modelRole = 'Act';
   private providerName = 'Ollama Fleet';
   private toolCount = 0;
   private modelCount = 0;
@@ -177,6 +177,16 @@ export class TUI {
   private permissionMenuSelection = 0;
   private permissionToolName = '';
   private permissionOptions: Array<{ label: string; value: string }> = [];
+  // Model selector (for /models with no args)
+  private modelSelectorActive = false;
+  private modelSelectorItems: Array<{ name: string; size: string; score: number; tier: string; active: boolean; caps: string[] }> = [];
+  private modelSelectorIndex = 0;
+  private modelSelectorResolve: ((value: { name: string; action: 'use' | 'default' } | null) => void) | null = null;
+  // Model completion menu (for /models <partial>)
+  private modelCompletionVisible = false;
+  private modelCompletionItems: Array<{ name: string; size: string }> = [];
+  private modelCompletionSelection = 0;
+  private allModelNames: Array<{ name: string; size: string }> = [];
   onTabTools: (() => void) | null = null;
   private toolsShown = false;
   private streamBuffer = '';
@@ -325,6 +335,20 @@ export class TUI {
     this.turnTrackerInterval = setInterval(() => {
       if (this.turnTracker?.active) this.scheduleRender();
     }, 500);
+
+    this.render();
+  }
+
+  /** Add a command message without starting the turn tracker */
+  addCommandMessage(content: string): void {
+    this.addMessage({ role: 'user', content, timestamp: Date.now() });
+    this.state = 'conversation';
+
+    // Clear the input box and reset scroll to bottom
+    this.input.text = '';
+    this.input.cursor = 0;
+    this.scrollOffset = 0;
+    this.commandMenuVisible = false;
 
     this.render();
   }
@@ -484,6 +508,32 @@ export class TUI {
     this.render();
   }
 
+  /** Show interactive model selector. Returns selected model and action, or null if cancelled. */
+  showModelSelector(models: Array<{ name: string; parameterSize: string; score: number; tier: string; capabilities: string[] }>, currentModel: string): Promise<{ name: string; action: 'use' | 'default' } | null> {
+    this.modelSelectorItems = models.map(m => ({
+      name: m.name,
+      size: m.parameterSize,
+      score: m.score,
+      tier: m.tier,
+      active: m.name === currentModel,
+      caps: m.capabilities,
+    }));
+    // Start selection on the active model
+    const activeIdx = this.modelSelectorItems.findIndex(m => m.active);
+    this.modelSelectorIndex = activeIdx >= 0 ? activeIdx : 0;
+    this.modelSelectorActive = true;
+    this.render();
+
+    return new Promise(resolve => {
+      this.modelSelectorResolve = resolve;
+    });
+  }
+
+  /** Set model names for input completion */
+  setModelList(models: Array<{ name: string; parameterSize: string }>): void {
+    this.allModelNames = models.map(m => ({ name: m.name, size: m.parameterSize }));
+  }
+
   showError(msg: string): void {
     this.addMessage({ role: 'system', content: `${theme.error(msg)}` });
     this.state = 'conversation';
@@ -508,9 +558,10 @@ export class TUI {
     this.elapsed = elapsed;
   }
 
-  updateModel(name: string, size?: string): void {
+  updateModel(name: string, size?: string, role?: string): void {
     this.modelName = name;
     if (size) this.modelSize = size;
+    if (role) this.modelRole = role;
     this.render();
   }
 
@@ -539,7 +590,7 @@ export class TUI {
 
     this.addMessage({
       role: 'system',
-      content: `${theme.muted(`${icons.toolDone}  Build ${icons.dot} ${model} ${icons.dot} ${toolCount} tool calls ${icons.dot} ${tokStr} tokens${promptStr}${tpsStr} ${icons.dot} ${secs}s`)}`,
+      content: `${theme.muted(`${icons.toolDone}  ${this.modelRole} ${icons.dot} ${model} ${icons.dot} ${toolCount} tool calls ${icons.dot} ${tokStr} tokens${promptStr}${tpsStr} ${icons.dot} ${secs}s`)}`,
     });
 
     this.turnTracker = null;
@@ -767,7 +818,7 @@ export class TUI {
       }
 
       case 'system': {
-        return [theme.muted(`  ${msg.content}`)];
+        return msg.content.split('\n').map(line => theme.muted(`  ${line}`));
       }
 
       default:
@@ -842,7 +893,7 @@ export class TUI {
     // Layout:
     // topRow+0: ╭─── top border
     // topRow+1: │ user text input  │   ← cursor goes here
-    // topRow+2: │ Build  model...  │
+    // topRow+2: │ Act  model...    │
     // topRow+3: ╰─── bottom border
     // topRow+4: keyboard hints
 
@@ -889,7 +940,7 @@ export class TUI {
     );
 
     // Model info line
-    const modelInfo = `${theme.accent('Build')}  ${theme.text(this.modelName)} ${theme.muted(this.modelSize)} ${theme.muted('(default)')} ${theme.dim(this.providerName)}`;
+    const modelInfo = `${theme.accent(this.modelRole)}  ${theme.text(this.modelName)} ${theme.muted(this.modelSize)} ${theme.muted('(default)')} ${theme.dim(this.providerName)}`;
     const modelInfoClean = stripAnsi(modelInfo);
     const modelPadded = modelInfoClean.length < contentWidth
       ? modelInfo + ' '.repeat(contentWidth - modelInfoClean.length)
@@ -937,6 +988,85 @@ export class TUI {
 
       // Menu border bottom
       writeAt(menuStartRow + menuMaxVisible + 1, leftPad, theme.border(box.roundBl + box.h.repeat(boxWidth - 2) + box.roundBr));
+    }
+
+    // Model completion menu (rendered ABOVE the input box)
+    if (this.modelCompletionVisible && this.modelCompletionItems.length > 0) {
+      const menuMaxVisible = Math.min(this.modelCompletionItems.length, 12);
+      const menuStartRow = topRow - menuMaxVisible - 1;
+
+      writeAt(menuStartRow, leftPad, theme.border(box.roundTl + box.h.repeat(boxWidth - 2) + box.roundTr));
+
+      for (let i = 0; i < menuMaxVisible; i++) {
+        const m = this.modelCompletionItems[i];
+        const isSelected = i === this.modelCompletionSelection;
+        const row = menuStartRow + 1 + i;
+
+        const nameStr = m.name.padEnd(35);
+        const sizeStr = m.size;
+
+        if (isSelected) {
+          const line = ` ${theme.brandBold(nameStr)} ${theme.text(sizeStr)}`;
+          const lineLen = stripAnsi(line).length;
+          const padded = line + ' '.repeat(Math.max(0, boxWidth - 4 - lineLen));
+          writeAt(row, leftPad, theme.border(box.v) + chalk.bgHex('#2A2A4A')(` ${padded} `) + theme.border(box.v));
+        } else {
+          const line = ` ${theme.accent(nameStr)} ${theme.muted(sizeStr)}`;
+          const lineLen = stripAnsi(line).length;
+          const padded = line + ' '.repeat(Math.max(0, boxWidth - 4 - lineLen));
+          writeAt(row, leftPad, theme.border(box.v) + ` ${padded} ` + theme.border(box.v));
+        }
+      }
+
+      writeAt(menuStartRow + menuMaxVisible + 1, leftPad, theme.border(box.roundBl + box.h.repeat(boxWidth - 2) + box.roundBr));
+    }
+
+    // Model selector popup (rendered ABOVE the input box)
+    if (this.modelSelectorActive && this.modelSelectorItems.length > 0) {
+      const maxVisible = Math.min(this.modelSelectorItems.length, topRow - 4); // fit above input
+      // Window around selected item
+      let windowStart = Math.max(0, this.modelSelectorIndex - Math.floor(maxVisible / 2));
+      if (windowStart + maxVisible > this.modelSelectorItems.length) {
+        windowStart = Math.max(0, this.modelSelectorItems.length - maxVisible);
+      }
+      const windowEnd = Math.min(windowStart + maxVisible, this.modelSelectorItems.length);
+
+      const menuHeight = windowEnd - windowStart + 2; // +2 for borders
+      const menuStartRow = topRow - menuHeight;
+
+      // Top border with title
+      const title = ' Select a model ';
+      const borderLeft = box.h.repeat(2);
+      const borderRight = box.h.repeat(Math.max(0, boxWidth - 2 - borderLeft.length - title.length));
+      writeAt(menuStartRow, leftPad, theme.borderFocused(box.roundTl + borderLeft + title + borderRight + box.roundTr));
+
+      for (let wi = windowStart; wi < windowEnd; wi++) {
+        const m = this.modelSelectorItems[wi];
+        const isSelected = wi === this.modelSelectorIndex;
+        const row = menuStartRow + 1 + (wi - windowStart);
+
+        const pointer = isSelected ? `${icons.arrow} ` : '  ';
+        const activeTag = m.active ? ' ← active' : '';
+        const caps = m.caps.length > 0 ? ` [${m.caps.join(', ')}]` : '';
+        const scoreStr = ` (${m.score})`;
+        const lineText = `${pointer}${m.name.padEnd(32)} ${m.size.padEnd(8)}${caps}${scoreStr}${activeTag}`;
+        const truncated = lineText.length > boxWidth - 4 ? lineText.slice(0, boxWidth - 5) + '…' : lineText;
+        const padded = truncated + ' '.repeat(Math.max(0, boxWidth - 4 - truncated.length));
+
+        if (isSelected) {
+          writeAt(row, leftPad, theme.borderFocused(box.v) + chalk.bgHex('#2A2A4A')(` ${theme.accent(padded)} `) + theme.borderFocused(box.v));
+        } else {
+          writeAt(row, leftPad, theme.borderFocused(box.v) + ` ${padded} ` + theme.borderFocused(box.v));
+        }
+      }
+
+      // Bottom border with hints
+      const hintText = ' Esc:cancel  ↑↓/jk:navigate  Enter:use  Space:default ';
+      const hintBorderLeft = box.h.repeat(2);
+      const hintBorderRight = box.h.repeat(Math.max(0, boxWidth - 2 - hintBorderLeft.length - hintText.length));
+      writeAt(menuStartRow + menuHeight - 1, leftPad, theme.borderFocused(
+        box.roundBl + hintBorderLeft + theme.dim(hintText) + hintBorderRight + box.roundBr
+      ));
     }
 
     // Keyboard hints below box
@@ -1065,6 +1195,46 @@ export class TUI {
 
   private handleKey(data: Buffer): void {
     const key = data.toString();
+
+    // Model selector mode — must be first to intercept all keys
+    if (this.modelSelectorActive && this.modelSelectorResolve) {
+      if (key === '\x1b[A' || key === '\x1bOA' || key === 'k') {
+        this.modelSelectorIndex = Math.max(0, this.modelSelectorIndex - 1);
+        this.render();
+        return;
+      }
+      if (key === '\x1b[B' || key === '\x1bOB' || key === 'j') {
+        this.modelSelectorIndex = Math.min(this.modelSelectorItems.length - 1, this.modelSelectorIndex + 1);
+        this.render();
+        return;
+      }
+      if (key === '\r' || key === '\n') {
+        const selected = this.modelSelectorItems[this.modelSelectorIndex];
+        this.addMessage({ role: 'system', content: theme.dim(`  ${icons.arrow} Using ${selected.name} for this session`) });
+        this.modelSelectorActive = false;
+        this.modelSelectorResolve({ name: selected.name, action: 'use' });
+        this.modelSelectorResolve = null;
+        this.render();
+        return;
+      }
+      if (key === ' ') {
+        const selected = this.modelSelectorItems[this.modelSelectorIndex];
+        this.addMessage({ role: 'system', content: theme.dim(`  ${icons.arrow} Set ${selected.name} as default`) });
+        this.modelSelectorActive = false;
+        this.modelSelectorResolve({ name: selected.name, action: 'default' });
+        this.modelSelectorResolve = null;
+        this.render();
+        return;
+      }
+      if (key === '\x1b' || key === '\x03') {
+        this.modelSelectorActive = false;
+        this.modelSelectorResolve(null);
+        this.modelSelectorResolve = null;
+        this.render();
+        return;
+      }
+      return; // swallow all other keys while selector is active
+    }
 
     // Mouse wheel events (SGR extended: \x1b[<button;x;yM or m)
     const sgrMatch = key.match(/\x1b\[<(\d+);\d+;\d+[Mm]/);
@@ -1260,12 +1430,95 @@ export class TUI {
           this.input.text.slice(this.input.cursor);
         this.input.cursor++;
 
-        // If there's a space after the command name, close menu
+        // If there's a space after the command name, close command menu
+        // but check if model completion should take over
         if (this.input.text.includes(' ')) {
           this.commandMenuVisible = false;
+          this.updateCommandFilter(); // triggers model completion if /models ...
         } else {
           this.updateCommandFilter();
         }
+        this.render();
+        return;
+      }
+    }
+
+    // ─── Model completion menu navigation ─────────────────────────────
+    if (this.modelCompletionVisible) {
+      // Enter — select model and submit
+      if (key === '\r' || key === '\n') {
+        if (this.modelCompletionItems.length > 0) {
+          const selected = this.modelCompletionItems[this.modelCompletionSelection];
+          this.input.text = `/models ${selected.name}`;
+          this.input.cursor = this.input.text.length;
+          this.modelCompletionVisible = false;
+          // Submit immediately
+          this.input.history.unshift(this.input.text.trim());
+          if (this.input.history.length > 100) this.input.history.pop();
+          this.input.historyIdx = -1;
+          const resolve = this.resolveInput;
+          this.resolveInput = null;
+          this.rejectInput = null;
+          resolve(this.input.text.trim());
+          return;
+        }
+        this.render();
+        return;
+      }
+
+      // Arrow up/down
+      if (key === '\x1b[A') {
+        this.modelCompletionSelection = Math.max(0, this.modelCompletionSelection - 1);
+        this.render();
+        return;
+      }
+      if (key === '\x1b[B') {
+        this.modelCompletionSelection = Math.min(this.modelCompletionItems.length - 1, this.modelCompletionSelection + 1);
+        this.render();
+        return;
+      }
+
+      // Escape — close
+      if (key === '\x1b' && data.length === 1) {
+        this.modelCompletionVisible = false;
+        this.render();
+        return;
+      }
+
+      // Tab — autocomplete the selected name
+      if (key === '\t') {
+        if (this.modelCompletionItems.length > 0) {
+          const selected = this.modelCompletionItems[this.modelCompletionSelection];
+          this.input.text = `/models ${selected.name}`;
+          this.input.cursor = this.input.text.length;
+          this.modelCompletionVisible = false;
+        }
+        this.render();
+        return;
+      }
+
+      // Backspace
+      if (key === '\x7f' || key === '\b') {
+        if (this.input.cursor > 0) {
+          this.input.text =
+            this.input.text.slice(0, this.input.cursor - 1) +
+            this.input.text.slice(this.input.cursor);
+          this.input.cursor--;
+          this.updateCommandFilter();
+          this.render();
+        }
+        return;
+      }
+
+      // Regular character — filter
+      if (key.length === 1 && key.charCodeAt(0) >= 32) {
+        this.input.text =
+          this.input.text.slice(0, this.input.cursor) +
+          key +
+          this.input.text.slice(this.input.cursor);
+        this.input.cursor++;
+        this.modelCompletionSelection = 0;
+        this.updateCommandFilter();
         this.render();
         return;
       }
@@ -1296,8 +1549,14 @@ export class TUI {
       return;
     }
 
-    // Enter — submit (but if text has newlines and cursor isn't at end, insert newline)
+    // Enter — if model completion is visible, select model; otherwise submit
     if (key === '\r' || key === '\n') {
+      if (this.modelCompletionVisible && this.modelCompletionItems.length > 0) {
+        const selected = this.modelCompletionItems[this.modelCompletionSelection];
+        this.input.text = `/models ${selected.name}`;
+        this.input.cursor = this.input.text.length;
+        this.modelCompletionVisible = false;
+      }
       const text = this.input.text.trim();
       if (text) {
         this.toolsShown = false;
@@ -1331,14 +1590,21 @@ export class TUI {
           this.input.text.slice(0, this.input.cursor - 1) +
           this.input.text.slice(this.input.cursor);
         this.input.cursor--;
+        this.updateCommandFilter();
         this.render();
       }
       return;
     }
 
-    // Tab — toggle tools list (when not in command menu)
+    // Tab — model completion takes priority, then tools list
     if (key === '\t') {
-      if (this.toolsShown) {
+      if (this.modelCompletionVisible && this.modelCompletionItems.length > 0) {
+        const selected = this.modelCompletionItems[this.modelCompletionSelection];
+        this.input.text = `/models ${selected.name}`;
+        this.input.cursor = this.input.text.length;
+        this.modelCompletionVisible = false;
+        this.render();
+      } else if (this.toolsShown) {
         // Toggle off — remove the tools message
         this.messages.pop();
         this.toolsShown = false;
@@ -1383,8 +1649,13 @@ export class TUI {
       return;
     }
 
-    // Arrow keys
+    // Arrow keys — model completion takes priority over history
     if (key === '\x1b[A') {
+      if (this.modelCompletionVisible) {
+        this.modelCompletionSelection = Math.max(0, this.modelCompletionSelection - 1);
+        this.render();
+        return;
+      }
       // Up — history
       if (this.input.history.length > 0) {
         this.input.historyIdx = Math.min(this.input.historyIdx + 1, this.input.history.length - 1);
@@ -1395,6 +1666,11 @@ export class TUI {
       return;
     }
     if (key === '\x1b[B') {
+      if (this.modelCompletionVisible) {
+        this.modelCompletionSelection = Math.min(this.modelCompletionItems.length - 1, this.modelCompletionSelection + 1);
+        this.render();
+        return;
+      }
       // Down — history forward
       if (this.input.historyIdx > 0) {
         this.input.historyIdx--;
@@ -1446,6 +1722,9 @@ export class TUI {
         this.commandMenuVisible = true;
         this.commandMenuSelection = 0;
         this.filteredCommands = [...COMMANDS];
+      } else {
+        // Check for model completion trigger
+        this.updateCommandFilter();
       }
 
       this.render();
@@ -1455,6 +1734,21 @@ export class TUI {
   /** Update the filtered command list based on current input */
   private updateCommandFilter(): void {
     const query = this.input.text.toLowerCase();
+
+    // Check if user is typing a model name after /models or /model
+    const modelMatch = query.match(/^\/models?\s+(.*)$/);
+    if (modelMatch && this.allModelNames.length > 0) {
+      const partial = modelMatch[1];
+      this.commandMenuVisible = false;
+      this.modelCompletionItems = partial
+        ? this.allModelNames.filter(m => m.name.toLowerCase().includes(partial))
+        : [...this.allModelNames];
+      this.modelCompletionVisible = this.modelCompletionItems.length > 0;
+      this.modelCompletionSelection = Math.min(this.modelCompletionSelection, Math.max(0, this.modelCompletionItems.length - 1));
+      return;
+    }
+
+    this.modelCompletionVisible = false;
     this.filteredCommands = COMMANDS.filter(c => c.name.toLowerCase().startsWith(query));
     this.commandMenuSelection = Math.min(this.commandMenuSelection, Math.max(0, this.filteredCommands.length - 1));
   }

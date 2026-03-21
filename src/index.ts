@@ -255,6 +255,9 @@ async function main() {
     apiPort: actualApiPort,
   });
 
+  // Set model list for input completion
+  tui.setModelList(allModels);
+
   // Override permission prompting to use TUI
   permissions.setPromptHandler(async (toolName, args, reason) => {
     return tui.promptPermission(toolName, args, reason);
@@ -354,7 +357,7 @@ async function main() {
             defaultModel = roster.act;
             defaultProfile = profile;
             agent.setModel(defaultModel);
-            tui.updateModel(defaultModel, defaultProfile.parameterSize);
+            tui.updateModel(defaultModel, defaultProfile.parameterSize, 'Act');
           }
         }
       }
@@ -370,7 +373,7 @@ async function main() {
         defaultModel = existingRoster.act;
         defaultProfile = profile;
         agent.setModel(defaultModel);
-        tui.updateModel(defaultModel, defaultProfile.parameterSize);
+        tui.updateModel(defaultModel, defaultProfile.parameterSize, 'Act');
       }
     }
   }
@@ -514,8 +517,8 @@ async function main() {
 
     // Handle commands
     if (trimmed.startsWith('/')) {
-      // Show the command in the chat and clear the input box immediately
-      tui.addUserMessage(trimmed);
+      // Show the command in the chat (but don't start the turn tracker — commands don't go to the LLM)
+      tui.addCommandMessage(trimmed);
       const result = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId, sandbox, preview, syncManager);
       if (result === true) break; // quit
       if (typeof result === 'string' && result.startsWith('session:')) {
@@ -748,34 +751,50 @@ async function handleCommand(
       return false;
     }
 
-    case '/model': {
+    case '/model':
+    case '/models': {
       const modelArg = parts[1];
-      if (!modelArg) {
-        tui.showInfo(`Current model: ${theme.accent(modelManager.getCurrentModel())}`);
-        return false;
-      }
       if (modelArg === 'auto') {
         modelManager.setAutoSwitch(true);
         tui.showInfo('Auto model switching enabled.');
         return false;
       }
-      const match = modelManager.getAllModels().find(m =>
-        m.name === modelArg || m.name.startsWith(modelArg)
-      );
-      if (!match) {
-        tui.showError(`Model not found: ${modelArg}. Use /models to list.`);
+      // Direct model name provided — switch immediately
+      if (modelArg) {
+        const match = modelManager.getAllModels().find(m =>
+          m.name === modelArg || m.name.startsWith(modelArg)
+        );
+        if (!match) {
+          tui.showError(`Model not found: ${modelArg}`);
+          return false;
+        }
+        agent.setModel(match.name);
+        modelManager.setAutoSwitch(false);
+        tui.updateModel(match.name, match.parameterSize);
+        tui.showInfo(`Switched to ${theme.accent(match.name)} (auto-switch disabled)`);
         return false;
       }
-      agent.setModel(match.name);
-      modelManager.setAutoSwitch(false);
-      tui.updateModel(match.name, match.parameterSize);
-      tui.showInfo(`Switched to ${theme.accent(match.name)} (auto-switch disabled)`);
+      // No argument — show interactive selector
+      const allModels = modelManager.getAllModels();
+      const result = await tui.showModelSelector(
+        allModels.map(m => ({ name: m.name, parameterSize: m.parameterSize, score: m.score, tier: m.tier, capabilities: m.capabilities })),
+        modelManager.getCurrentModel(),
+      );
+      if (result) {
+        agent.setModel(result.name);
+        const profile = modelManager.getProfile(result.name);
+        if (result.action === 'default') {
+          modelManager.setAutoSwitch(false);
+          tui.updateModel(result.name, profile?.parameterSize);
+          tui.showInfo(`${theme.accent(result.name)} set as default model`);
+        } else {
+          modelManager.setAutoSwitch(false);
+          tui.updateModel(result.name, profile?.parameterSize);
+          tui.showInfo(`Using ${theme.accent(result.name)} for this session`);
+        }
+      }
       return false;
     }
-
-    case '/models':
-      tui.showInfo(modelManager.formatModelList());
-      return false;
 
     case '/tools': {
       const tools = registry.list().sort((a, b) => a.name.localeCompare(b.name));
@@ -896,7 +915,7 @@ async function handleCommand(
         return false;
       }
       const { model } = agent.enterPlanMode();
-      tui.updateModel(model);
+      tui.updateModel(model, undefined, 'Plan');
       tui.showInfo([
         `${theme.accent('Plan mode activated')}`,
         `  ${theme.dim('Model:')} ${model} (heaviest with thinking)`,
@@ -914,7 +933,7 @@ async function handleCommand(
         return false;
       }
       agent.exitPlanMode();
-      tui.updateModel(modelManager.getCurrentModel());
+      tui.updateModel(modelManager.getCurrentModel(), undefined, 'Act');
       tui.showInfo([
         `${theme.accent('Act mode activated')} (all tools, coding-ready)`,
         `  ${theme.dim('Model:')} ${modelManager.getCurrentModel()}`,
@@ -930,7 +949,7 @@ async function handleCommand(
         return false;
       }
       const { model: chatModel } = agent.enterChatMode();
-      tui.updateModel(chatModel);
+      tui.updateModel(chatModel, undefined, 'Chat');
       // Show only actually registered chat tools
       const chatToolNames = ['web_search', 'web_fetch', 'http_request', 'weather', 'news']
         .filter(t => registry.has(t));
