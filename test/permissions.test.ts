@@ -71,7 +71,7 @@ describe('PermissionManager', () => {
     expect(promptReason).toBe('hard reset');
   });
 
-  it('detects home assistant device control', async () => {
+  it('detects docker cleanup as dangerous', async () => {
     const pm = new PermissionManager();
     let promptReason = '';
     pm.setPromptHandler(async (_tool, _args, reason) => {
@@ -79,8 +79,8 @@ describe('PermissionManager', () => {
       return 'y';
     });
 
-    await pm.check('home_assistant', { action: 'turn_on', entity_id: 'light.office' });
-    expect(promptReason).toBe('device control');
+    await pm.check('bash', { command: 'docker system prune -a' });
+    expect(promptReason).toBe('docker cleanup');
   });
 
   it('session allow persists for same tool', async () => {

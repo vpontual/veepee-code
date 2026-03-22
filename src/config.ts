@@ -16,16 +16,32 @@ export interface Config {
   remote: { url: string; apiKey: string } | null;
 }
 
-export function loadConfig(): Config {
-  // Load .env from project root, then from ~/.veepee-code/.env
-  const localEnv = resolve(process.cwd(), '.env');
-  const homeEnv = resolve(process.env.HOME || '~', '.veepee-code', '.env');
-  const globalEnv = resolve(process.env.HOME || '~', '.config', 'veepee-code', '.env');
+let dotenvLoaded = false;
 
-  if (existsSync(localEnv)) loadEnv({ path: localEnv, override: true });
-  else if (existsSync(homeEnv)) loadEnv({ path: homeEnv, override: true });
-  else if (existsSync(globalEnv)) loadEnv({ path: globalEnv, override: true });
-  else loadEnv({ override: true });
+/** Reset dotenv state — used by tests to ensure clean env loading */
+export function resetConfigState(): void {
+  dotenvLoaded = false;
+}
+
+export function loadConfig(envPath?: string): Config {
+  // Load .env file on first call. On subsequent calls (e.g. after wizard),
+  // use override to pick up any changes the wizard wrote to the file.
+  const override = dotenvLoaded; // override on reload, not on first load
+
+  if (envPath !== undefined) {
+    // Explicit path (or empty string to skip dotenv entirely — used by tests)
+    if (envPath) loadEnv({ path: envPath, override });
+  } else {
+    const localEnv = resolve(process.cwd(), '.env');
+    const homeEnv = resolve(process.env.HOME || '~', '.veepee-code', '.env');
+    const globalEnv = resolve(process.env.HOME || '~', '.config', 'veepee-code', '.env');
+
+    if (existsSync(localEnv)) loadEnv({ path: localEnv, override });
+    else if (existsSync(homeEnv)) loadEnv({ path: homeEnv, override });
+    else if (existsSync(globalEnv)) loadEnv({ path: globalEnv, override });
+  }
+
+  dotenvLoaded = true;
 
   const env = process.env;
 
