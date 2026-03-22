@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+import dns from 'dns';
+// Prefer IPv4 — prevents failures on IPv4-only tunnels (WireGuard, VPN)
+dns.setDefaultResultOrder('ipv4first');
+
 import { resolve } from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
@@ -66,7 +70,7 @@ async function main() {
   } catch (err) {
     console.error(chalk.red(`Failed to connect to proxy at ${config.proxyUrl}`));
     console.error(chalk.dim((err as Error).message));
-    console.error('');
+    await diagnoseConnection(config.proxyUrl);
     console.error(chalk.hex('#85C7F2')('Running the setup wizard to configure your connection...'));
     console.error('');
     await runWizard();
@@ -84,7 +88,7 @@ async function main() {
   const allModels = modelManager.getAllModels();
   if (allModels.length === 0) {
     console.error(chalk.red('No models found on the proxy. Is Ollama running?'));
-    console.error('');
+    await diagnoseConnection(config.proxyUrl);
     console.error(chalk.hex('#85C7F2')('Running the setup wizard to reconfigure...'));
     console.error('');
     await runWizard();
@@ -614,6 +618,66 @@ async function main() {
   api.close();
   tui.stop();
   process.exit(0);
+}
+
+// ─── Connection Diagnostics ───────────────────────────────────────────────────
+
+async function diagnoseConnection(proxyUrl: string): Promise<void> {
+  const url = new URL(proxyUrl);
+  const host = url.hostname;
+  const tagsUrl = `${proxyUrl}/api/tags`;
+
+  console.error(chalk.hex('#85C7F2')('\nRunning connection diagnostics...\n'));
+
+  // Test 1: Network reachability (ping)
+  try {
+    execSync(`ping -c 1 -W 2 ${host}`, { stdio: 'pipe', timeout: 5000 });
+    console.error(chalk.green(`  ✓ Host ${host} is reachable (ping)`));
+  } catch {
+    console.error(chalk.red(`  ✗ Host ${host} is not reachable (ping failed)`));
+    console.error(chalk.dim('    Check your network connection, VPN, or WireGuard tunnel'));
+    return;
+  }
+
+  // Test 2: Port reachability (curl)
+  try {
+    execSync(`curl -s --connect-timeout 3 ${tagsUrl} > /dev/null`, { stdio: 'pipe', timeout: 5000 });
+    console.error(chalk.green(`  ✓ Ollama API responds (curl)`));
+  } catch {
+    console.error(chalk.red(`  ✗ Ollama API not responding at ${tagsUrl}`));
+    console.error(chalk.dim(`    Host is reachable but port ${url.port || 80} is not — is Ollama running?`));
+    return;
+  }
+
+  // Test 3: Node.js fetch (the actual method vcode uses)
+  try {
+    const res = await fetch(tagsUrl, { signal: AbortSignal.timeout(5000) });
+    const data = await res.json() as { models?: unknown[] };
+    const count = data.models?.length || 0;
+    console.error(chalk.green(`  ✓ Node.js fetch works (${count} models)`));
+  } catch (err: any) {
+    console.error(chalk.red(`  ✗ Node.js fetch failed: ${err.message}`));
+
+    // Test 4: IPv4 vs IPv6
+    const { setDefaultResultOrder } = await import('dns');
+    const origOrder = dns.getDefaultResultOrder();
+    try {
+      setDefaultResultOrder('ipv4first');
+      const res = await fetch(tagsUrl, { signal: AbortSignal.timeout(5000) });
+      const data = await res.json() as { models?: unknown[] };
+      const count = data.models?.length || 0;
+      console.error(chalk.yellow(`  ⚠ Works with IPv4 forced (${count} models) — IPv6 issue detected`));
+      console.error(chalk.dim('    This has been auto-fixed for this session.'));
+      // Already set ipv4first at top of file, so this is informational
+    } catch {
+      console.error(chalk.red('  ✗ Still fails with IPv4 forced'));
+      console.error(chalk.dim('    Node.js networking issue — try: node -e "fetch(\'' + tagsUrl + '\').then(r=>r.text()).then(console.log).catch(console.error)"'));
+    } finally {
+      setDefaultResultOrder(origOrder);
+    }
+  }
+
+  console.error('');
 }
 
 // ─── Shell Escape ─────────────────────────────────────────────────────────────
