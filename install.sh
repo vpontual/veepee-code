@@ -94,13 +94,15 @@ else
     # Directory exists but isn't a git repo (e.g. just config files)
     # Move config files aside, clone, restore
     info "Backing up existing config..."
+    [ -f "$INSTALL_DIR/vcode.config.json" ] && cp "$INSTALL_DIR/vcode.config.json" /tmp/veepee-code-config-backup
     [ -f "$INSTALL_DIR/.env" ] && cp "$INSTALL_DIR/.env" /tmp/veepee-code-env-backup
     rm -rf "$INSTALL_DIR"
   fi
   info "Cloning repository..."
   git clone "$CLONE_URL" "$INSTALL_DIR"
   cd "$INSTALL_DIR"
-  # Restore config if backed up
+  # Restore config if backed up (prefer vcode.config.json, keep .env for migration)
+  [ -f /tmp/veepee-code-config-backup ] && mv /tmp/veepee-code-config-backup "$INSTALL_DIR/vcode.config.json"
   [ -f /tmp/veepee-code-env-backup ] && mv /tmp/veepee-code-env-backup "$INSTALL_DIR/.env"
 fi
 ok "Source ready"

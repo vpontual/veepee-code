@@ -9,7 +9,8 @@ interface ApiConfig {
   agent: Agent;
   modelManager: ModelManager;
   registry: ToolRegistry;
-  apiToken?: string; // optional auth token; if set, all requests must include it
+  apiToken?: string | null; // optional auth token; if set, all requests must include it
+  apiExecute?: boolean; // enable /api/execute endpoint
   rcEnabled?: boolean; // enable Remote Connect (wider CORS, 0.0.0.0 bind)
   rcRequestHandler?: (req: IncomingMessage, res: ServerResponse, url: URL) => Promise<boolean>;
 }
@@ -28,7 +29,7 @@ interface ApiConfig {
 export function startApiServer(config: ApiConfig): { port: number; close: () => void } {
   const { agent, modelManager, registry } = config;
 
-  const apiToken = config.apiToken || process.env.VEEPEE_CODE_API_TOKEN || null;
+  const apiToken = config.apiToken || null;
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     // CORS — allow any origin when RC is enabled, localhost only otherwise
@@ -273,8 +274,8 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
 
       // Execute a tool directly — requires VEEPEE_CODE_API_EXECUTE=1 opt-in
       if (path === '/api/execute' && req.method === 'POST') {
-        if (!process.env.VEEPEE_CODE_API_EXECUTE) {
-          sendJson(res, 403, { error: '/api/execute is disabled. Set VEEPEE_CODE_API_EXECUTE=1 to enable.' });
+        if (!config.apiExecute) {
+          sendJson(res, 403, { error: '/api/execute is disabled. Set apiExecute to true in vcode.config.json to enable.' });
           return;
         }
 

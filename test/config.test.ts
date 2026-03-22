@@ -1,32 +1,26 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { loadConfig, resetConfigState } from '../src/config.js';
+import { loadConfig } from '../src/config.js';
+import { writeFileSync, mkdirSync, rmSync } from 'fs';
+import { resolve } from 'path';
+import { tmpdir } from 'os';
 
 describe('loadConfig', () => {
-  // Save and restore ALL env vars since loadConfig reads from dotenv
-  let savedEnv: Record<string, string | undefined>;
+  let tmpDir: string;
 
   beforeEach(() => {
-    savedEnv = { ...process.env };
-    resetConfigState();
-    // Clear ALL config-relevant env vars (including those loaded from .env files)
-    const prefixes = ['VEEPEE_CODE_', 'HA_', 'MASTODON_', 'SPOTIFY_', 'GOOGLE_', 'NEWSFEED_', 'SEARXNG_'];
-    for (const key of Object.keys(process.env)) {
-      if (prefixes.some(p => key.startsWith(p))) {
-        delete process.env[key];
-      }
-    }
+    tmpDir = resolve(tmpdir(), `veepee-config-test-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
   });
 
   afterEach(() => {
-    // Full restore — remove any new keys, restore old values
-    for (const key of Object.keys(process.env)) {
-      if (!(key in savedEnv)) delete process.env[key];
-    }
-    for (const [key, val] of Object.entries(savedEnv)) {
-      if (val !== undefined) process.env[key] = val;
-      else delete process.env[key];
-    }
+    rmSync(tmpDir, { recursive: true, force: true });
   });
+
+  function writeConfig(config: Record<string, unknown>): string {
+    const path = resolve(tmpDir, 'vcode.config.json');
+    writeFileSync(path, JSON.stringify(config));
+    return path;
+  }
 
   it('returns correct types for all config fields', () => {
     const config = loadConfig('');
@@ -38,60 +32,65 @@ describe('loadConfig', () => {
     expect(typeof config.maxTurns).toBe('number');
     expect(typeof config.maxModelSize).toBe('number');
     expect(typeof config.minModelSize).toBe('number');
+    expect(typeof config.apiPort).toBe('number');
+    expect(typeof config.apiHost).toBe('string');
+    expect(typeof config.apiExecute).toBe('boolean');
     for (const key of ['sync', 'rc', 'remote'] as const) {
       expect(config[key] === null || typeof config[key] === 'object').toBe(true);
     }
   });
 
-  it('reads proxy URL from env', () => {
-    process.env.VEEPEE_CODE_PROXY_URL = 'http://192.168.1.100:11434';
-    const config = loadConfig('');
+  it('reads proxy URL from config file', () => {
+    const path = writeConfig({ proxyUrl: 'http://192.168.1.100:11434' });
+    const config = loadConfig(path);
     expect(config.proxyUrl).toBe('http://192.168.1.100:11434');
   });
 
-  it('reads model from env', () => {
-    process.env.VEEPEE_CODE_MODEL = 'qwen3:8b';
-    const config = loadConfig('');
+  it('reads model from config file', () => {
+    const path = writeConfig({ model: 'qwen3:8b' });
+    const config = loadConfig(path);
     expect(config.model).toBe('qwen3:8b');
   });
 
   it('reads autoSwitch as false when explicitly set', () => {
-    process.env.VEEPEE_CODE_AUTO_SWITCH = 'false';
-    const config = loadConfig('');
+    const path = writeConfig({ autoSwitch: false });
+    const config = loadConfig(path);
     expect(config.autoSwitch).toBe(false);
   });
 
   it('reads numeric config values', () => {
-    process.env.VEEPEE_CODE_MAX_TURNS = '100';
-    process.env.VEEPEE_CODE_MAX_MODEL_SIZE = '80';
-    process.env.VEEPEE_CODE_MIN_MODEL_SIZE = '3';
-    const config = loadConfig('');
+    const path = writeConfig({ maxTurns: 100, maxModelSize: 80, minModelSize: 3 });
+    const config = loadConfig(path);
     expect(config.maxTurns).toBe(100);
     expect(config.maxModelSize).toBe(80);
     expect(config.minModelSize).toBe(3);
   });
 
+  it('reads API config values', () => {
+    const path = writeConfig({ apiPort: 9090, apiHost: '0.0.0.0', apiToken: 'secret', apiExecute: true });
+    const config = loadConfig(path);
+    expect(config.apiPort).toBe(9090);
+    expect(config.apiHost).toBe('0.0.0.0');
+    expect(config.apiToken).toBe('secret');
+    expect(config.apiExecute).toBe(true);
+  });
+
   it('builds remote config when both URL and key present', () => {
-    process.env.VEEPEE_CODE_REMOTE_URL = 'http://192.168.1.100:8080';
-    process.env.VEEPEE_CODE_REMOTE_API_KEY = 'sk-test-key';
-    const config = loadConfig('');
+    const path = writeConfig({ remote: { url: 'http://192.168.1.100:8080', apiKey: 'sk-test-key' } });
+    const config = loadConfig(path);
     expect(config.remote).toEqual({ url: 'http://192.168.1.100:8080', apiKey: 'sk-test-key' });
   });
 
-  it('remote config requires both URL and key', () => {
-    // Only URL, no key — should be null
-    process.env.VEEPEE_CODE_REMOTE_URL = 'http://192.168.1.100:8080';
-    delete process.env.VEEPEE_CODE_REMOTE_API_KEY;
+  it('remote config is null by default', () => {
     const config = loadConfig('');
     expect(config.remote).toBeNull();
   });
 
-  it('builds sync config with auto flag', () => {
-    process.env.VEEPEE_CODE_SYNC_URL = 'https://dav.example.com';
-    process.env.VEEPEE_CODE_SYNC_USER = 'user';
-    process.env.VEEPEE_CODE_SYNC_PASS = 'pass';
-    process.env.VEEPEE_CODE_SYNC_AUTO = 'true';
-    const config = loadConfig('');
+  it('builds sync config', () => {
+    const path = writeConfig({
+      sync: { url: 'https://dav.example.com', user: 'user', pass: 'pass', auto: true },
+    });
+    const config = loadConfig(path);
     expect(config.sync).toEqual({
       url: 'https://dav.example.com',
       user: 'user',
@@ -100,22 +99,36 @@ describe('loadConfig', () => {
     });
   });
 
-  it('sync auto defaults to false', () => {
-    process.env.VEEPEE_CODE_SYNC_URL = 'https://dav.example.com';
-    process.env.VEEPEE_CODE_SYNC_USER = 'user';
-    process.env.VEEPEE_CODE_SYNC_PASS = 'pass';
+  it('sync defaults to null', () => {
     const config = loadConfig('');
-    expect(config.sync!.auto).toBe(false);
+    expect(config.sync).toBeNull();
   });
 
-  it('enables RC when env var is 1', () => {
-    process.env.VEEPEE_CODE_RC_ENABLED = '1';
-    const config = loadConfig('');
+  it('reads RC config', () => {
+    const path = writeConfig({ rc: { enabled: true } });
+    const config = loadConfig(path);
     expect(config.rc).toEqual({ enabled: true });
   });
 
-  it('RC is null when not enabled', () => {
+  it('RC is null when not set', () => {
     const config = loadConfig('');
     expect(config.rc).toBeNull();
+  });
+
+  it('uses defaults for missing fields', () => {
+    const path = writeConfig({});
+    const config = loadConfig(path);
+    expect(config.proxyUrl).toBe('http://localhost:11434');
+    expect(config.dashboardUrl).toBe('');
+    expect(config.model).toBeNull();
+    expect(config.autoSwitch).toBe(true);
+    expect(config.maxTurns).toBe(50);
+    expect(config.maxModelSize).toBe(40);
+    expect(config.minModelSize).toBe(6);
+    expect(config.apiPort).toBe(8484);
+    expect(config.apiHost).toBe('127.0.0.1');
+    expect(config.apiToken).toBeNull();
+    expect(config.apiExecute).toBe(false);
+    expect(config.searxngUrl).toBeNull();
   });
 });

@@ -34,7 +34,6 @@
   },
   "dependencies": {
     "chalk": "^5.4.1",
-    "dotenv": "^16.5.0",
     "glob": "^11.0.2",
     "marked": "^15.0.7",
     "marked-terminal": "^7.3.0",

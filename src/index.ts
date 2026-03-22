@@ -222,27 +222,29 @@ async function main() {
 
   // Set up RC routes if enabled
   const rcEnabled = !!config.rc?.enabled;
-  const apiToken = process.env.VEEPEE_CODE_API_TOKEN || null;
+  const apiToken = config.apiToken;
   let rcHandler: ((req: import('http').IncomingMessage, res: import('http').ServerResponse, url: URL) => Promise<boolean>) | undefined;
   let rcInstallPermissions: (() => void) | undefined;
   let rcOnRemoteMessage: ((handler: (message: string, events: AsyncGenerator<import('./agent.js').AgentEvent>) => void) => void) | undefined;
 
   if (rcEnabled) {
-    const rc = registerRcRoutes(agent, permissions, preview, parseInt(cliPort || process.env.VEEPEE_CODE_API_PORT || '8484', 10), apiToken);
+    const rc = registerRcRoutes(agent, permissions, preview, parseInt(cliPort || String(config.apiPort), 10), apiToken);
     rcHandler = rc.handleRequest;
     rcInstallPermissions = rc.installPermissionHandler;
     rcOnRemoteMessage = rc.onRemoteMessage;
   }
 
   // Start API server
-  const apiPort = parseInt(cliPort || process.env.VEEPEE_CODE_API_PORT || '8484', 10);
-  const apiHost = cliHost || process.env.VEEPEE_CODE_API_HOST || '127.0.0.1';
+  const apiPort = parseInt(cliPort || String(config.apiPort), 10);
+  const apiHost = cliHost || config.apiHost;
   const api = startApiServer({
     port: apiPort,
     host: apiHost,
     agent,
     modelManager,
     registry,
+    apiToken,
+    apiExecute: config.apiExecute,
     rcEnabled,
     rcRequestHandler: rcHandler,
   });
