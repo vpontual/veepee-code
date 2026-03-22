@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # VEEPEE Code Installer
-# Usage: curl -fsSL https://vcode.casavp.com/install.sh | bash
+# Usage: curl -fsSL https://vitorpontual.com/install.sh | bash
 
 REPO="vpontual/veepee-code"
 INSTALL_DIR="${VEEPEE_CODE_DIR:-$HOME/.veepee-code}"
@@ -105,33 +105,7 @@ if ! command -v git &> /dev/null; then
 fi
 ok "git $(git --version | awk '{print $3}')"
 
-# Check if repo is accessible (try SSH first, then gh)
-can_clone=false
-
-if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
-  ok "GitHub SSH access"
-  CLONE_URL="git@github.com:${REPO}.git"
-  can_clone=true
-elif command -v gh &> /dev/null && gh auth status &> /dev/null 2>&1; then
-  ok "GitHub CLI authenticated"
-  # Ensure git uses gh credentials
-  gh auth setup-git 2>/dev/null
-  CLONE_URL="https://github.com/${REPO}.git"
-  can_clone=true
-fi
-
-if [ "$can_clone" = false ]; then
-  fail "GitHub access required (private repo)"
-  echo ""
-  echo -e "  ${DIM}Option 1: SSH key (recommended)${NC}"
-  echo -e "  ${DIM}  ssh-keygen -t ed25519 && cat ~/.ssh/id_ed25519.pub${NC}"
-  echo -e "  ${DIM}  Add the key at: https://github.com/settings/keys${NC}"
-  echo ""
-  echo -e "  ${DIM}Option 2: GitHub CLI${NC}"
-  echo -e "  ${DIM}  brew install gh && gh auth login   # macOS${NC}"
-  echo -e "  ${DIM}  sudo apt install gh && gh auth login   # Linux${NC}"
-  echo ""
-  exit 1
+CLONE_URL="https://github.com/${REPO}.git"
 fi
 
 # ─── Step 3: Clone / Update ─────────────────────────────────────────────────
