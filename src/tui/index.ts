@@ -641,11 +641,19 @@ export class TUI {
       writeAt(startRow + i, 1, center(logo[i], cols));
     }
 
+    // Update available notice below logo
+    let updateRows = 0;
+    if (this.updateAvailable) {
+      const msg = chalk.yellow(`Update available — run ${chalk.bold('vcode --update')}`);
+      writeAt(startRow + logoHeight + 1, 1, center(msg, cols));
+      updateRows = 2;
+    }
+
     // Status bar FIRST (so cursor isn't left here)
     this.renderStatusBar(rows, cols);
 
     // Input box LAST (its final action is positioning the cursor)
-    const boxRow = startRow + logoHeight + 3;
+    const boxRow = startRow + logoHeight + 3 + updateRows;
     this.renderInputBox(boxRow, cols);
   }
 
@@ -1138,10 +1146,7 @@ export class TUI {
     const contextInfo = this.messageCount > 0
       ? `${this.tokenCount.toLocaleString()} tok ${this.tokenPercent}%  `
       : '';
-    const updateFlag = this.updateAvailable && this.state === 'welcome'
-      ? chalk.yellow(` ⚠ update available — vcode --update `)
-      : '';
-    const right = `${contextInfo}${updateFlag}${icons.dot} API :${this.apiPort}  v${this.version} ${icons.llama} `;
+    const right = `${contextInfo}${icons.dot} API :${this.apiPort}  v${this.version} ${icons.llama} `;
 
     const padding = Math.max(0, cols - stripAnsi(left).length - stripAnsi(right).length);
 
