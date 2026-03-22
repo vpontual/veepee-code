@@ -508,7 +508,7 @@ async function main() {
     // Update stats
     tui.updateStats(
       agent.getContext().estimateTokens(),
-      Math.round((agent.getContext().estimateTokens() / 32000) * 100),
+      Math.round((agent.getContext().estimateTokens() / agent.getContext().getContextLimit()) * 100),
       agent.getContext().messageCount(),
       Date.now() - sessionStart,
     );
@@ -603,7 +603,7 @@ async function main() {
     // Update stats after each turn
     tui.updateStats(
       agent.getContext().estimateTokens(),
-      Math.round((agent.getContext().estimateTokens() / 32000) * 100),
+      Math.round((agent.getContext().estimateTokens() / agent.getContext().getContextLimit()) * 100),
       agent.getContext().messageCount(),
       Date.now() - sessionStart,
     );
@@ -820,7 +820,7 @@ async function handleCommand(
 
     case '/compact': {
       const ctx = agent.getContext();
-      if (ctx.messageCount() <= 6) {
+      if (ctx.messageCount() <= 4) {
         tui.showInfo('No compaction needed — conversation is short.');
         return false;
       }

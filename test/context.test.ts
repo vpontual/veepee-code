@@ -16,19 +16,23 @@ describe('ContextManager', () => {
     expect(ctx.messageCount()).toBe(2);
   });
 
-  it('returns sliding window of recent messages', () => {
+  it('returns token-aware window of recent messages', () => {
     const ctx = new ContextManager('test');
     ctx.setSystemPrompt('test-model');
+    ctx.setContextLimit(1024); // small context to force windowing
 
-    // Add 10 messages (more than sliding window of 6)
+    // Add many messages that exceed the token budget
     for (let i = 0; i < 10; i++) {
-      ctx.addUser(`msg ${i}`);
-      ctx.addAssistant(`reply ${i}`);
+      ctx.addUser(`msg ${i} ${'x'.repeat(200)}`);
+      ctx.addAssistant(`reply ${i} ${'y'.repeat(200)}`);
     }
 
     const messages = ctx.getMessages();
-    expect(messages.length).toBe(6); // sliding window
-    expect(messages[0].content).toContain('msg 7'); // last 6 of 20 messages
+    // Should return fewer messages than the full 20
+    expect(messages.length).toBeLessThan(20);
+    expect(messages.length).toBeGreaterThanOrEqual(2); // minimum 2 messages
+    // Most recent messages should be included
+    expect(messages[messages.length - 1].content).toContain('reply 9');
   });
 
   it('getAllMessages returns full history', () => {
@@ -62,20 +66,22 @@ describe('ContextManager', () => {
     expect(prompt).toContain('TURN: 1');
   });
 
-  it('compact trims messages when above threshold', () => {
+  it('compact trims messages to fit token budget', () => {
     const ctx = new ContextManager('test');
     ctx.setSystemPrompt('test-model');
+    ctx.setContextLimit(2048); // small context
 
-    // Add enough to exceed 2x sliding window
-    for (let i = 0; i < 10; i++) {
-      ctx.addUser(`msg ${i}`);
-      ctx.addAssistant(`reply ${i}`);
+    // Add many messages
+    for (let i = 0; i < 20; i++) {
+      ctx.addUser(`msg ${i} ${'x'.repeat(100)}`);
+      ctx.addAssistant(`reply ${i} ${'y'.repeat(100)}`);
     }
 
-    expect(ctx.messageCount()).toBe(20);
+    expect(ctx.messageCount()).toBe(40);
     const compacted = ctx.compact();
     expect(compacted).toBe(true);
-    expect(ctx.messageCount()).toBe(6); // sliding window size
+    // After compaction, only the token-aware window remains
+    expect(ctx.messageCount()).toBeLessThan(40);
   });
 
   it('compact returns false when not needed', () => {

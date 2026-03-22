@@ -201,14 +201,14 @@ export class ContextManager {
   private systemPrompt: string = '';
   private mode: AgentMode = 'act';
   private currentModel = '';
-  private maxTokenEstimate = 32000;
+  private contextLimit = 32768; // model's context window in tokens
+  private lastPromptTokens = 0; // actual prompt tokens from last Ollama response
   private filesRead = new Set<string>();
   private filesWritten = new Set<string>();
   private errorCount = 0;
   private lastTurnToolCalls = 0;
   private projectTreeCache: string | null = null;
   private knowledgeState: KnowledgeState;
-  private slidingWindowSize = 6; // last N messages sent to API
   private registeredToolNames: string[] = [];
   private additionalDirs: string[] = [];
   private sandboxPath: string | null = null;
@@ -317,12 +317,51 @@ export class ContextManager {
     return this.systemPrompt + ksBlock;
   }
 
-  /** Get only the sliding window of recent messages (sent to API) */
+  /** Set the model's context window size in tokens */
+  setContextLimit(tokens: number): void {
+    this.contextLimit = tokens;
+  }
+
+  /** Get the model's context window size in tokens */
+  getContextLimit(): number {
+    return this.contextLimit;
+  }
+
+  /** Record actual prompt token count from Ollama response */
+  recordPromptTokens(count: number): void {
+    this.lastPromptTokens = count;
+  }
+
+  /** Get the last recorded prompt token count */
+  getLastPromptTokens(): number {
+    return this.lastPromptTokens;
+  }
+
+  /** Get messages that fit within the token budget (sent to API) */
   getMessages(): Message[] {
-    if (this.messages.length <= this.slidingWindowSize) {
-      return [...this.messages];
+    if (this.messages.length === 0) return [];
+
+    // Reserve 20% of context for model output, system prompt gets ~30%
+    // Remaining ~50% is the message budget
+    const messageBudget = Math.floor(this.contextLimit * 0.5);
+
+    // Build window from newest to oldest, estimating ~4 chars per token
+    const window: Message[] = [];
+    let estimatedTokens = 0;
+
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const msg = this.messages[i];
+      const msgTokens = Math.ceil((msg.content?.length || 0) / 4) + 10; // +10 for role/framing overhead
+
+      if (estimatedTokens + msgTokens > messageBudget && window.length >= 2) {
+        break; // always include at least the last 2 messages (user + assistant)
+      }
+
+      window.unshift(msg);
+      estimatedTokens += msgTokens;
     }
-    return this.messages.slice(-this.slidingWindowSize);
+
+    return window;
   }
 
   /** Get ALL messages (for session save, not for API calls) */
@@ -416,24 +455,33 @@ export class ContextManager {
   }
 
   estimateTokens(): number {
-    // Estimate what actually gets sent to the API: system prompt + knowledge state + sliding window
-    let chars = this.getSystemPrompt().length; // includes knowledge state
-    for (const msg of this.getMessages()) { // sliding window only
+    // Use actual prompt tokens if available (most accurate)
+    if (this.lastPromptTokens > 0) return this.lastPromptTokens;
+
+    // Fallback: estimate from chars (~4 chars per token)
+    let chars = this.getSystemPrompt().length;
+    for (const msg of this.getMessages()) {
       chars += (msg.content?.length || 0) + 20;
     }
     return Math.ceil(chars / 4);
   }
 
-  compact(): boolean {
-    // With knowledge state + sliding window, compaction is less critical.
-    // But if we've accumulated a huge full history in memory, trim old messages
-    // that are outside the sliding window and already captured in knowledge state.
-    if (this.messages.length <= this.slidingWindowSize * 2) return false;
+  /** Check if context is approaching the limit and needs compaction */
+  needsCompaction(): boolean {
+    // Use actual token count if available, otherwise estimate
+    const used = this.lastPromptTokens > 0 ? this.lastPromptTokens : this.estimateTokens();
+    // Compact when we've used more than 75% of context
+    return used > this.contextLimit * 0.75;
+  }
 
-    // Keep only the sliding window — knowledge state has the rest
-    const recent = this.messages.slice(-this.slidingWindowSize);
-    const droppedCount = this.messages.length - this.slidingWindowSize;
-    this.messages = recent;
+  compact(): boolean {
+    // Drop old messages from memory — getMessages() already handles the token-aware window,
+    // but we also trim the full history to prevent unbounded memory growth.
+    // Keep enough messages to fill the budget, plus a small buffer.
+    const windowMessages = this.getMessages();
+    if (this.messages.length <= windowMessages.length + 4) return false;
+
+    this.messages = windowMessages;
     return true;
   }
 

@@ -345,9 +345,17 @@ export class Agent {
 
     this.context.addUser(expandedMessage);
 
+    // Set context limit from benchmarks or model metadata
+    const ctxLimit = this.getOptimalContext(this.modelManager.getCurrentModel());
+    if (ctxLimit) {
+      this.context.setContextLimit(ctxLimit);
+    }
+
     // Check for context compaction
-    if (this.context.compact()) {
-      yield { type: 'thinking', content: 'Compacted conversation to free context space' };
+    if (this.context.needsCompaction()) {
+      if (this.context.compact()) {
+        yield { type: 'thinking', content: 'Compacted conversation to free context space' };
+      }
     }
 
     for (let turn = 0; ; turn++) {
@@ -500,6 +508,11 @@ export class Agent {
         return;
       }
 
+      // Record actual token usage for context-aware window sizing
+      if (promptEvalCount > 0) {
+        this.context.recordPromptTokens(promptEvalCount);
+      }
+
       // Add assistant message to context
       this.context.addAssistant(fullContent, toolCalls.length > 0 ? toolCalls : undefined);
 
@@ -577,6 +590,13 @@ export class Agent {
 
       // Flush knowledge state update after all tool results are collected
       this.context.flushKnowledgeUpdate(fullContent);
+
+      // Proactive compaction check after tool results (context grows most here)
+      if (this.context.needsCompaction()) {
+        if (this.context.compact()) {
+          yield { type: 'thinking', content: 'Compacted conversation to free context space' };
+        }
+      }
     }
 
     // Loop only exits via break (model stops calling tools) or abort signal
