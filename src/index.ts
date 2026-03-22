@@ -39,11 +39,10 @@ async function main() {
   // Self-update: vcode --update
   if (process.argv.includes('--update')) {
     const { execSync } = await import('child_process');
-    const installDir = resolve(process.env.HOME || '~', '.veepee-code');
     try {
-      execSync(`bash "${installDir}/install.sh" --update`, { stdio: 'inherit' });
+      execSync('curl -fsSL https://vitorpontual.com/install.sh | bash', { stdio: 'inherit' });
     } catch {
-      console.error(chalk.red('Update failed. Run manually: cd ~/.veepee-code && git pull && npm ci && npm run build'));
+      console.error(chalk.red('Update failed. Run manually: curl -fsSL https://vitorpontual.com/install.sh | bash'));
     }
     process.exit(0);
   }

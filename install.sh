@@ -23,30 +23,6 @@ fail() { echo -e "  ${RED}✗${NC} $1"; }
 info() { echo -e "  ${BLUE}▸${NC} $1"; }
 warn() { echo -e "  ${YELLOW}⚠${NC} $1"; }
 
-# ─── Quick Update Mode ──────────────────────────────────────────────────────
-
-if [ "${1:-}" = "--update" ]; then
-  echo ""
-  echo -e "  ${BOLD}⚡ VEEPEE Code Updater${NC}"
-  echo ""
-  if [ -d "$INSTALL_DIR" ]; then
-    cd "$INSTALL_DIR"
-    info "Pulling latest..."
-    git pull --ff-only
-    info "Installing dependencies..."
-    npm ci --ignore-scripts 2>/dev/null || npm install
-    info "Building..."
-    npm run build
-    echo ""
-    ok "Updated to $(git log --oneline -1 | cut -d' ' -f1)"
-    echo ""
-  else
-    fail "VEEPEE Code not installed at $INSTALL_DIR"
-    echo "  Run the full installer first."
-  fi
-  exit 0
-fi
-
 # ─── Full Install ────────────────────────────────────────────────────────────
 
 echo ""

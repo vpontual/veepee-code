@@ -318,7 +318,6 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
 
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(`  API port ${config.port} in use — trying ${config.port + 1}`);
       config.port++;
       const bindHost = config.rcEnabled ? '0.0.0.0' : (config.host || '127.0.0.1');
   server.listen(config.port, bindHost);
