@@ -105,7 +105,7 @@ const COMMANDS = [
   { name: '/init', args: '', description: 'Create VEEPEE.md for this project' },
   { name: '/setup', args: '', description: 'Validate all tool integrations' },
   { name: '/setup wizard', args: '', description: 'Re-run the full setup wizard' },
-  { name: '/setup wizard', args: '<integration>', description: 'Reconfigure one integration (proxy, spotify, ha, etc.)' },
+  { name: '/setup wizard', args: '<integration>', description: 'Reconfigure one integration (proxy, searxng, remote, etc.)' },
   { name: '/benchmark', args: '[tier]', description: 'Run benchmarks on all models' },
   { name: '/benchmark results', args: '', description: 'Show latest benchmark results' },
   { name: '/benchmark summary', args: '', description: 'Show benchmark summary' },

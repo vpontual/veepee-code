@@ -10,11 +10,6 @@ export interface Config {
   maxTurns: number;
   maxModelSize: number;  // max parameter count in billions (default 40)
   minModelSize: number;  // min for act mode — skip tiny models (default 6)
-  ha: { url: string; token: string } | null;
-  mastodon: { url: string; token: string } | null;
-  spotify: { clientId: string; clientSecret: string; refreshToken: string } | null;
-  google: { clientId: string; clientSecret: string; refreshToken: string } | null;
-  newsfeedUrl: string | null;
   searxngUrl: string | null;
   sync: { url: string; user: string; pass: string; auto: boolean } | null;
   rc: { enabled: boolean } | null;
@@ -42,15 +37,6 @@ export function loadConfig(): Config {
     maxTurns: parseInt(env.VEEPEE_CODE_MAX_TURNS || '50', 10),
     maxModelSize: parseFloat(env.VEEPEE_CODE_MAX_MODEL_SIZE || '40'),
     minModelSize: parseFloat(env.VEEPEE_CODE_MIN_MODEL_SIZE || '6'),
-    ha: env.HA_URL && env.HA_TOKEN
-      ? { url: env.HA_URL, token: env.HA_TOKEN } : null,
-    mastodon: env.MASTODON_URL && env.MASTODON_TOKEN
-      ? { url: env.MASTODON_URL, token: env.MASTODON_TOKEN } : null,
-    spotify: env.SPOTIFY_CLIENT_ID && env.SPOTIFY_CLIENT_SECRET && env.SPOTIFY_REFRESH_TOKEN
-      ? { clientId: env.SPOTIFY_CLIENT_ID, clientSecret: env.SPOTIFY_CLIENT_SECRET, refreshToken: env.SPOTIFY_REFRESH_TOKEN } : null,
-    google: env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GOOGLE_REFRESH_TOKEN
-      ? { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, refreshToken: env.GOOGLE_REFRESH_TOKEN } : null,
-    newsfeedUrl: env.NEWSFEED_URL || null,
     searxngUrl: env.SEARXNG_URL || null,
     sync: env.VEEPEE_CODE_SYNC_URL && env.VEEPEE_CODE_SYNC_USER && env.VEEPEE_CODE_SYNC_PASS
       ? {

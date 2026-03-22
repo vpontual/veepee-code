@@ -33,10 +33,6 @@ export class PermissionManager {
     { tool: 'bash', check: (a) => /\bdocker\s+(rm|rmi|system\s+prune)/.test(String(a.command || '')), reason: 'docker cleanup' },
     { tool: 'git', check: (a) => /push\s+.*--force/.test(String(a.args || '')), reason: 'force push' },
     { tool: 'git', check: (a) => /reset\s+--hard/.test(String(a.args || '')), reason: 'hard reset' },
-    { tool: 'home_assistant', check: (a) => ['turn_on', 'turn_off', 'toggle', 'call_service'].includes(String(a.action || '')), reason: 'device control' },
-    { tool: 'mastodon', check: (a) => ['post', 'reply', 'boost'].includes(String(a.action || '')), reason: 'public social action' },
-    { tool: 'email', check: (a) => a.action === 'send', reason: 'sending email' },
-    { tool: 'spotify', check: (a) => ['play', 'pause', 'next', 'previous', 'volume'].includes(String(a.action || '')), reason: 'playback control' },
   ];
 
   constructor() {

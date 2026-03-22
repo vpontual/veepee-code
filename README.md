@@ -1,13 +1,14 @@
 # VEEPEE Code
 
-A Claude Code-style terminal AI assistant that runs entirely on your hardware. Connects to [Ollama](https://ollama.com/) for local inference — zero API costs, full privacy, 26 tools.
+A Claude Code-style terminal AI assistant that runs entirely on your hardware. Connects to [Ollama](https://ollama.com/) for local inference — zero API costs, full privacy.
 
 ![VEEPEE Code TUI](docs/screenshots/tui-main.png)
 
 ## Features
 
 - **Local-first** — all inference runs on your GPUs via Ollama
-- **26 integrated tools** — file I/O, shell, git, web search, Docker, and more
+- **14 coding tools** — file I/O, shell, git, web search, Docker, and more
+- **Remote agent bridge** — connect a remote agent to unlock additional tools (home automation, social, productivity, and more)
 - **Smart model routing** — benchmarks your models and picks the best one per task
 - **Multiple modes** — Act (coding), Plan (reasoning), Chat (fast Q&A), MoE (multi-model debate)
 - **Session management** — save, resume, and sync sessions across devices via WebDAV
@@ -99,16 +100,17 @@ Talk to the AI naturally. It reads and writes files, runs commands, searches the
 
 ## Tools
 
+### Native (14)
+
 | Category | Tools |
 |----------|-------|
-| Coding | `read_file`, `write_file`, `edit_file`, `list_files`, `glob`, `grep`, `bash`, `git` |
+| Coding | `read_file`, `write_file`, `edit_file`, `list_files`, `glob`, `grep`, `bash`, `git`, `update_memory` |
+| Web | `web_fetch`, `http_request`, `web_search` |
 | DevOps | `docker`, `system_info` |
-| Web | `web_search`, `web_fetch`, `http_request` |
-| Home | `home_assistant`, `timer`, `weather` |
-| Social | `mastodon`, `spotify` |
-| Google | `email`, `calendar`, `google_drive`, `google_docs`, `google_sheets`, `notes` |
-| News | `news` |
-| System | `update_memory` |
+
+### Remote agent bridge
+
+Connect a remote agent (via `VEEPEE_CODE_REMOTE_URL`) to auto-discover and use its tools as native VEEPEE Code tools. The bridge fetches the tool catalog on startup and proxies execution via HTTP — no remote tool logic lives in this repo.
 
 ## Keyboard shortcuts
 
@@ -130,7 +132,7 @@ Talk to the AI naturally. It reads and writes files, runs commands, searches the
 │  VEEPEE Code │────>│  Ollama          │────>│  GPU Server  │
 │              │     │  (or Fleet Mgr)  │     │              │
 │  TUI + Agent │     │                  │────>│  GPU Server  │
-│  26 tools    │     │  Load balancing  │     │              │
+│  14 tools    │     │  Load balancing  │     │              │
 │  API server  │     │                  │     └──────────────┘
 └──────────────┘     └──────────────────┘
 ```

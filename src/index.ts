@@ -30,10 +30,6 @@ import { registerRcRoutes, generateRcToken } from './rc.js';
 import { registerCodingTools } from './tools/coding.js';
 import { registerWebTools } from './tools/web.js';
 import { registerDevOpsTools } from './tools/devops.js';
-import { registerHomeTools } from './tools/home.js';
-import { registerSocialTools } from './tools/social.js';
-import { registerGoogleTools } from './tools/google.js';
-import { registerNewsTools } from './tools/news.js';
 import { discoverRemoteTools } from './tools/remote.js';
 
 const VERSION = '0.3.0';
@@ -117,10 +113,6 @@ async function main() {
   for (const tool of registerCodingTools()) registry.register(tool);
   for (const tool of registerWebTools(config)) registry.register(tool);
   for (const tool of registerDevOpsTools()) registry.register(tool);
-  for (const tool of registerHomeTools(config)) registry.register(tool);
-  for (const tool of registerSocialTools(config)) registry.register(tool);
-  for (const tool of registerGoogleTools(config)) registry.register(tool);
-  for (const tool of registerNewsTools(config)) registry.register(tool);
 
   // Discover remote tools (e.g. from Llama Rider)
   if (config.remote) {
