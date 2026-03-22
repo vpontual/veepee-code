@@ -47,7 +47,7 @@ const STEPS: WizardStep[] = [
     tools: ['All AI model interactions'],
     required: true,
     envVars: [
-      { key: 'VEEPEE_CODE_PROXY_URL', label: 'Proxy URL', default: 'http://localhost:11434', secret: false, hint: 'e.g., http://10.0.153.99:11434' },
+      { key: 'VEEPEE_CODE_PROXY_URL', label: 'Proxy URL', default: 'http://localhost:11434', secret: false, hint: 'e.g., http://your-server:11434' },
     ],
     validate: async (values) => {
       const url = values['VEEPEE_CODE_PROXY_URL'];
@@ -70,7 +70,7 @@ const STEPS: WizardStep[] = [
     tools: ['Model load balancing', 'server health'],
     required: false,
     envVars: [
-      { key: 'VEEPEE_CODE_DASHBOARD_URL', label: 'Dashboard URL', default: '', secret: false, hint: 'e.g., http://10.0.153.99:3334' },
+      { key: 'VEEPEE_CODE_DASHBOARD_URL', label: 'Dashboard URL', default: '', secret: false, hint: 'e.g., http://your-server:3334' },
     ],
   },
   {
@@ -240,7 +240,7 @@ const STEPS: WizardStep[] = [
     tools: ['news'],
     required: false,
     envVars: [
-      { key: 'NEWSFEED_URL', label: 'Newsfeed API URL', default: '', secret: false, hint: 'e.g., http://10.0.153.99:3333' },
+      { key: 'NEWSFEED_URL', label: 'Newsfeed API URL', default: '', secret: false, hint: 'e.g., http://your-server:3333' },
     ],
     validate: async (values) => {
       const url = values['NEWSFEED_URL'];

@@ -103,7 +103,7 @@ When RC is enabled:
 ### Accessing the Web UI
 
 1. Start vcode with RC enabled
-2. `/rc` shows the URL (e.g., `http://10.0.153.99:8484/rc`)
+2. `/rc` shows the URL (e.g., `http://your-server:8484/rc`)
 3. Open the URL on your phone (via Twingate, VPN, or LAN)
 4. Enter your API token on the auth screen
 5. Start chatting — responses stream in real-time
@@ -136,7 +136,7 @@ VEEPEE Code is designed to work with **Twingate** (or any VPN) for remote access
 - When RC is enabled, the server binds to `0.0.0.0`
 - Access via your machine's LAN IP through Twingate
 - No Cloudflare Tunnel or port forwarding needed
-- Example: `http://10.0.153.99:8484/rc` from your phone on Twingate
+- Example: `http://your-server:8484/rc` from your phone on Twingate
 
 ### API Endpoints
 

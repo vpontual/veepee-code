@@ -46,9 +46,9 @@ describe('loadConfig', () => {
   });
 
   it('reads proxy URL from env', () => {
-    process.env.VEEPEE_CODE_PROXY_URL = 'http://10.0.153.99:11434';
+    process.env.VEEPEE_CODE_PROXY_URL = 'http://192.168.1.100:11434';
     const config = loadConfig();
-    expect(config.proxyUrl).toBe('http://10.0.153.99:11434');
+    expect(config.proxyUrl).toBe('http://192.168.1.100:11434');
   });
 
   it('reads model from env', () => {

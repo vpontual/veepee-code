@@ -60,7 +60,7 @@ Both `HA_URL` and `HA_TOKEN` must be set to enable the `home_assistant` and `tim
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MASTODON_URL` | *(none)* | Your Mastodon instance URL (e.g., `https://mx.pontual.social`). |
+| `MASTODON_URL` | *(none)* | Your Mastodon instance URL (e.g., `https://your-instance.social`). |
 | `MASTODON_TOKEN` | *(none)* | Mastodon access token with `read`, `write`, and `follow` scopes. Generate one at Preferences > Development > New application. |
 
 Both must be set to enable the `mastodon` tool.

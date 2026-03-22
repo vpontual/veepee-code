@@ -10,9 +10,9 @@ weight: 2
 
 Before installing VEEPEE Code, make sure you have:
 
-1. **Node.js 20+** -- Check with `node -v`. Install via [nvm](https://github.com/nvm-sh/nvm), [fnm](https://github.com/Schniz/fnm), or your package manager.
-2. **GitHub CLI (`gh`)** -- Required for cloning the private repository. Install via `brew install gh` (macOS), `sudo apt install gh` (Debian/Ubuntu), `sudo dnf install gh` (Fedora), or see [cli.github.com](https://cli.github.com). The installer will handle authentication automatically.
-3. **Ollama** running on at least one machine -- either locally (`localhost:11434`) or on a remote GPU server.
+1. **Ollama** running on at least one machine -- either locally (`localhost:11434`) or on a remote GPU server.
+2. **git** -- For cloning the repository.
+3. **Node.js 20+** -- The installer handles this automatically via nvm if not present.
 4. **Ollama Fleet Manager** (optional) -- A proxy that routes requests across your GPU fleet. VEEPEE Code works without it by connecting directly to Ollama.
 
 ## Installation
@@ -20,23 +20,19 @@ Before installing VEEPEE Code, make sure you have:
 ### One-liner (recommended)
 
 ```bash
-gh repo clone vpontual/veepee-code ~/.veepee-code && bash ~/.veepee-code/install.sh
+curl -fsSL https://vitorpontual.com/install.sh | bash
 ```
 
-Or if you already have `gh` authenticated and want the script to handle everything:
+The installer handles everything automatically: installs nvm and Node.js 22 if needed, clones the repo, builds, and links the `vcode` command.
+
+### Manual
 
 ```bash
-bash <(gh api repos/vpontual/veepee-code/contents/install.sh --jq '.content' | base64 -d)
+git clone https://github.com/vpontual/veepee-code.git ~/.veepee-code
+cd ~/.veepee-code
+npm install && npm run build
+npm link
 ```
-
-The install script will:
-- Verify Node.js 20+ and npm are installed
-- Check for GitHub CLI and authenticate via `gh auth login` if needed
-- Configure git to use GitHub credentials (`gh auth setup-git`)
-- Clone the repository to `~/.veepee-code/`
-- Install dependencies and build
-- Create `veepee-code` and `vcode` symlinks in `/usr/local/bin/`
-- Generate a default config at `~/.veepee-code/.env` with all integration placeholders
 
 ### npm (when published)
 

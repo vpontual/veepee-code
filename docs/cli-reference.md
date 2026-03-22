@@ -437,7 +437,7 @@ Output:
 
 ```
 Remote Connect: active
-  http://10.0.153.99:8484/rc
+  http://your-server:8484/rc
   Access via Twingate from any device
 ```
 
