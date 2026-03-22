@@ -34,6 +34,7 @@ import { registerHomeTools } from './tools/home.js';
 import { registerSocialTools } from './tools/social.js';
 import { registerGoogleTools } from './tools/google.js';
 import { registerNewsTools } from './tools/news.js';
+import { discoverRemoteTools } from './tools/remote.js';
 
 const VERSION = '0.3.0';
 
@@ -120,6 +121,16 @@ async function main() {
   for (const tool of registerSocialTools(config)) registry.register(tool);
   for (const tool of registerGoogleTools(config)) registry.register(tool);
   for (const tool of registerNewsTools(config)) registry.register(tool);
+
+  // Discover remote tools (e.g. from Llama Rider)
+  if (config.remote) {
+    const localNames = new Set(registry.names());
+    const remoteTools = await discoverRemoteTools(config.remote, localNames);
+    for (const tool of remoteTools) registry.register(tool);
+    if (remoteTools.length > 0) {
+      console.error(chalk.dim(`  ${remoteTools.length} remote tools loaded`));
+    }
+  }
 
   // Initialize permissions with TUI-based prompting
   const permissions = new PermissionManager();

@@ -256,6 +256,33 @@ const STEPS: WizardStep[] = [
       }
     },
   },
+  {
+    id: 'remote',
+    name: 'Remote Agent Bridge',
+    description: 'Connect to a remote agent (e.g. Llama Rider) to discover and use its tools. VEEPEE Code will auto-discover all tools from the remote API and make them available as native tools.',
+    tools: ['Remote tools (auto-discovered)'],
+    required: false,
+    envVars: [
+      { key: 'VEEPEE_CODE_REMOTE_URL', label: 'Remote agent URL', default: '', secret: false, hint: 'e.g., http://your-server:8080' },
+      { key: 'VEEPEE_CODE_REMOTE_API_KEY', label: 'API key', default: '', secret: true, hint: 'Bearer token for the remote agent' },
+    ],
+    validate: async (values) => {
+      const url = values['VEEPEE_CODE_REMOTE_URL'];
+      const key = values['VEEPEE_CODE_REMOTE_API_KEY'];
+      if (!url) return { ok: true, message: 'Skipped' };
+      try {
+        const res = await fetch(`${url}/dashboard/api/tools`, {
+          headers: key ? { Authorization: `Bearer ${key}` } : {},
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!res.ok) return { ok: false, message: `HTTP ${res.status}` };
+        const data = await res.json() as { tools?: unknown[] };
+        return { ok: true, message: `Connected — ${data.tools?.length || 0} remote tools available` };
+      } catch {
+        return { ok: false, message: `Cannot connect to ${url}` };
+      }
+    },
+  },
 ];
 
 // ─── Input Helpers ──────────────────────────────────────────────────────────
@@ -787,6 +814,17 @@ function saveConfig(values: Record<string, string>): void {
     lines.push(`NEWSFEED_URL=${values['NEWSFEED_URL']}`);
   } else {
     lines.push('# NEWSFEED_URL=');
+  }
+
+  // Remote Agent Bridge
+  lines.push('');
+  lines.push('# Remote Agent Bridge');
+  if (values['VEEPEE_CODE_REMOTE_URL']) {
+    lines.push(`VEEPEE_CODE_REMOTE_URL=${values['VEEPEE_CODE_REMOTE_URL']}`);
+    lines.push(`VEEPEE_CODE_REMOTE_API_KEY=${values['VEEPEE_CODE_REMOTE_API_KEY'] || ''}`);
+  } else {
+    lines.push('# VEEPEE_CODE_REMOTE_URL=');
+    lines.push('# VEEPEE_CODE_REMOTE_API_KEY=');
   }
 
   lines.push('');

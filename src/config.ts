@@ -18,6 +18,7 @@ export interface Config {
   searxngUrl: string | null;
   sync: { url: string; user: string; pass: string; auto: boolean } | null;
   rc: { enabled: boolean } | null;
+  remote: { url: string; apiKey: string } | null;
 }
 
 export function loadConfig(): Config {
@@ -61,6 +62,9 @@ export function loadConfig(): Config {
       : null,
     rc: env.VEEPEE_CODE_RC_ENABLED === '1' || env.VEEPEE_CODE_RC_ENABLED === 'true'
       ? { enabled: true }
+      : null,
+    remote: env.VEEPEE_CODE_REMOTE_URL && env.VEEPEE_CODE_REMOTE_API_KEY
+      ? { url: env.VEEPEE_CODE_REMOTE_URL, apiKey: env.VEEPEE_CODE_REMOTE_API_KEY }
       : null,
   };
 }
