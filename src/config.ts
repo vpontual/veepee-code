@@ -26,10 +26,10 @@ export function loadConfig(): Config {
   const homeEnv = resolve(process.env.HOME || '~', '.veepee-code', '.env');
   const globalEnv = resolve(process.env.HOME || '~', '.config', 'veepee-code', '.env');
 
-  if (existsSync(localEnv)) loadEnv({ path: localEnv });
-  else if (existsSync(homeEnv)) loadEnv({ path: homeEnv });
-  else if (existsSync(globalEnv)) loadEnv({ path: globalEnv });
-  else loadEnv();
+  if (existsSync(localEnv)) loadEnv({ path: localEnv, override: true });
+  else if (existsSync(homeEnv)) loadEnv({ path: homeEnv, override: true });
+  else if (existsSync(globalEnv)) loadEnv({ path: globalEnv, override: true });
+  else loadEnv({ override: true });
 
   const env = process.env;
 
