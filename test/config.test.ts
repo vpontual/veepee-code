@@ -29,7 +29,6 @@ describe('loadConfig', () => {
     expect(config.proxyUrl).toMatch(/^https?:\/\//);
     expect(config.model === null || typeof config.model === 'string').toBe(true);
     expect(typeof config.autoSwitch).toBe('boolean');
-    expect(typeof config.maxTurns).toBe('number');
     expect(typeof config.maxModelSize).toBe('number');
     expect(typeof config.minModelSize).toBe('number');
     expect(typeof config.apiPort).toBe('number');
@@ -59,9 +58,8 @@ describe('loadConfig', () => {
   });
 
   it('reads numeric config values', () => {
-    const path = writeConfig({ maxTurns: 100, maxModelSize: 80, minModelSize: 3 });
+    const path = writeConfig({ maxModelSize: 80, minModelSize: 3 });
     const config = loadConfig(path);
-    expect(config.maxTurns).toBe(100);
     expect(config.maxModelSize).toBe(80);
     expect(config.minModelSize).toBe(3);
   });
@@ -122,9 +120,8 @@ describe('loadConfig', () => {
     expect(config.dashboardUrl).toBe('');
     expect(config.model).toBeNull();
     expect(config.autoSwitch).toBe(true);
-    expect(config.maxTurns).toBe(50);
     expect(config.maxModelSize).toBe(40);
-    expect(config.minModelSize).toBe(6);
+    expect(config.minModelSize).toBe(12);
     expect(config.apiPort).toBe(8484);
     expect(config.apiHost).toBe('127.0.0.1');
     expect(config.apiToken).toBeNull();

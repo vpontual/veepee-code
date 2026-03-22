@@ -919,9 +919,14 @@ export class TUI {
       const textPart = truncated.replace(/\n/g, '↵');
       displayLine = label + textPart + ' '.repeat(Math.max(0, availWidth - textPart.length));
     } else if (inputText) {
-      // Normal user text
-      const truncated = inputText.length > contentWidth ? inputText.slice(0, contentWidth - 1) + '…' : inputText;
-      const textPart = truncated.replace(/\n/g, '↵');
+      // Normal user text — scroll to keep cursor visible
+      const cursor = this.input.cursor;
+      let viewStart = 0;
+      if (cursor > contentWidth - 1) {
+        viewStart = cursor - contentWidth + 1;
+      }
+      const viewText = inputText.slice(viewStart, viewStart + contentWidth);
+      const textPart = viewText.replace(/\n/g, '↵');
       displayLine = textPart + ' '.repeat(Math.max(0, contentWidth - textPart.length));
     } else if (!this.resolveInput) {
       // Agent running, no queued text — show hint
@@ -1081,8 +1086,9 @@ export class TUI {
     // This is the ONLY place cursor position is set. No other code touches it.
     if (this.resolveInput) {
       showCursor();
-      // Text line is at topRow+1. Cursor column: border(1) + space(1) + typed chars
-      moveTo(topRow + 1, leftPad + 2 + this.input.cursor);
+      // Text line is at topRow+1. Cursor column: border(1) + space(1) + visible cursor offset
+      const inputViewStart = this.input.cursor > contentWidth - 1 ? this.input.cursor - contentWidth + 1 : 0;
+      moveTo(topRow + 1, leftPad + 2 + this.input.cursor - inputViewStart);
     } else if (this.queuedInput.length > 0) {
       // Show cursor for type-ahead input (offset by queued indicator "⏳ ")
       showCursor();

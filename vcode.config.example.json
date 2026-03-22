@@ -2,9 +2,8 @@
   "proxyUrl": "http://localhost:11434",
   "dashboardUrl": "",
   "autoSwitch": true,
-  "maxTurns": 50,
   "maxModelSize": 40,
-  "minModelSize": 6,
+  "minModelSize": 12,
   "apiPort": 8484,
   "apiHost": "127.0.0.1",
   "searxngUrl": null

@@ -82,7 +82,7 @@ const STEPS: WizardStep[] = [
     envVars: [
       { key: 'VEEPEE_CODE_AUTO_SWITCH', label: 'Auto-switch models (true/false)', default: 'true', secret: false },
       { key: 'VEEPEE_CODE_MAX_MODEL_SIZE', label: 'Max model size (billions)', default: '40', secret: false, hint: 'Skip models larger than this' },
-      { key: 'VEEPEE_CODE_MIN_MODEL_SIZE', label: 'Min model size (billions)', default: '6', secret: false, hint: 'Skip models smaller than this' },
+      { key: 'VEEPEE_CODE_MIN_MODEL_SIZE', label: 'Min model size (billions)', default: '12', secret: false, hint: 'Skip models smaller than this' },
     ],
   },
   {
@@ -603,7 +603,7 @@ function saveConfig(values: Record<string, string>): void {
     dashboardUrl: values['VEEPEE_CODE_DASHBOARD_URL'] || '',
     autoSwitch: values['VEEPEE_CODE_AUTO_SWITCH'] !== 'false',
     maxModelSize: parseFloat(values['VEEPEE_CODE_MAX_MODEL_SIZE'] || '40'),
-    minModelSize: parseFloat(values['VEEPEE_CODE_MIN_MODEL_SIZE'] || '6'),
+    minModelSize: parseFloat(values['VEEPEE_CODE_MIN_MODEL_SIZE'] || '12'),
     apiPort: parseInt(values['VEEPEE_CODE_API_PORT'] || '8484', 10),
     searxngUrl: values['SEARXNG_URL'] || null,
   };

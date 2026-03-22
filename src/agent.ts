@@ -48,7 +48,6 @@ export class Agent {
   private modelManager: ModelManager;
   private registry: ToolRegistry;
   private permissions: PermissionManager;
-  private maxTurns: number;
   private optimalContextSizes = new Map<string, number>();
   private mode: AgentMode = 'act';
   private previousModel: string | null = null;
@@ -65,7 +64,6 @@ export class Agent {
     this.modelManager = modelManager;
     this.registry = registry;
     this.permissions = permissions;
-    this.maxTurns = config.maxTurns;
     this.config = config;
 
     this.loadBenchmarkContextSizes();
@@ -352,7 +350,7 @@ export class Agent {
       yield { type: 'thinking', content: 'Compacted conversation to free context space' };
     }
 
-    for (let turn = 0; turn < this.maxTurns; turn++) {
+    for (let turn = 0; ; turn++) {
       // Check if model should switch (only after the first turn of a message)
       if (turn > 0) {
         const signals = this.context.getSignals();
@@ -581,7 +579,7 @@ export class Agent {
       this.context.flushKnowledgeUpdate(fullContent);
     }
 
-    yield { type: 'error', error: `Reached maximum turns (${this.maxTurns})` };
+    // Loop only exits via break (model stops calling tools) or abort signal
   }
 
   /** Non-streaming version for API use (no permission prompts — auto-allows) */

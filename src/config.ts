@@ -6,9 +6,8 @@ export interface Config {
   dashboardUrl: string;
   model: string | null;
   autoSwitch: boolean;
-  maxTurns: number;
   maxModelSize: number;  // max parameter count in billions (default 40)
-  minModelSize: number;  // min for act mode — skip tiny models (default 6)
+  minModelSize: number;  // min for act mode — skip tiny models (default 12)
   apiPort: number;
   apiHost: string;
   apiToken: string | null;
@@ -24,7 +23,6 @@ export interface ConfigFile {
   dashboardUrl?: string;
   model?: string | null;
   autoSwitch?: boolean;
-  maxTurns?: number;
   maxModelSize?: number;
   minModelSize?: number;
   apiPort?: number;
@@ -42,9 +40,8 @@ const DEFAULTS: Config = {
   dashboardUrl: '',
   model: null,
   autoSwitch: true,
-  maxTurns: 50,
   maxModelSize: 40,
-  minModelSize: 6,
+  minModelSize: 12,
   apiPort: 8484,
   apiHost: '127.0.0.1',
   apiToken: null,
@@ -89,9 +86,8 @@ export function migrateEnvToJson(): boolean {
     dashboardUrl: env.VEEPEE_CODE_DASHBOARD_URL || DEFAULTS.dashboardUrl,
     model: env.VEEPEE_CODE_MODEL || null,
     autoSwitch: env.VEEPEE_CODE_AUTO_SWITCH !== 'false',
-    maxTurns: parseInt(env.VEEPEE_CODE_MAX_TURNS || '50', 10),
     maxModelSize: parseFloat(env.VEEPEE_CODE_MAX_MODEL_SIZE || '40'),
-    minModelSize: parseFloat(env.VEEPEE_CODE_MIN_MODEL_SIZE || '6'),
+    minModelSize: parseFloat(env.VEEPEE_CODE_MIN_MODEL_SIZE || '12'),
     apiPort: parseInt(env.VEEPEE_CODE_API_PORT || '8484', 10),
     apiHost: env.VEEPEE_CODE_API_HOST || '127.0.0.1',
     apiToken: env.VEEPEE_CODE_API_TOKEN || null,
@@ -146,7 +142,6 @@ export function loadConfig(configPath?: string): Config {
     dashboardUrl: file.dashboardUrl ?? DEFAULTS.dashboardUrl,
     model: file.model ?? DEFAULTS.model,
     autoSwitch: file.autoSwitch ?? DEFAULTS.autoSwitch,
-    maxTurns: file.maxTurns ?? DEFAULTS.maxTurns,
     maxModelSize: file.maxModelSize ?? DEFAULTS.maxModelSize,
     minModelSize: file.minModelSize ?? DEFAULTS.minModelSize,
     apiPort: file.apiPort ?? DEFAULTS.apiPort,

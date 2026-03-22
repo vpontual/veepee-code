@@ -908,6 +908,10 @@ async function handleCommand(
         if (result.action === 'default') {
           modelManager.setAutoSwitch(false);
           tui.updateModel(result.name, profile?.parameterSize);
+          // Persist to config file
+          const { getConfigPath, loadConfig, saveConfigFile } = await import('./config.js');
+          const currentConfig = loadConfig();
+          saveConfigFile({ ...currentConfig, model: result.name, autoSwitch: false });
           tui.showInfo(`${theme.accent(result.name)} set as default model`);
         } else {
           modelManager.setAutoSwitch(false);
