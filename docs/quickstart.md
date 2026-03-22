@@ -20,7 +20,7 @@ Before installing VEEPEE Code, make sure you have:
 ### One-liner (recommended)
 
 ```bash
-curl -fsSL https://vitorpontual.com/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/vpontual/veepee-code/main/install.sh | bash
 ```
 
 The installer handles everything automatically: installs nvm and Node.js 22 if needed, clones the repo, builds, and links the `vcode` command.

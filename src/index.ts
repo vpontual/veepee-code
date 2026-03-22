@@ -40,9 +40,9 @@ async function main() {
   if (process.argv.includes('--update')) {
     const { execSync } = await import('child_process');
     try {
-      execSync('curl -fsSL https://vitorpontual.com/install.sh | bash', { stdio: 'inherit' });
+      execSync('curl -fsSL https://raw.githubusercontent.com/vpontual/veepee-code/main/install.sh | bash', { stdio: 'inherit' });
     } catch {
-      console.error(chalk.red('Update failed. Run manually: curl -fsSL https://vitorpontual.com/install.sh | bash'));
+      console.error(chalk.red('Update failed. Run manually: curl -fsSL https://raw.githubusercontent.com/vpontual/veepee-code/main/install.sh | bash'));
     }
     process.exit(0);
   }

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # VEEPEE Code Installer
-# Usage: curl -fsSL https://vitorpontual.com/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/vpontual/veepee-code/main/install.sh | bash
 
 REPO="vpontual/veepee-code"
 INSTALL_DIR="${VEEPEE_CODE_DIR:-$HOME/.veepee-code}"

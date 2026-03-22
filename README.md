@@ -21,7 +21,7 @@ A Claude Code-style terminal AI assistant that runs entirely on your hardware. C
 ## Install
 
 ```bash
-curl -fsSL https://vitorpontual.com/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/vpontual/veepee-code/main/install.sh | bash
 ```
 
 The installer handles everything: nvm, Node.js 22, clone, build, and PATH setup.
