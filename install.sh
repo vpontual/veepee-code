@@ -106,7 +106,6 @@ fi
 ok "git $(git --version | awk '{print $3}')"
 
 CLONE_URL="https://github.com/${REPO}.git"
-fi
 
 # ─── Step 3: Clone / Update ─────────────────────────────────────────────────
 
