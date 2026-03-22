@@ -200,20 +200,23 @@ export class ModelManager {
 
   /** Pick the best default model, respecting size limits and benchmark data */
   selectDefault(): string {
-    // User override takes priority
+    // User override takes priority — try exact match, then prefix match
     if (this.preferredModel) {
-      const found = this.models.find(m => m.name === this.preferredModel);
+      const found = this.models.find(m => m.name === this.preferredModel)
+        || this.models.find(m => m.name.startsWith(this.preferredModel!));
       if (found) {
         this.currentModel = found.name;
         return found.name;
       }
     }
 
-    // If benchmark results exist, use the top-ranked model that fits size limits
-    const benchDefault = this.selectFromBenchmarks();
-    if (benchDefault) {
-      this.currentModel = benchDefault;
-      return benchDefault;
+    // If benchmark results exist and no explicit user preference, use the top-ranked model
+    if (!this.preferredModel) {
+      const benchDefault = this.selectFromBenchmarks();
+      if (benchDefault) {
+        this.currentModel = benchDefault;
+        return benchDefault;
+      }
     }
 
     // Filter: tool support + within size limits (no 80B slugs, no 3B toys)
