@@ -25,6 +25,7 @@ import { SandboxManager, formatSize } from './sandbox.js';
 import { PreviewManager } from './preview.js';
 import { SyncManager } from './sync.js';
 import { registerRcRoutes, generateRcToken } from './rc.js';
+import { checkForUpdate } from './update.js';
 
 // Tool registrations
 import { registerCodingTools } from './tools/coding.js';
@@ -263,6 +264,14 @@ async function main() {
     version: VERSION,
     apiPort: actualApiPort,
   });
+
+  // Check for updates in background (non-blocking)
+  setTimeout(() => {
+    const update = checkForUpdate();
+    if (update?.available) {
+      tui.setUpdateAvailable(update.behind);
+    }
+  }, 0);
 
   // Set model list for input completion
   tui.setModelList(allModels);

@@ -201,9 +201,16 @@ export class TUI {
   private progressBarDir = 1;
   private queuedInput = '';
   private queuedCursor = 0;
+  private updateAvailable: { behind: number } | null = null;
 
   constructor() {
     this.currentTip = Math.floor(Math.random() * this.tips.length);
+  }
+
+  /** Flag that a newer version is available (shown on welcome screen) */
+  setUpdateAvailable(behind: number): void {
+    this.updateAvailable = { behind };
+    if (this.state === 'welcome') this.render();
   }
 
   // ─── Lifecycle ─────────────────────────────────────────────────────
@@ -1131,7 +1138,10 @@ export class TUI {
     const contextInfo = this.messageCount > 0
       ? `${this.tokenCount.toLocaleString()} tok ${this.tokenPercent}%  `
       : '';
-    const right = `${contextInfo}${icons.dot} API :${this.apiPort}  v${this.version} ${icons.llama} `;
+    const updateFlag = this.updateAvailable && this.state === 'welcome'
+      ? chalk.yellow(` ⚠ update available — vcode --update `)
+      : '';
+    const right = `${contextInfo}${updateFlag}${icons.dot} API :${this.apiPort}  v${this.version} ${icons.llama} `;
 
     const padding = Math.max(0, cols - stripAnsi(left).length - stripAnsi(right).length);
 
