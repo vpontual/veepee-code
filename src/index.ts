@@ -1825,9 +1825,10 @@ ${gathered.join('\n\n')}`;
 
       try {
         const qrcode = await import('qrcode-terminal');
-        const qrGenerate = qrcode.default?.generate || qrcode.generate;
+        const qrMod = qrcode.default || qrcode;
+        qrMod.setErrorLevel?.('L');
         const code = await new Promise<string>((resolve) => {
-          qrGenerate(rcUrl, { small: true }, (qr: string) => resolve(qr));
+          qrMod.generate(rcUrl, { small: true }, (qr: string) => resolve(qr));
         });
         tui.showInfo([
           `${theme.textBold('Remote Connect:')} ${theme.success('active')}`,
