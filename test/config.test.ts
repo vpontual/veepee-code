@@ -123,7 +123,7 @@ describe('loadConfig', () => {
     expect(config.maxModelSize).toBe(40);
     expect(config.minModelSize).toBe(12);
     expect(config.apiPort).toBe(8484);
-    expect(config.apiHost).toBe('127.0.0.1');
+    expect(config.apiHost).toBe('0.0.0.0');
     expect(config.apiToken).toBeNull();
     expect(config.apiExecute).toBe(false);
     expect(config.searxngUrl).toBeNull();
