@@ -47,7 +47,7 @@ const DEFAULTS: Config = {
   maxModelSize: 40,
   minModelSize: 12,
   apiPort: 8484,
-  apiHost: '127.0.0.1',
+  apiHost: '0.0.0.0',
   apiToken: null,
   apiExecute: false,
   searxngUrl: null,
