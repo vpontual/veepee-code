@@ -2,6 +2,7 @@ import type { Message } from 'ollama';
 import type { ConversationSignals } from './models.js';
 import type { AgentMode } from './agent.js';
 import { KnowledgeState } from './knowledge.js';
+import { detectProject, formatProjectInfo, getCodingGuidance } from './detect.js';
 import { readdirSync, readFileSync, statSync, existsSync } from 'fs';
 import { join, relative } from 'path';
 
@@ -126,6 +127,7 @@ const SYSTEM_PROMPT = `You are VEEPEE Code, a CLI coding assistant powered by lo
 ## Environment
 - Date: {{DATE}} | Model: {{MODEL}} (cutoff: ~{{CUTOFF}}) | Mode: {{MODE}}
 - CWD: {{CWD}} | Platform: {{PLATFORM}}
+{{PROJECT_INFO}}
 {{PROJECT_TREE}}{{LLAMA_MD}}
 ## Rules
 
@@ -143,6 +145,24 @@ const SYSTEM_PROMPT = `You are VEEPEE Code, a CLI coding assistant powered by lo
 
 **Safety:** Destructive/external actions (rm -rf, push, post, email) — confirm first. Read-only — do freely. Never commit unless asked.
 {{SANDBOX}}
+## Coding Workflow
+
+When modifying code, follow this sequence:
+1. **Understand:** Read the target file(s) and any related files (imports, tests, config) before editing.
+2. **Plan:** For multi-file changes, plan the order of edits. Edit dependency files before dependents.
+3. **Edit:** Use edit_file for surgical changes. Match the existing code style exactly (indentation, quotes, semicolons).
+4. **Verify:** After edits, run the appropriate check for the project:
+   - TypeScript: \`bash("npx tsc --noEmit")\` to catch type errors
+   - Python: \`bash("python -m py_compile <file>")\` for syntax check
+   - If tests exist, run them to confirm nothing broke
+5. **Fix:** If verification fails, read the error output carefully and fix before declaring done.
+
+**edit_file tips for accuracy:**
+- The old_string must be an EXACT match including whitespace/indentation
+- Include enough surrounding context (2-3 lines) to make the match unique
+- For repeated patterns, include the unique line above or below
+- If edit_file fails, re-read the file to see the actual content, then retry
+{{CODING_GUIDANCE}}
 ## Knowledge State
 
 Your knowledge state contains everything important from our conversation. Only the last few messages are shown. Use \`update_memory\` to store key decisions, facts, or context:
@@ -282,6 +302,11 @@ export class ContextManager {
     // Load VEEPEE.md project instructions (like CLAUDE.md, GEMINI.md, OpenCode.md, AGENTS.md)
     const llamaMd = loadLlamaMd(process.cwd());
 
+    // Detect project type for context-aware guidance
+    const projectInfo = detectProject(process.cwd());
+    const projectInfoLine = formatProjectInfo(projectInfo);
+    const codingGuidance = getCodingGuidance(projectInfo);
+
     this.systemPrompt = SYSTEM_PROMPT
       .replace(/\{\{CWD\}\}/g, process.cwd())
       .replace(/\{\{DATE\}\}/g, new Date().toISOString().split('T')[0])
@@ -289,8 +314,10 @@ export class ContextManager {
       .replace(/\{\{CUTOFF\}\}/g, cutoff)
       .replace(/\{\{PLATFORM\}\}/g, process.platform)
       .replace(/\{\{MODE\}\}/g, modeLabel)
+      .replace(/\{\{PROJECT_INFO\}\}/g, projectInfoLine ? `- Project: ${projectInfoLine}` : '')
       .replace(/\{\{PROJECT_TREE\}\}/g, projectTree)
       .replace(/\{\{LLAMA_MD\}\}/g, llamaMd)
+      .replace(/\{\{CODING_GUIDANCE\}\}/g, codingGuidance)
       .replace(/\{\{SANDBOX\}\}/g, this.sandboxPath
         ? `\n**Sandbox:** \`${this.sandboxPath}\` — use for scratch files, experiments, temp code. Auto-cleaned on session end.\n`
         : '');

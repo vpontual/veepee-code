@@ -76,11 +76,12 @@ function createWriteFileTool(): ToolDef {
 function createEditFileTool(): ToolDef {
   return {
     name: 'edit_file',
-    description: 'Edit a file by replacing an exact string match. Provide old_string (the exact text to find) and new_string (the replacement). The old_string must match exactly including whitespace and indentation.',
+    description: 'Edit a file by replacing a string match. Provide old_string (text to find) and new_string (replacement). By default old_string must be unique; set replace_all=true to replace every occurrence.',
     schema: z.object({
       path: z.string().describe('File path to edit'),
-      old_string: z.string().describe('The exact string to find and replace. Must be unique in the file.'),
+      old_string: z.string().describe('The exact string to find and replace'),
       new_string: z.string().describe('The replacement string'),
+      replace_all: z.boolean().optional().default(false).describe('Replace all occurrences instead of requiring uniqueness'),
     }),
     execute: async (params) => {
       try {
@@ -88,30 +89,73 @@ function createEditFileTool(): ToolDef {
         const content = await readFile(filePath, 'utf-8');
         const oldStr = params.old_string as string;
         const newStr = params.new_string as string;
+        const replaceAll = params.replace_all as boolean;
+        const relPath = relative(process.cwd(), filePath);
 
-        // Check that old_string exists and is unique
+        let updated: string;
+        let matchCount: number;
+
+        // Exact match first
         const occurrences = content.split(oldStr).length - 1;
-        if (occurrences === 0) {
-          return fail(`old_string not found in ${relative(process.cwd(), filePath)}. Read the file first to get the exact content.`);
-        }
-        if (occurrences > 1) {
-          return fail(`old_string found ${occurrences} times — it must be unique. Include more surrounding context.`);
+
+        if (occurrences > 0) {
+          matchCount = occurrences;
+          if (!replaceAll && occurrences > 1) {
+            return fail(`old_string found ${occurrences} times in ${relPath} — it must be unique. Include more surrounding context, or set replace_all=true.`);
+          }
+          updated = replaceAll ? content.replaceAll(oldStr, newStr) : content.replace(oldStr, newStr);
+        } else {
+          // Fuzzy whitespace match: normalize tabs/spaces and try again
+          const normalize = (s: string) => s.replace(/[ \t]+/g, ' ').replace(/\r\n/g, '\n');
+          const normalizedContent = normalize(content);
+          const normalizedOld = normalize(oldStr);
+          const fuzzyOccurrences = normalizedContent.split(normalizedOld).length - 1;
+
+          if (fuzzyOccurrences === 0) {
+            // Show nearby content to help the model
+            const firstLine = oldStr.split('\n')[0].trim();
+            const lineIdx = content.split('\n').findIndex(l => l.trim().includes(firstLine));
+            const hint = lineIdx >= 0
+              ? `\nNearest match around line ${lineIdx + 1}:\n${content.split('\n').slice(Math.max(0, lineIdx - 1), lineIdx + 3).map((l, i) => `  ${lineIdx + i}: ${l}`).join('\n')}`
+              : '';
+            return fail(`old_string not found in ${relPath}. Read the file first to get the exact content.${hint}`);
+          }
+
+          if (!replaceAll && fuzzyOccurrences > 1) {
+            return fail(`old_string found ${fuzzyOccurrences} times (with whitespace normalization) — include more context.`);
+          }
+
+          // Find the actual string in the file that matches after normalization
+          const lines = content.split('\n');
+          const oldLines = oldStr.split('\n');
+          let startLine = -1;
+
+          for (let i = 0; i <= lines.length - oldLines.length; i++) {
+            const slice = lines.slice(i, i + oldLines.length).join('\n');
+            if (normalize(slice) === normalizedOld) {
+              startLine = i;
+              break;
+            }
+          }
+
+          if (startLine === -1) {
+            return fail(`Whitespace-fuzzy match found but could not locate exact position. Read the file and retry with exact content.`);
+          }
+
+          const actualOld = lines.slice(startLine, startLine + oldLines.length).join('\n');
+          updated = content.replace(actualOld, newStr);
+          matchCount = 1;
         }
 
-        const updated = content.replace(oldStr, newStr);
         await writeFile(filePath, updated, 'utf-8');
 
-        // Generate a readable diff
-        const relPath = relative(process.cwd(), filePath);
         const oldLines = oldStr.split('\n');
         const newLines = newStr.split('\n');
-        const diffLines: string[] = [`Edited ${relPath}:`];
-        for (const line of oldLines) {
-          diffLines.push(`- ${line}`);
-        }
-        for (const line of newLines) {
-          diffLines.push(`+ ${line}`);
-        }
+        const diffLines: string[] = [`Edited ${relPath}${matchCount > 1 ? ` (${matchCount} replacements)` : ''}:`];
+        for (const line of oldLines.slice(0, 10)) diffLines.push(`- ${line}`);
+        if (oldLines.length > 10) diffLines.push(`  ... (${oldLines.length - 10} more lines)`);
+        for (const line of newLines.slice(0, 10)) diffLines.push(`+ ${line}`);
+        if (newLines.length > 10) diffLines.push(`  ... (${newLines.length - 10} more lines)`);
         return ok(diffLines.join('\n'));
       } catch (err) {
         return fail(`Cannot edit file: ${(err as Error).message}`);
