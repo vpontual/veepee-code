@@ -8,7 +8,7 @@ import { ContextManager, CHAT_TOOLS } from './context.js';
 import { ModelManager } from './models.js';
 import type { ModelRoster } from './benchmark.js';
 import { SubAgentManager } from './subagent.js';
-import { readFile, readFile as readFileAsync } from 'node:fs/promises';
+import { readFile, readFile as readFileAsync, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, relative } from 'path';
 import { existsSync } from 'fs';
 
@@ -252,6 +252,47 @@ export class Agent {
     return message + '\n\n' + fileContents.join('\n');
   }
 
+  // ─── Plan Auto-Persistence ───────────────────────────────────────
+
+  private static PLAN_DIR = '.veepee';
+  private static PLAN_FILE = '.veepee/plan.md';
+
+  private static PLAN_CONTENT_PATTERNS = [
+    /^#{1,3}\s+(implementation|action)\s+plan/im,
+    /^#{1,3}\s+plan\b/im,
+    /^##\s+(step|phase)\s+\d/im,
+    /(?:^|\n)\d+\.\s+\*\*.*\*\*.*\n\d+\.\s+\*\*/m,  // numbered bold steps
+    /(?:^|\n)(?:step|phase)\s+\d+[.:]/im,
+  ];
+
+  /** Detect if assistant output contains a plan and auto-save it */
+  private async autoSavePlan(content: string): Promise<boolean> {
+    if (!content || content.length < 200) return false;
+
+    const isPlan = Agent.PLAN_CONTENT_PATTERNS.some(p => p.test(content));
+    if (!isPlan) return false;
+
+    try {
+      const planDir = resolve(process.cwd(), Agent.PLAN_DIR);
+      const planPath = resolve(process.cwd(), Agent.PLAN_FILE);
+      await mkdir(planDir, { recursive: true });
+      await writeFile(planPath, `<!-- Auto-saved by VEEPEE Code — ${new Date().toISOString()} -->\n\n${content}`, 'utf-8');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Load saved plan file if it exists, for injection after compaction */
+  async loadSavedPlan(): Promise<string | null> {
+    try {
+      const planPath = resolve(process.cwd(), Agent.PLAN_FILE);
+      return await readFile(planPath, 'utf-8');
+    } catch {
+      return null;
+    }
+  }
+
   /** Detect if a message has planning intent */
   private detectPlanningIntent(message: string): boolean {
     // Don't auto-detect in chat mode
@@ -375,6 +416,13 @@ export class Agent {
     if (this.context.needsCompaction()) {
       if (this.context.compact(this.config.proxyUrl, this.modelManager.getCurrentModel())) {
         yield { type: 'thinking', content: 'Compacted conversation to free context space' };
+
+        // Recover saved plan after compaction so the model doesn't lose it
+        const savedPlan = await this.loadSavedPlan();
+        if (savedPlan) {
+          this.context.addUser('[System: Your previously saved implementation plan from .veepee/plan.md — continue from where you left off]\n\n' + savedPlan);
+          yield { type: 'thinking', content: 'Restored plan from .veepee/plan.md' };
+        }
       }
     }
 
@@ -591,6 +639,13 @@ export class Agent {
       if (toolCalls.length === 0) {
         // Save knowledge state to disk (non-blocking)
         this.context.getKnowledgeState().save().catch(() => {});
+
+        // Auto-save plans to disk so they survive compaction
+        const planSaved = await this.autoSavePlan(fullContent);
+        if (planSaved) {
+          yield { type: 'thinking', content: 'Plan auto-saved to .veepee/plan.md' };
+        }
+
         this.abortController = null;
 
         // Restore original model if we switched for vision
@@ -721,8 +776,14 @@ export class Agent {
 
       // Proactive compaction check after tool results (context grows most here)
       if (this.context.needsCompaction()) {
-        if (this.context.compact()) {
+        if (this.context.compact(this.config.proxyUrl, this.modelManager.getCurrentModel())) {
           yield { type: 'thinking', content: 'Compacted conversation to free context space' };
+
+          const savedPlan = await this.loadSavedPlan();
+          if (savedPlan) {
+            this.context.addUser('[System: Your previously saved implementation plan from .veepee/plan.md — continue from where you left off]\n\n' + savedPlan);
+            yield { type: 'thinking', content: 'Restored plan from .veepee/plan.md' };
+          }
         }
       }
     }
