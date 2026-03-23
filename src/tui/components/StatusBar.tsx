@@ -13,9 +13,7 @@ interface StatusBarProps {
 export function StatusBar({ tokenCount, tokenPercent, messageCount, apiPort, version }: StatusBarProps): React.ReactElement {
   const cwd = process.cwd().replace(process.env.HOME || '', '~');
 
-  const contextInfo = messageCount > 0
-    ? `${tokenCount.toLocaleString()} tok ${tokenPercent}%  `
-    : '';
+  const contextInfo = `${tokenCount.toLocaleString()} tok ${tokenPercent}%  `;
 
   return (
     <Box width="100%">

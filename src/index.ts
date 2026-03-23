@@ -268,6 +268,14 @@ async function main() {
     apiPort: actualApiPort,
   });
 
+  // Show initial context stats (system prompt size before any messages)
+  tui.updateStats(
+    agent.getContext().estimateTokens(),
+    Math.round((agent.getContext().estimateTokens() / agent.getContext().getContextLimit()) * 100),
+    0,
+    0,
+  );
+
   // Check for updates in background (non-blocking)
   setTimeout(() => {
     const update = checkForUpdate();
