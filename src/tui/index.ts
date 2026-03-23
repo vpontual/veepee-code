@@ -99,8 +99,10 @@ export class TUI {
     process.stdout.write('\x1b[2J');     // clear
     process.stdout.write('\x1b[H');      // home
 
-    // Enable mouse wheel tracking (SGR extended mode)
-    process.stdout.write('\x1b[?1000h');
+    // Enable mouse wheel scroll tracking only (not button clicks — preserves text selection)
+    // 1002h = button-event tracking (reports press/release but not motion, allows Shift+click selection)
+    // 1006h = SGR extended mode (for scroll wheel delta parsing)
+    process.stdout.write('\x1b[?1002h');
     process.stdout.write('\x1b[?1006h');
 
     // Set up raw stdin for keystroke handling (bypass Ink's useInput)
@@ -146,7 +148,7 @@ export class TUI {
     process.stdin.setRawMode?.(false);
     // Disable mouse tracking
     process.stdout.write('\x1b[?1006l');
-    process.stdout.write('\x1b[?1000l');
+    process.stdout.write('\x1b[?1002l');
     this.inkInstance?.unmount();
     // Restore terminal: show cursor + exit alternate screen
     process.stdout.write('\x1b[?25h');   // show cursor
@@ -380,6 +382,37 @@ export class TUI {
     }
   }
 
+  /** Copy the last assistant response to system clipboard */
+  copyLastResponse(): void {
+    const state = this.getState();
+    if (!state) return;
+
+    const lastAssistant = [...state.messages].reverse().find(m => m.role === 'assistant');
+    if (!lastAssistant?.content) {
+      this.showInfo(theme.dim('Nothing to copy.'));
+      return;
+    }
+
+    const text = lastAssistant.content;
+    // Try platform clipboard tools
+    const { execSync } = require('child_process') as typeof import('child_process');
+    try {
+      if (process.platform === 'darwin') {
+        execSync('pbcopy', { input: text, stdio: ['pipe', 'pipe', 'pipe'] });
+      } else if (process.platform === 'linux') {
+        // Try wl-copy (Wayland) first, then xclip (X11)
+        try {
+          execSync('wl-copy', { input: text, stdio: ['pipe', 'pipe', 'pipe'] });
+        } catch {
+          execSync('xclip -selection clipboard', { input: text, stdio: ['pipe', 'pipe', 'pipe'] });
+        }
+      }
+      this.showInfo(theme.success(`Copied ${text.length} chars to clipboard.`));
+    } catch {
+      this.showInfo(theme.error('No clipboard tool available (install wl-copy or xclip).'));
+    }
+  }
+
   updateStats(tokens: number, percent: number, messages: number, elapsed: number): void {
     this.dispatch({ type: 'SET_STATS', tokens, percent, messages, elapsed });
   }
@@ -532,6 +565,12 @@ export class TUI {
         this.dispatch({ type: 'CLEAR_PERMISSION' });
         return;
       }
+      return;
+    }
+
+    // Ctrl+Y — copy last response to clipboard
+    if (key === '\x19') {
+      this.copyLastResponse();
       return;
     }
 

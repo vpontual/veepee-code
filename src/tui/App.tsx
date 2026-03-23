@@ -32,6 +32,7 @@ const COMMANDS: CommandDef[] = [
   { name: '/status', args: '', description: 'Show session status' },
   { name: '/clear', args: '', description: 'Clear conversation history' },
   { name: '/compact', args: '', description: 'Compact conversation to free context' },
+  { name: '/copy', args: '', description: 'Copy last response to clipboard (also Ctrl+Y)' },
   { name: '/help', args: '', description: 'Show all commands' },
   { name: '/save', args: '[name]', description: 'Save current conversation as a session' },
   { name: '/sessions', args: '', description: 'List all saved sessions' },
@@ -57,6 +58,7 @@ const COMMANDS: CommandDef[] = [
   { name: '/rc qr', args: '', description: 'Show Remote Connect URL for phone' },
   { name: '/settings', args: '', description: 'View and toggle settings' },
   { name: '/settings progress-bar', args: '', description: 'Toggle progress bar animation' },
+  { name: '/settings model_stick', args: '', description: 'Lock current model across mode switches' },
   { name: '/quit', args: '', description: 'Exit VEEPEE Code' },
   { name: '/exit', args: '', description: 'Exit VEEPEE Code' },
 ];

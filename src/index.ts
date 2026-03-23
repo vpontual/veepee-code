@@ -131,6 +131,7 @@ async function main() {
   const agent = new Agent(config, registry, modelManager, permissions);
   agent.getContext().setRegisteredTools(registry.names());
   agent.getContext().setSystemPrompt(defaultModel);
+  if (config.modelStick) agent.setModelStick(true);
 
   // Initialize sandbox
   const sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -828,6 +829,11 @@ async function handleCommand(
       return false;
     }
 
+    case '/copy': {
+      tui.copyLastResponse();
+      return false;
+    }
+
     case '/compact': {
       const ctx = agent.getContext();
       if (ctx.messageCount() <= 4) {
@@ -950,11 +956,22 @@ async function handleCommand(
         const currentConfig = loadConfig();
         saveConfigFile({ ...currentConfig, progressBar: newVal });
         tui.showInfo(`Progress bar ${newVal ? theme.success('enabled') : theme.muted('disabled')}`);
+      } else if (settingName === 'model_stick' || settingName === 'model-stick' || settingName === 'stick') {
+        const newVal = !agent.getModelStick();
+        agent.setModelStick(newVal);
+        const { loadConfig: reloadConfig, saveConfigFile } = await import('./config.js');
+        const currentConfig = reloadConfig();
+        saveConfigFile({ ...currentConfig, modelStick: newVal });
+        const currentModel = modelManager.getCurrentModel();
+        tui.showInfo(newVal
+          ? `Model stick ${theme.success('ON')} — locked to ${theme.accent(currentModel)}. Mode switches won't change the model.`
+          : `Model stick ${theme.muted('OFF')} — mode switches will select the best model per mode.`);
       } else {
         tui.showInfo([
           '',
           `${theme.textBold('Settings:')}`,
           `  ${theme.accent('progress-bar')}   ${tui.getProgressBar() ? theme.success('ON') : theme.muted('OFF')}   Bouncing progress bar animation`,
+          `  ${theme.accent('model_stick')}    ${agent.getModelStick() ? theme.success('ON') : theme.muted('OFF')}   Lock model across mode switches`,
           '',
           `${theme.dim('Toggle with: /settings <name>')}`,
         ].join('\n'));

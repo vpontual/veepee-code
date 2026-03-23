@@ -57,6 +57,7 @@ export class Agent {
   private abortController: AbortController | null = null;
   private effort: EffortLevel = 'medium';
   private allowedTools: Set<string> | null = null; // null = all allowed
+  private modelStick = false; // when true, mode switches don't change the model
 
   constructor(config: Config, registry: ToolRegistry, modelManager: ModelManager, permissions: PermissionManager) {
     this.ollama = new Ollama({ host: config.proxyUrl });
@@ -90,23 +91,36 @@ export class Agent {
     return this.roster;
   }
 
-  /** Enter plan mode — thinking ON, best reasoning model from roster */
+  getModelStick(): boolean {
+    return this.modelStick;
+  }
+
+  setModelStick(on: boolean): void {
+    this.modelStick = on;
+    if (on) {
+      this.modelManager.setAutoSwitch(false);
+    }
+  }
+
+  /** Enter plan mode — thinking ON, best reasoning model from roster (unless model_stick is on) */
   enterPlanMode(): { model: string } {
     this.mode = 'plan';
     this.previousModel = this.modelManager.getCurrentModel();
 
-    // Use roster's plan model if available
-    const planModel = this.roster?.plan;
-    if (planModel && this.modelManager.getProfile(planModel)) {
-      this.modelManager.switchTo(planModel);
-    } else {
-      // Fallback: best heavy model with thinking
-      const heavyModels = this.modelManager.getModelsByTier('heavy')
-        .filter(m => m.capabilities.includes('tools'))
-        .sort((a, b) => b.score - a.score);
-      const thinker = heavyModels.find(m => m.capabilities.includes('thinking'));
-      const best = thinker || heavyModels[0];
-      if (best) this.modelManager.switchTo(best.name);
+    if (!this.modelStick) {
+      // Use roster's plan model if available
+      const planModel = this.roster?.plan;
+      if (planModel && this.modelManager.getProfile(planModel)) {
+        this.modelManager.switchTo(planModel);
+      } else {
+        // Fallback: best heavy model with thinking
+        const heavyModels = this.modelManager.getModelsByTier('heavy')
+          .filter(m => m.capabilities.includes('tools'))
+          .sort((a, b) => b.score - a.score);
+        const thinker = heavyModels.find(m => m.capabilities.includes('thinking'));
+        const best = thinker || heavyModels[0];
+        if (best) this.modelManager.switchTo(best.name);
+      }
     }
 
     this.modelManager.setAutoSwitch(false);
@@ -116,50 +130,56 @@ export class Agent {
     return { model: this.modelManager.getCurrentModel() };
   }
 
-  /** Exit plan/chat mode — restore act model from roster */
+  /** Exit plan/chat mode — restore act model from roster (unless model_stick is on) */
   exitPlanMode(): void {
     this.mode = 'act';
     this.context.setMode('act');
 
-    // Use roster's act model, or restore previous
-    const actModel = this.roster?.act;
-    if (actModel && this.modelManager.getProfile(actModel)) {
-      this.modelManager.switchTo(actModel);
-    } else if (this.previousModel) {
-      this.modelManager.switchTo(this.previousModel);
+    if (!this.modelStick) {
+      // Use roster's act model, or restore previous
+      const actModel = this.roster?.act;
+      if (actModel && this.modelManager.getProfile(actModel)) {
+        this.modelManager.switchTo(actModel);
+      } else if (this.previousModel) {
+        this.modelManager.switchTo(this.previousModel);
+      }
+      this.modelManager.setAutoSwitch(true);
     }
     this.previousModel = null;
-    this.modelManager.setAutoSwitch(true);
     this.context.setSystemPrompt(this.modelManager.getCurrentModel());
   }
 
-  /** Enter chat mode — web tools only, fastest conversational model from roster */
+  /** Enter chat mode — web tools only, fastest conversational model from roster (unless model_stick is on) */
   enterChatMode(): { model: string } {
     this.mode = 'chat';
     this.previousModel = this.modelManager.getCurrentModel();
     this.context.setMode('chat');
 
-    // Use roster's chat model if available
-    const chatModel = this.roster?.chat;
-    if (chatModel && this.modelManager.getProfile(chatModel)) {
-      this.modelManager.switchTo(chatModel);
-      this.modelManager.setAutoSwitch(false);
-      this.context.setSystemPrompt(chatModel);
-      return { model: chatModel };
-    }
+    if (!this.modelStick) {
+      // Use roster's chat model if available
+      const chatModel = this.roster?.chat;
+      if (chatModel && this.modelManager.getProfile(chatModel)) {
+        this.modelManager.switchTo(chatModel);
+        this.modelManager.setAutoSwitch(false);
+        this.context.setSystemPrompt(chatModel);
+        return { model: chatModel };
+      }
 
-    // Fallback: pick a fast standard-tier model
-    const standardModels = this.modelManager.getModelsByTier('standard')
-      .sort((a, b) => b.score - a.score);
-    const lightModels = this.modelManager.getModelsByTier('light')
-      .filter(m => m.parameterCount >= 3)
-      .sort((a, b) => b.score - a.score);
+      // Fallback: pick a fast standard-tier model
+      const standardModels = this.modelManager.getModelsByTier('standard')
+        .sort((a, b) => b.score - a.score);
+      const lightModels = this.modelManager.getModelsByTier('light')
+        .filter(m => m.parameterCount >= 3)
+        .sort((a, b) => b.score - a.score);
 
-    const best = standardModels[0] || lightModels[0];
-    if (best) {
-      this.modelManager.switchTo(best.name);
-      this.modelManager.setAutoSwitch(false);
-      this.context.setSystemPrompt(best.name);
+      const best = standardModels[0] || lightModels[0];
+      if (best) {
+        this.modelManager.switchTo(best.name);
+        this.modelManager.setAutoSwitch(false);
+        this.context.setSystemPrompt(best.name);
+      }
+    } else {
+      this.context.setSystemPrompt(this.modelManager.getCurrentModel());
     }
 
     return { model: this.modelManager.getCurrentModel() };

@@ -14,6 +14,7 @@ export interface Config {
   apiExecute: boolean;
   searxngUrl: string | null;
   progressBar: boolean;
+  modelStick: boolean;
   sync: { url: string; user: string; pass: string; auto: boolean } | null;
   rc: { enabled: boolean } | null;
   remote: { url: string; apiKey: string } | null;
@@ -32,6 +33,7 @@ export interface ConfigFile {
   apiExecute?: boolean;
   searxngUrl?: string | null;
   progressBar?: boolean;
+  modelStick?: boolean;
   sync?: { url: string; user: string; pass: string; auto: boolean } | null;
   rc?: { enabled: boolean } | null;
   remote?: { url: string; apiKey: string } | null;
@@ -50,6 +52,7 @@ const DEFAULTS: Config = {
   apiExecute: false,
   searxngUrl: null,
   progressBar: true,
+  modelStick: false,
   sync: null,
   rc: null,
   remote: null,
@@ -153,6 +156,7 @@ export function loadConfig(configPath?: string): Config {
     apiExecute: file.apiExecute ?? DEFAULTS.apiExecute,
     searxngUrl: file.searxngUrl ?? DEFAULTS.searxngUrl,
     progressBar: file.progressBar ?? DEFAULTS.progressBar,
+    modelStick: file.modelStick ?? DEFAULTS.modelStick,
     sync: file.sync ?? DEFAULTS.sync,
     rc: file.rc ?? DEFAULTS.rc,
     remote: file.remote ?? DEFAULTS.remote,
