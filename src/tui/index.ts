@@ -138,6 +138,8 @@ const COMMANDS = [
   { name: '/sync status', args: '', description: 'Show sync configuration' },
   { name: '/rc', args: '', description: 'Show Remote Connect URL and status' },
   { name: '/rc qr', args: '', description: 'Show Remote Connect URL for phone' },
+  { name: '/settings', args: '', description: 'View and toggle settings' },
+  { name: '/settings progress-bar', args: '', description: 'Toggle progress bar animation' },
   { name: '/quit', args: '', description: 'Exit VEEPEE Code' },
   { name: '/exit', args: '', description: 'Exit VEEPEE Code' },
 ];
@@ -198,6 +200,7 @@ export class TUI {
   private turnTrackerInterval: ReturnType<typeof setInterval> | null = null;
   private abortHandler: (() => void) | null = null;
   private progressBarInterval: ReturnType<typeof setInterval> | null = null;
+  private progressBarEnabled = true;
   private progressBarPos = 0;
   private progressBarDir = 1;
   private queuedInput = '';
@@ -372,6 +375,7 @@ export class TUI {
 
   /** Start the bouncing progress bar on row 1 */
   private startProgressBar(): void {
+    if (!this.progressBarEnabled) return;
     if (this.progressBarInterval) return;
     this.progressBarPos = 0;
     this.progressBarDir = 1;
@@ -573,6 +577,15 @@ export class TUI {
     this.tokenPercent = percent;
     this.messageCount = messages;
     this.elapsed = elapsed;
+  }
+
+  setProgressBar(enabled: boolean): void {
+    this.progressBarEnabled = enabled;
+    if (!enabled) this.stopProgressBar();
+  }
+
+  getProgressBar(): boolean {
+    return this.progressBarEnabled;
   }
 
   updateModel(name: string, size?: string, role?: string): void {

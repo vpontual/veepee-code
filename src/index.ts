@@ -256,6 +256,7 @@ async function main() {
 
   // Initialize TUI
   const tui = new TUI();
+  tui.setProgressBar(config.progressBar);
   tui.start({
     model: defaultModel,
     modelSize: defaultProfile?.parameterSize || '',
@@ -769,7 +770,7 @@ async function handleCommand(
         `  ${theme.accent('/save [name]')}      Save session        ${theme.accent('/sessions')}    List saved sessions`,
         `  ${theme.accent('/resume <name>')}    Resume a session    ${theme.accent('/rename <name>')} Rename session`,
         `  ${theme.accent('/add-dir <path>')}   Add working dir     ${theme.accent('/worktree')}     Git worktree isolation`,
-        `  ${theme.accent('/effort low|med|hi')} Set response depth`,
+        `  ${theme.accent('/effort low|med|hi')} Set response depth  ${theme.accent('/settings')}    View/toggle settings`,
         '',
         `${theme.textBold('Modes:')}`,
         `  ${theme.accent('/plan')}   Plan mode — thinking ON, heavy model, clarifying questions first`,
@@ -937,6 +938,27 @@ async function handleCommand(
         `  ${theme.accent(t.name.padEnd(20))} ${theme.muted(t.description.slice(0, 60))}`
       );
       tui.showInfo(`${theme.textBold(`${tools.length} tools:`)}\n${lines.join('\n')}`);
+      return false;
+    }
+
+    case '/settings': {
+      const settingName = parts[1]?.toLowerCase();
+      if (settingName === 'progress-bar') {
+        const newVal = !tui.getProgressBar();
+        tui.setProgressBar(newVal);
+        const { getConfigPath, loadConfig, saveConfigFile } = await import('./config.js');
+        const currentConfig = loadConfig();
+        saveConfigFile({ ...currentConfig, progressBar: newVal });
+        tui.showInfo(`Progress bar ${newVal ? theme.success('enabled') : theme.muted('disabled')}`);
+      } else {
+        tui.showInfo([
+          '',
+          `${theme.textBold('Settings:')}`,
+          `  ${theme.accent('progress-bar')}   ${tui.getProgressBar() ? theme.success('ON') : theme.muted('OFF')}   Bouncing progress bar animation`,
+          '',
+          `${theme.dim('Toggle with: /settings <name>')}`,
+        ].join('\n'));
+      }
       return false;
     }
 
