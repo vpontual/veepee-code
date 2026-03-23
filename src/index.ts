@@ -1818,44 +1818,30 @@ ${gathered.join('\n\n')}`;
         return;
       }
 
-      if (subCmd === 'qr') {
-        const rcUrl = config.apiToken
-          ? `http://${getLocalIp()}:${apiPort}/rc?token=${config.apiToken}`
-          : `http://${getLocalIp()}:${apiPort}/rc`;
-
-        // Generate QR code as string, then display via TUI
-        try {
-          const qrcode = await import('qrcode-terminal');
-          const qrGenerate = qrcode.default?.generate || qrcode.generate;
-          const code = await new Promise<string>((resolve) => {
-            qrGenerate(rcUrl, { small: true }, (qr: string) => resolve(qr));
-          });
-          tui.showInfo([
-            `${theme.textBold('Scan with your phone:')}`,
-            '',
-            code,
-            '',
-            `  ${theme.accent(rcUrl)}`,
-          ].join('\n'));
-        } catch {
-          // Fallback if QR generation fails
-          tui.showInfo([
-            `${theme.textBold('Remote Connect URL:')}`,
-            `  ${theme.accent(rcUrl)}`,
-          ].join('\n'));
-        }
-        return;
-      }
-
-      // Default: show RC status + QR hint
-      const url = config.apiToken
+      // Show RC status with QR code and URL
+      const rcUrl = config.apiToken
         ? `http://${getLocalIp()}:${apiPort}/rc?token=${config.apiToken}`
         : `http://${getLocalIp()}:${apiPort}/rc`;
-      tui.showInfo([
-        `${theme.textBold('Remote Connect:')} ${theme.success('active')}`,
-        `  ${theme.accent(url)}`,
-        `  ${theme.dim('Tip: /rc qr to show a scannable QR code')}`,
-      ].join('\n'));
+
+      try {
+        const qrcode = await import('qrcode-terminal');
+        const qrGenerate = qrcode.default?.generate || qrcode.generate;
+        const code = await new Promise<string>((resolve) => {
+          qrGenerate(rcUrl, { small: true }, (qr: string) => resolve(qr));
+        });
+        tui.showInfo([
+          `${theme.textBold('Remote Connect:')} ${theme.success('active')}`,
+          '',
+          code,
+          '',
+          `  ${theme.accent(rcUrl)}`,
+        ].join('\n'));
+      } catch {
+        tui.showInfo([
+          `${theme.textBold('Remote Connect:')} ${theme.success('active')}`,
+          `  ${theme.accent(rcUrl)}`,
+        ].join('\n'));
+      }
       return;
     }
 
