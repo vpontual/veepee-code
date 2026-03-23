@@ -512,10 +512,14 @@ export class ContextManager {
 
   /** Check if context is approaching the limit and needs compaction */
   needsCompaction(): boolean {
-    // Use actual token count if available, otherwise estimate
     const used = this.lastPromptTokens > 0 ? this.lastPromptTokens : this.estimateTokens();
-    // Compact when we've used more than 75% of context
     return used > this.contextLimit * 0.75;
+  }
+
+  /** Check if context is critically full (pre-compaction snapshot trigger) */
+  isContextCritical(): boolean {
+    const used = this.lastPromptTokens > 0 ? this.lastPromptTokens : this.estimateTokens();
+    return used > this.contextLimit * 0.90;
   }
 
   compact(ollamaHost?: string, model?: string): boolean {

@@ -412,6 +412,27 @@ export class Agent {
       this.context.setContextLimit(ctxLimit);
     }
 
+    // Pre-compaction snapshot: at 90%, save state to disk (costs zero tokens)
+    if (this.context.isContextCritical()) {
+      const existing = await this.loadSavedPlan();
+      if (!existing) {
+        // No plan file yet — save last assistant messages as a recovery snapshot
+        const recentAssistant = this.context.getAllMessages()
+          .filter(m => m.role === 'assistant' && m.content)
+          .slice(-3)
+          .map(m => m.content)
+          .join('\n\n---\n\n');
+        const ks = this.context.getKnowledgeState().serialize();
+        if (recentAssistant.length > 100) {
+          const snapshot = `<!-- Auto-snapshot at 90% context — ${new Date().toISOString()} -->\n\n## Knowledge State\n\n${ks}\n\n## Recent Context\n\n${recentAssistant}`;
+          const planDir = resolve(process.cwd(), '.veepee');
+          const planPath = resolve(process.cwd(), '.veepee/plan.md');
+          await mkdir(planDir, { recursive: true }).catch(() => {});
+          await writeFile(planPath, snapshot, 'utf-8').catch(() => {});
+        }
+      }
+    }
+
     // Check for context compaction
     if (this.context.needsCompaction()) {
       if (this.context.compact(this.config.proxyUrl, this.modelManager.getCurrentModel())) {
