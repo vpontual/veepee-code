@@ -368,8 +368,8 @@ async function main() {
         tui.showInfo('');
         tui.showInfo(Benchmarker.formatRoster(roster));
 
-        // Apply roster — use act model as default
-        if (roster.act) {
+        // Apply roster — use act model as default (only if user hasn't set an explicit preference)
+        if (roster.act && !config.model) {
           const profile = modelManager.getProfile(roster.act);
           if (profile) {
             defaultModel = roster.act;
@@ -384,8 +384,8 @@ async function main() {
     }
     tui.showInfo('');
   } else {
-    // Roster exists — apply it
-    if (existingRoster.act) {
+    // Roster exists — apply it (only if user hasn't set an explicit preference)
+    if (existingRoster.act && !config.model) {
       const profile = modelManager.getProfile(existingRoster.act);
       if (profile) {
         defaultModel = existingRoster.act;
