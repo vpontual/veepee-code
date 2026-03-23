@@ -78,13 +78,12 @@ export function MessagesArea({
     renderedLines.push(...lines);
   }
 
-  // Add stream buffer if active (indent to match assistant text)
+  // Add stream buffer if active — render as assistant message for consistent styling
   if (streamActive && streamBuffer) {
     renderedLines.push(' ');
-    const wrapped = wordWrap(streamBuffer, maxWidth - 2);
-    for (const line of wrapped) {
-      renderedLines.push('  ' + line);
-    }
+    const streamMsg = { role: 'assistant' as const, content: streamBuffer };
+    const streamLines = formatMessage(streamMsg, maxWidth);
+    renderedLines.push(...streamLines);
   }
 
   // Add permission menu if active

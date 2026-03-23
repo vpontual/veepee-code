@@ -28,14 +28,23 @@ export function CommandMenu({ visible, commands, selection, cols }: CommandMenuP
   const boxWidth = cols - 4;
   const menuMaxVisible = Math.min(commands.length, 12);
 
+  // Scroll window: keep selection visible within the viewport
+  let scrollStart = 0;
+  if (selection >= menuMaxVisible) {
+    scrollStart = selection - menuMaxVisible + 1;
+  }
+  const visibleCommands = commands.slice(scrollStart, scrollStart + menuMaxVisible);
+
   const topBorder = theme.border(box.roundTl + box.h.repeat(boxWidth - 2) + box.roundTr);
   const bottomBorder = theme.border(box.roundBl + box.h.repeat(boxWidth - 2) + box.roundBr);
 
   return (
     <Box flexDirection="column" paddingLeft={2}>
       <Text>{topBorder}</Text>
-      {commands.slice(0, menuMaxVisible).map((cmd, i) => {
-        const isSelected = i === selection;
+      {scrollStart > 0 && <Text>{theme.border(box.v)} {theme.muted(`  ▲ ${scrollStart} more above`).padEnd(boxWidth - 4)} {theme.border(box.v)}</Text>}
+      {visibleCommands.map((cmd, i) => {
+        const actualIndex = scrollStart + i;
+        const isSelected = actualIndex === selection;
         const nameStr = cmd.name.padEnd(22);
         const descStr = truncateStr(cmd.description, boxWidth - 28);
 
@@ -51,6 +60,7 @@ export function CommandMenu({ visible, commands, selection, cols }: CommandMenuP
           return <Text key={i}>{theme.border(box.v)} {padded} {theme.border(box.v)}</Text>;
         }
       })}
+      {scrollStart + menuMaxVisible < commands.length && <Text>{theme.border(box.v)} {theme.muted(`  ▼ ${commands.length - scrollStart - menuMaxVisible} more below`).padEnd(boxWidth - 4)} {theme.border(box.v)}</Text>}
       <Text>{bottomBorder}</Text>
     </Box>
   );
