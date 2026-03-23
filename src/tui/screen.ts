@@ -1,5 +1,31 @@
 /** Low-level terminal screen primitives */
 
+// ─── Write buffer for flicker-free rendering ─────────────────────────────────
+// When buffering is active, all terminal writes are collected into a single
+// string and flushed at once, so the terminal never sees an intermediate
+// (blank) frame.
+let _buf: string[] | null = null;
+
+/** Begin buffering all terminal writes. */
+export function beginBuffer(): void {
+  _buf = [];
+}
+
+/** Flush the buffer to stdout in a single write and stop buffering. */
+export function flushBuffer(): void {
+  if (_buf) {
+    const data = _buf.join('');
+    _buf = null;
+    process.stdout.write(data);
+  }
+}
+
+/** Internal: write to buffer or stdout. */
+function out(s: string): void {
+  if (_buf) _buf.push(s);
+  else process.stdout.write(s);
+}
+
 export function enterAltScreen(): void {
   process.stdout.write('\x1b[?1049h'); // switch to alternate buffer
   process.stdout.write('\x1b[?25l');   // hide cursor
@@ -13,27 +39,27 @@ export function exitAltScreen(): void {
 }
 
 export function showCursor(): void {
-  process.stdout.write('\x1b[?25h');
+  out('\x1b[?25h');
 }
 
 export function hideCursor(): void {
-  process.stdout.write('\x1b[?25l');
+  out('\x1b[?25l');
 }
 
 export function moveTo(row: number, col: number): void {
-  process.stdout.write(`\x1b[${row};${col}H`);
+  out(`\x1b[${row};${col}H`);
 }
 
 export function clearLine(): void {
-  process.stdout.write('\x1b[2K');
+  out('\x1b[2K');
 }
 
 export function clearScreen(): void {
-  process.stdout.write('\x1b[2J\x1b[H');
+  out('\x1b[2J\x1b[H');
 }
 
 export function clearBelow(): void {
-  process.stdout.write('\x1b[J');
+  out('\x1b[J');
 }
 
 export function getSize(): { rows: number; cols: number } {
@@ -46,13 +72,13 @@ export function getSize(): { rows: number; cols: number } {
 /** Write text at a specific position */
 export function writeAt(row: number, col: number, text: string): void {
   moveTo(row, col);
-  process.stdout.write(text);
+  out(text);
 }
 
 /** Draw a horizontal line */
 export function hline(row: number, col: number, width: number, char = '─'): void {
   moveTo(row, col);
-  process.stdout.write(char.repeat(width));
+  out(char.repeat(width));
 }
 
 /** Strip ANSI escape codes for length calculation */

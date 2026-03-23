@@ -6,6 +6,7 @@ import {
   enterAltScreen, exitAltScreen, showCursor, hideCursor,
   moveTo, clearLine, clearScreen, clearBelow,
   getSize, writeAt, center, stripAnsi, truncate, wordWrap,
+  beginBuffer, flushBuffer,
 } from './screen.js';
 import { getLogo, getLogoHeight } from './logo.js';
 import type { ToolRegistry } from '../tools/registry.js';
@@ -391,8 +392,7 @@ export class TUI {
     }
     // Clear row 1
     const cols = getSize().cols;
-    moveTo(1, 1);
-    process.stdout.write(' '.repeat(cols));
+    writeAt(1, 1, ' '.repeat(cols));
   }
 
   /** Render the bouncing progress bar segment on row 1 */
@@ -401,7 +401,6 @@ export class TUI {
     const segmentLen = 12;
     const pos = Math.max(0, Math.min(this.progressBarPos, cols - segmentLen));
 
-    moveTo(1, 1);
     // Build the line: dim background + bright blue segment
     let line = '';
     for (let i = 0; i < cols; i++) {
@@ -419,7 +418,9 @@ export class TUI {
         line += chalk.hex('#1A1A2E')('─'); // dim background
       }
     }
-    process.stdout.write(line);
+    beginBuffer();
+    writeAt(1, 1, line);
+    flushBuffer();
   }
 
   /** Append streaming text */
@@ -610,6 +611,7 @@ export class TUI {
   // ─── Rendering ─────────────────────────────────────────────────────
 
   render(): void {
+    beginBuffer();
     const { rows, cols } = getSize();
     if (this.state === 'welcome') {
       this.renderWelcome(rows, cols);
@@ -618,14 +620,15 @@ export class TUI {
     }
     // NOTE: cursor positioning is the LAST thing renderInputBox does,
     // and renderInputBox is called AFTER renderStatusBar in both paths.
+    flushBuffer();
   }
 
   private renderWelcome(rows: number, cols: number): void {
     hideCursor();
     // Clear by overwriting (avoids flash from clearScreen)
+    const blank = ' '.repeat(cols);
     for (let r = 1; r <= rows; r++) {
-      moveTo(r, 1);
-      process.stdout.write(' '.repeat(cols));
+      writeAt(r, 1, blank);
     }
 
     const logo = getLogo(cols);
@@ -1150,10 +1153,7 @@ export class TUI {
 
     const padding = Math.max(0, cols - stripAnsi(left).length - stripAnsi(right).length);
 
-    moveTo(row, 1);
-    process.stdout.write(
-      theme.muted(left) + ' '.repeat(padding) + theme.muted(right)
-    );
+    writeAt(row, 1, theme.muted(left) + ' '.repeat(padding) + theme.muted(right));
   }
 
   // ─── Tip rotation ──────────────────────────────────────────────────
