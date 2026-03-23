@@ -171,11 +171,23 @@ export function registerRcRoutes(
       // Acknowledge receipt immediately
       sendJson(res, 200, { ok: true });
 
-      // Run agent asynchronously — events are broadcast via SSE + TUI
+      // Run agent asynchronously — events broadcast to BOTH SSE clients and TUI
       // (agent.run() adds the user message to context internally)
       const eventStream = agent.run(data.message);
+
+      // Broadcast user message to SSE clients immediately
+      broadcast('text', { role: 'user', content: data.message });
+
       if (remoteMessageHandler) {
-        remoteMessageHandler(data.message, eventStream);
+        // TUI handler consumes the stream for laptop display;
+        // we wrap it to also broadcast each event to SSE (phone)
+        const teeEvents = async function* () {
+          for await (const event of eventStream) {
+            broadcastAgentEvent(event);
+            yield event;
+          }
+        };
+        remoteMessageHandler(data.message, teeEvents());
       } else {
         // No TUI handler — just broadcast to SSE clients
         (async () => {
