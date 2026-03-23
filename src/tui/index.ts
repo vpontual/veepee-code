@@ -6,7 +6,7 @@ import {
   enterAltScreen, exitAltScreen, showCursor, hideCursor,
   moveTo, clearLine, clearScreen, clearBelow,
   getSize, writeAt, center, stripAnsi, truncate, wordWrap,
-  beginBuffer, flushBuffer,
+  beginBuffer, flushBuffer, isBuffering,
 } from './screen.js';
 import { getLogo, getLogoHeight } from './logo.js';
 import type { ToolRegistry } from '../tools/registry.js';
@@ -390,13 +390,20 @@ export class TUI {
       clearInterval(this.progressBarInterval);
       this.progressBarInterval = null;
     }
-    // Clear row 1
-    const cols = getSize().cols;
-    writeAt(1, 1, ' '.repeat(cols));
+    // Clear row 1 (buffered to avoid flash; skip if main render owns the buffer)
+    if (!isBuffering()) {
+      const cols = getSize().cols;
+      beginBuffer();
+      writeAt(1, 1, ' '.repeat(cols));
+      flushBuffer();
+    }
   }
 
   /** Render the bouncing progress bar segment on row 1 */
   private renderProgressBar(): void {
+    // Skip if main render is in progress — avoid interleaved writes
+    if (isBuffering()) return;
+
     const cols = getSize().cols;
     const segmentLen = 12;
     const pos = Math.max(0, Math.min(this.progressBarPos, cols - segmentLen));

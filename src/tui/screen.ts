@@ -6,6 +6,11 @@
 // (blank) frame.
 let _buf: string[] | null = null;
 
+/** Returns true if a buffer is currently active. */
+export function isBuffering(): boolean {
+  return _buf !== null;
+}
+
 /** Begin buffering all terminal writes. */
 export function beginBuffer(): void {
   _buf = [];
