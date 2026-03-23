@@ -35,13 +35,17 @@
   "dependencies": {
     "chalk": "^5.4.1",
     "glob": "^11.0.2",
+    "ink": "^6.8.0",
+    "ink-text-input": "^6.0.0",
     "marked": "^15.0.7",
     "marked-terminal": "^7.3.0",
     "ollama": "^0.5.18",
+    "react": "^19.2.4",
     "zod": "^3.25.3"
   },
   "devDependencies": {
     "@types/node": "^22.15.21",
+    "@types/react": "^19.2.14",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
     "vitest": "^4.1.0"
