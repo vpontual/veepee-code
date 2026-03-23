@@ -1785,9 +1785,34 @@ ${gathered.join('\n\n')}`;
 
       if (!config.rc?.enabled) {
         tui.showInfo([
-          theme.error('Remote Connect is disabled.'),
-          theme.dim('  Set VEEPEE_CODE_RC_ENABLED=1 in ~/.veepee-code/.env'),
-          theme.dim('  Also set VEEPEE_CODE_API_TOKEN for authentication'),
+          `${theme.textBold('Remote Connect Setup')}`,
+          '',
+          `  RC lets you control VEEPEE Code from your phone or another device.`,
+          `  It needs an API token (used as a password for access).`,
+          '',
+          `  ${theme.accent('Setting up...')}`,
+        ].join('\n'));
+
+        // Generate a token if none exists, or use the existing one
+        const { generateRcToken } = await import('./rc.js');
+        const { loadConfig: reloadConfig, saveConfigFile } = await import('./config.js');
+        const currentConfig = reloadConfig();
+        const token = currentConfig.apiToken || generateRcToken();
+
+        // Enable RC and save token
+        saveConfigFile({ ...currentConfig, rc: { enabled: true }, apiToken: token });
+        config.rc = { enabled: true };
+        config.apiToken = token;
+
+        const url = `http://${getLocalIp()}:${apiPort}/rc?token=${token}`;
+        tui.showInfo([
+          `${theme.success('Remote Connect enabled!')}`,
+          '',
+          `  ${theme.textBold('URL:')}   ${theme.accent(url)}`,
+          `  ${theme.textBold('Token:')} ${theme.dim(token)}`,
+          '',
+          `  Open the URL on your phone. The token is included in the link.`,
+          `  ${theme.dim('Restart veepee-code for RC to take effect.')}`,
         ].join('\n'));
         return;
       }
