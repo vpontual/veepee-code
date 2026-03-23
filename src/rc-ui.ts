@@ -187,13 +187,47 @@ header select {
 }
 @keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
 
+/* Quick Action Bar */
+#quick-actions {
+  background: var(--surface);
+  padding: 6px 16px;
+  display: flex;
+  gap: 6px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#quick-actions button {
+  flex: 1;
+  background: var(--surface2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 8px 4px;
+  border-radius: var(--radius);
+  font-size: 0.85em;
+  font-family: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 36px;
+}
+#quick-actions button:active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+#quick-actions button.danger:active {
+  background: var(--error);
+  border-color: var(--error);
+}
+
 /* Input Area */
 #input-area {
   background: var(--surface);
-  padding: 12px 16px;
+  padding: 8px 16px 12px;
   display: flex;
   gap: 8px;
-  border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
 #input-area textarea {
@@ -246,6 +280,13 @@ header select {
   </header>
 
   <div id="messages"></div>
+
+  <div id="quick-actions">
+    <button onclick="historyUp()" title="Previous message">&#x25B2; Prev</button>
+    <button onclick="historyDown()" title="Next message">&#x25BC; Next</button>
+    <button onclick="sendCommand('/compact')" title="Free context space">Compact</button>
+    <button class="danger" onclick="stopGeneration()" title="Stop current generation">Stop</button>
+  </div>
 
   <div id="input-area">
     <textarea id="msg-input" placeholder="Type a message..." rows="1"
@@ -420,12 +461,67 @@ function approvePermission(callId, decision, btn) {
   });
 }
 
+// ─── Message History ───
+const messageHistory = [];
+let historyIndex = -1;
+
+function historyUp() {
+  if (messageHistory.length === 0) return;
+  if (historyIndex < messageHistory.length - 1) historyIndex++;
+  const input = document.getElementById('msg-input');
+  input.value = messageHistory[messageHistory.length - 1 - historyIndex];
+  input.focus();
+}
+
+function historyDown() {
+  const input = document.getElementById('msg-input');
+  if (historyIndex <= 0) {
+    historyIndex = -1;
+    input.value = '';
+    input.focus();
+    return;
+  }
+  historyIndex--;
+  input.value = messageHistory[messageHistory.length - 1 - historyIndex];
+  input.focus();
+}
+
+function stopGeneration() {
+  // Send Ctrl+C equivalent — just send /stop as a message
+  if (!streaming) return;
+  fetch(API_BASE + '/rc/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({ message: '/stop' }),
+  }).catch(() => {});
+  streaming = false;
+  document.getElementById('send-btn').disabled = false;
+  addMessage('system', 'Stop requested');
+}
+
+function sendCommand(cmd) {
+  if (streaming) return;
+  addMessage('user', cmd);
+  streaming = true;
+  document.getElementById('send-btn').disabled = true;
+  fetch(API_BASE + '/rc/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({ message: cmd }),
+  }).catch(() => {
+    streaming = false;
+    document.getElementById('send-btn').disabled = false;
+  });
+}
+
 // ─── Send Message ───
 function sendMessage() {
   const input = document.getElementById('msg-input');
   const text = input.value.trim();
   if (!text || streaming) return;
 
+  messageHistory.push(text);
+  historyIndex = -1;
   addMessage('user', text);
   input.value = '';
   input.style.height = 'auto';
