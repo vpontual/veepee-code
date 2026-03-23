@@ -1823,10 +1823,13 @@ ${gathered.join('\n\n')}`;
           ? `http://${getLocalIp()}:${apiPort}/rc?token=${config.apiToken}`
           : `http://${getLocalIp()}:${apiPort}/rc`;
 
-        // Generate QR code in terminal
-        const qrcode = await import('qrcode-terminal');
-        const qrGenerate = qrcode.default?.generate || qrcode.generate;
-        qrGenerate(rcUrl, { small: true }, (code: string) => {
+        // Generate QR code as string, then display via TUI
+        try {
+          const qrcode = await import('qrcode-terminal');
+          const qrGenerate = qrcode.default?.generate || qrcode.generate;
+          const code = await new Promise<string>((resolve) => {
+            qrGenerate(rcUrl, { small: true }, (qr: string) => resolve(qr));
+          });
           tui.showInfo([
             `${theme.textBold('Scan with your phone:')}`,
             '',
@@ -1834,7 +1837,13 @@ ${gathered.join('\n\n')}`;
             '',
             `  ${theme.accent(rcUrl)}`,
           ].join('\n'));
-        });
+        } catch {
+          // Fallback if QR generation fails
+          tui.showInfo([
+            `${theme.textBold('Remote Connect URL:')}`,
+            `  ${theme.accent(rcUrl)}`,
+          ].join('\n'));
+        }
         return;
       }
 
