@@ -99,11 +99,8 @@ export class TUI {
     process.stdout.write('\x1b[2J');     // clear
     process.stdout.write('\x1b[H');      // home
 
-    // Enable mouse wheel scroll tracking only (not button clicks — preserves text selection)
-    // 1002h = button-event tracking (reports press/release but not motion, allows Shift+click selection)
-    // 1006h = SGR extended mode (for scroll wheel delta parsing)
-    process.stdout.write('\x1b[?1002h');
-    process.stdout.write('\x1b[?1006h');
+    // No mouse tracking — let the terminal handle scroll and text selection natively.
+    // Scroll in the TUI via keyboard: arrow keys, Page Up/Down, j/k.
 
     // Set up raw stdin for keystroke handling (bypass Ink's useInput)
     process.stdin.setRawMode?.(true);
@@ -146,9 +143,7 @@ export class TUI {
       this.stdinHandler = null;
     }
     process.stdin.setRawMode?.(false);
-    // Disable mouse tracking
-    process.stdout.write('\x1b[?1006l');
-    process.stdout.write('\x1b[?1002l');
+    // No mouse tracking to disable (we don't enable it)
     this.inkInstance?.unmount();
     // Restore terminal: show cursor + exit alternate screen
     process.stdout.write('\x1b[?25h');   // show cursor
@@ -517,14 +512,9 @@ export class TUI {
       return;
     }
 
-    // Mouse wheel events
-    const sgrMatch = key.match(/\x1b\[<(\d+);\d+;\d+[Mm]/);
-    if (sgrMatch) {
-      const button = parseInt(sgrMatch[1], 10);
-      if (button === 64) this.dispatch({ type: 'SCROLL_UP', amount: 3 });
-      else if (button === 65) this.dispatch({ type: 'SCROLL_DOWN', amount: 3 });
-      return;
-    }
+    // Mouse events are not tracked — terminal handles scroll and selection natively.
+    // Ignore any stray mouse escape sequences.
+    if (key.match(/\x1b\[<\d+;\d+;\d+[Mm]/)) return;
 
     // Permission prompt mode
     if (this.permissionResolve) {
