@@ -131,12 +131,12 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case 'UPDATE_TOOL_CALL': {
       if (!state.turnTracker) return state;
-      const calls = [...state.turnTracker.toolCalls];
-      const tc = [...calls].reverse().find(t => t.name === action.name && t.status === 'running');
-      if (tc) {
-        tc.status = action.status;
-        tc.elapsed = action.elapsed;
-      }
+      const calls = state.turnTracker.toolCalls.map(t => {
+        if (t.name === action.name && t.status === 'running') {
+          return { ...t, status: action.status, elapsed: action.elapsed };
+        }
+        return t;
+      });
       const tokensEstimate = state.turnTracker.tokensEstimate + (action.tokensEstimate || 0);
       return { ...state, turnTracker: { ...state.turnTracker, toolCalls: calls, tokensEstimate } };
     }

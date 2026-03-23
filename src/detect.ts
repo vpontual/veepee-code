@@ -45,10 +45,10 @@ export function detectProject(cwd: string): ProjectInfo {
 
   if (has('tsconfig.json')) info.language = 'TypeScript';
   else if (has('jsconfig.json') || has('package.json')) info.language = 'JavaScript';
-  if (has('pyproject.toml') || has('setup.py') || has('requirements.txt')) info.language = 'Python';
-  if (has('Cargo.toml')) info.language = 'Rust';
-  if (has('go.mod')) info.language = 'Go';
-  if (has('Gemfile')) info.language = 'Ruby';
+  else if (has('pyproject.toml') || has('setup.py') || has('requirements.txt')) info.language = 'Python';
+  else if (has('Cargo.toml')) info.language = 'Rust';
+  else if (has('go.mod')) info.language = 'Go';
+  else if (has('Gemfile')) info.language = 'Ruby';
 
   // ─── Framework ────────────────────────────────────────────────────
 

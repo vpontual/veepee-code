@@ -538,11 +538,12 @@ export class ContextManager {
         if (colonIdx === -1) continue;
         const key = line.slice(0, colonIdx).trim();
         const val = line.slice(colonIdx + 1).trim();
-        if (['FACTS', 'DECISIONS', 'OPEN_QUESTIONS', 'ERRORS'].includes(key)) {
+        const keyMap: Record<string, string> = { FACTS: 'fact', DECISIONS: 'decision', OPEN_QUESTIONS: 'open_question', ERRORS: 'error' };
+        if (key in keyMap) {
           const delimiter = val.includes(' | ') ? ' | ' : ',';
           const items = val.replace(/^\[/, '').replace(/\]$/, '').split(delimiter).map(s => s.trim()).filter(Boolean);
           for (const item of items) {
-            ks.updateMemory(key.toLowerCase().replace('_', ''), item);
+            ks.updateMemory(keyMap[key], item);
           }
         }
       }
