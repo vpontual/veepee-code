@@ -1726,10 +1726,8 @@ ${gathered.join('\n\n')}`;
       if (!syncManager) {
         tui.showInfo([
           theme.error('Sync not configured.'),
-          theme.dim('  Set in ~/.veepee-code/.env:'),
-          theme.dim('  VEEPEE_CODE_SYNC_URL=https://cloud.example.com/remote.php/dav/files/user/veepee-code/'),
-          theme.dim('  VEEPEE_CODE_SYNC_USER=username'),
-          theme.dim('  VEEPEE_CODE_SYNC_PASS=password'),
+          theme.dim('  Run /setup wizard sync, or add to ~/.veepee-code/vcode.config.json:'),
+          theme.dim('  "sync": { "url": "https://cloud.example.com/dav/...", "user": "...", "pass": "...", "auto": false }'),
         ].join('\n'));
         return;
       }

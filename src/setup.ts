@@ -131,7 +131,7 @@ export async function validateIntegrations(config: Config): Promise<IntegrationS
       category: 'Web',
       status: 'missing_config',
       tools: ['web_search'],
-      message: 'Set SEARXNG_URL in .env',
+      message: 'Set searxngUrl in vcode.config.json or run /setup wizard searxng',
       requiredEnvVars: ['SEARXNG_URL'],
     });
   }
@@ -182,7 +182,7 @@ export function formatSetupReport(results: IntegrationStatus[]): string {
   // Summary
   const totalTools = results.reduce((sum, r) => sum + r.tools.length, 0);
   const activeTools = active.reduce((sum, r) => sum + r.tools.length, 0);
-  lines.push(theme.dim(`  ${activeTools}/${totalTools} tools active  |  Config: ~/.veepee-code/.env or ./.env`));
+  lines.push(theme.dim(`  ${activeTools}/${totalTools} tools active  |  Config: ~/.veepee-code/vcode.config.json`));
   lines.push('');
 
   return lines.join('\n');
