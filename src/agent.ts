@@ -358,6 +358,12 @@ export class Agent {
       }
     }
 
+    // Stuck loop detection: track recent tool calls to detect repetition
+    const recentToolCalls: string[] = [];
+    const MAX_IDENTICAL_CALLS = 3;
+    const MAX_TURNS_WITHOUT_OUTPUT = 15;
+    let turnsWithoutUserContent = 0;
+
     for (let turn = 0; ; turn++) {
       // Check if model should switch (only after the first turn of a message)
       if (turn > 0) {
@@ -591,6 +597,33 @@ export class Agent {
       // Flush knowledge state update after all tool results are collected
       this.context.flushKnowledgeUpdate(fullContent);
 
+      // Stuck loop detection
+      if (toolCalls.length > 0) {
+        const callSig = toolCalls.map(c => `${c.function.name}:${JSON.stringify(c.function.arguments)}`).join('|');
+        recentToolCalls.push(callSig);
+        if (recentToolCalls.length > MAX_IDENTICAL_CALLS) recentToolCalls.shift();
+
+        // Detect identical consecutive calls
+        if (recentToolCalls.length >= MAX_IDENTICAL_CALLS &&
+            recentToolCalls.every(c => c === recentToolCalls[0])) {
+          yield { type: 'error', error: `Stopped: model called ${toolCalls[0].function.name} ${MAX_IDENTICAL_CALLS} times with identical args. It may be stuck in a loop.` };
+          this.abortController = null;
+          return;
+        }
+      }
+
+      // Detect turns with no user-visible content
+      if (!fullContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim()) {
+        turnsWithoutUserContent++;
+        if (turnsWithoutUserContent >= MAX_TURNS_WITHOUT_OUTPUT) {
+          yield { type: 'error', error: `Stopped: ${MAX_TURNS_WITHOUT_OUTPUT} turns with no visible output. The model may be stuck.` };
+          this.abortController = null;
+          return;
+        }
+      } else {
+        turnsWithoutUserContent = 0;
+      }
+
       // Proactive compaction check after tool results (context grows most here)
       if (this.context.needsCompaction()) {
         if (this.context.compact()) {
@@ -598,8 +631,6 @@ export class Agent {
         }
       }
     }
-
-    // Loop only exits via break (model stops calling tools) or abort signal
   }
 
   /** Non-streaming version for API use (no permission prompts — auto-allows) */

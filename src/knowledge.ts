@@ -181,12 +181,12 @@ export class KnowledgeState {
     lines.push(`CWD: ${this.data.cwd}`);
     if (this.data.userIntent) lines.push(`USER_INTENT: ${this.data.userIntent}`);
     if (this.data.currentTask) lines.push(`CURRENT_TASK: ${this.data.currentTask}`);
-    if (this.data.decisions.length) lines.push(`DECISIONS: [${this.data.decisions.join(', ')}]`);
-    if (this.data.filesRead.length) lines.push(`FILES_READ: [${this.data.filesRead.join(', ')}]`);
-    if (this.data.filesModified.length) lines.push(`FILES_MODIFIED: [${this.data.filesModified.join(', ')}]`);
-    if (this.data.facts.length) lines.push(`FACTS: [${this.data.facts.join(', ')}]`);
-    if (this.data.errors.length) lines.push(`ERRORS: [${this.data.errors.join(', ')}]`);
-    if (this.data.openQuestions.length) lines.push(`OPEN_QUESTIONS: [${this.data.openQuestions.join(', ')}]`);
+    if (this.data.decisions.length) lines.push(`DECISIONS: [${this.data.decisions.join(' | ')}]`);
+    if (this.data.filesRead.length) lines.push(`FILES_READ: [${this.data.filesRead.join(' | ')}]`);
+    if (this.data.filesModified.length) lines.push(`FILES_MODIFIED: [${this.data.filesModified.join(' | ')}]`);
+    if (this.data.facts.length) lines.push(`FACTS: [${this.data.facts.join(' | ')}]`);
+    if (this.data.errors.length) lines.push(`ERRORS: [${this.data.errors.join(' | ')}]`);
+    if (this.data.openQuestions.length) lines.push(`OPEN_QUESTIONS: [${this.data.openQuestions.join(' | ')}]`);
     lines.push(`TURN: ${this.data.turn}`);
 
     return lines.join('\n');
@@ -283,8 +283,10 @@ export class KnowledgeState {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function parseArray(val: string): string[] {
-  // Parse "[item1, item2, item3]" format
+  // Parse "[item1 | item2 | item3]" format (pipe-delimited to avoid breaking on commas in values)
+  // Also supports legacy comma-delimited format for backward compatibility
   const trimmed = val.replace(/^\[/, '').replace(/\]$/, '').trim();
   if (!trimmed) return [];
-  return trimmed.split(',').map(s => s.trim()).filter(Boolean);
+  const delimiter = trimmed.includes(' | ') ? ' | ' : ',';
+  return trimmed.split(delimiter).map(s => s.trim()).filter(Boolean);
 }

@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import { z } from 'zod';
 import type { ToolDef } from './types.js';
 import { ok, fail } from './types.js';
@@ -23,10 +23,12 @@ function createDockerTool(): ToolDef {
         const args = params.args as string;
         const cwd = (params.cwd as string) || process.cwd();
 
-        // Handle docker compose as a subcommand
-        const cmd = args.startsWith('compose ') ? `docker ${args}` : `docker ${args}`;
+        // Parse args string into array for execFileSync (prevents shell injection)
+        const parsedArgs = args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map(a =>
+          a.replace(/^["']|["']$/g, '')
+        ) || [];
 
-        const output = execSync(cmd, {
+        const output = execFileSync('docker', parsedArgs, {
           cwd,
           encoding: 'utf-8',
           maxBuffer: 10 * 1024 * 1024,

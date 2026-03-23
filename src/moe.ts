@@ -107,13 +107,15 @@ export class MoeEngine {
 
     onProgress?.('system', 'MoE', 'started', `Strategy: ${effectiveStrategy} | ${this.models.map(m => m.role).join(' + ')}`);
 
-    // Phase 1: Get responses from all models in parallel
+    // Phase 1: For fastest strategy, race models; otherwise query all
+    if (effectiveStrategy === 'fastest') {
+      return this.raceModels(userMessage, systemPrompt, history, onProgress);
+    }
+
     const responses = await this.queryAllModels(userMessage, systemPrompt, history, onProgress);
 
     // Phase 2: Apply strategy
     switch (effectiveStrategy) {
-      case 'fastest':
-        return this.applyFastest(effectiveStrategy, responses);
 
       case 'vote':
         return { strategy: effectiveStrategy, responses };
@@ -173,14 +175,64 @@ export class MoeEngine {
     return Promise.all(promises);
   }
 
-  /** Fastest strategy: return first completed response */
-  private applyFastest(strategy: MoeStrategy, responses: MoeResponse['responses']): MoeResponse {
-    const sorted = [...responses].sort((a, b) => a.elapsed - b.elapsed);
+  /** Fastest strategy: race all models, return the first to finish */
+  private async raceModels(
+    userMessage: string,
+    systemPrompt: string,
+    history: Message[],
+    onProgress?: (model: string, role: string, status: 'started' | 'streaming' | 'done', content?: string) => void,
+  ): Promise<MoeResponse> {
+    const messages: Message[] = [
+      { role: 'system', content: systemPrompt },
+      ...history,
+      { role: 'user', content: userMessage },
+    ];
+
+    const abortControllers = this.models.map(() => new AbortController());
+
+    const promises = this.models.map(async (model, idx) => {
+      onProgress?.(model.name, model.role, 'started');
+      const start = Date.now();
+      let content = '';
+
+      try {
+        const stream = await this.ollama.chat({
+          model: model.name,
+          messages,
+          stream: true,
+          keep_alive: '30m',
+          options: { num_predict: 1024 },
+        });
+
+        for await (const chunk of stream) {
+          if (abortControllers[idx].signal.aborted) break;
+          if (chunk.message.content) {
+            content += chunk.message.content;
+            onProgress?.(model.name, model.role, 'streaming', content);
+          }
+        }
+      } catch (err) {
+        if (!abortControllers[idx].signal.aborted) {
+          content = `Error: ${(err as Error).message}`;
+        }
+      }
+
+      const elapsed = Date.now() - start;
+      onProgress?.(model.name, model.role, 'done', content);
+      return { model: model.name, content, elapsed, role: model.role };
+    });
+
+    // Race: take the first successful response, then abort the rest
+    const winner = await Promise.any(promises);
+    abortControllers.forEach((ac, idx) => {
+      if (this.models[idx].name !== winner.model) ac.abort();
+    });
+
     return {
-      strategy,
-      responses: sorted,
-      winner: sorted[0]?.model,
-      synthesis: sorted[0]?.content,
+      strategy: 'fastest',
+      responses: [winner],
+      winner: winner.model,
+      synthesis: winner.content,
     };
   }
 

@@ -86,9 +86,16 @@ export function registerRcRoutes(
   }
 
   function readBody(req: IncomingMessage): Promise<string> {
+    const MAX_BODY = 1024 * 1024; // 1MB
     return new Promise((resolve, reject) => {
       let body = '';
-      req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      req.on('data', (chunk: Buffer) => {
+        body += chunk.toString();
+        if (body.length > MAX_BODY) {
+          req.destroy();
+          reject(new Error('Request body too large'));
+        }
+      });
       req.on('end', () => resolve(body));
       req.on('error', reject);
     });
@@ -164,10 +171,8 @@ export function registerRcRoutes(
       // Acknowledge receipt immediately
       sendJson(res, 200, { ok: true });
 
-      // Add user message to agent context
-      agent.getContext().addUser(data.message);
-
       // Run agent asynchronously — events are broadcast via SSE + TUI
+      // (agent.run() adds the user message to context internally)
       const eventStream = agent.run(data.message);
       if (remoteMessageHandler) {
         remoteMessageHandler(data.message, eventStream);
