@@ -569,6 +569,12 @@ async function main() {
     // Run agent
     tui.addUserMessage(trimmed);
     const turnStart = Date.now();
+    const refreshStats = () => tui.updateStats(
+      agent.getContext().estimateTokens(),
+      Math.round((agent.getContext().estimateTokens() / agent.getContext().getContextLimit()) * 100),
+      agent.getContext().messageCount(),
+      Date.now() - sessionStart,
+    );
 
     tui.startStream();
 
@@ -588,6 +594,7 @@ async function main() {
 
         case 'tool_result':
           tui.showToolResult(event.name!, event.success!, event.content || event.error || '');
+          refreshStats();
           tui.startStream(); // resume streaming for next assistant text
           break;
 
@@ -611,6 +618,7 @@ async function main() {
 
         case 'done':
           tui.endStream();
+          refreshStats();
           tui.showCompletionBadge(modelManager.getCurrentModel(), Date.now() - turnStart, {
             evalCount: event.evalCount,
             promptEvalCount: event.promptEvalCount,
