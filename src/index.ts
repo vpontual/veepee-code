@@ -1851,7 +1851,9 @@ function getLocalIp(): string {
     const nets = networkInterfaces();
     for (const name of Object.keys(nets)) {
       for (const net of nets[name] || []) {
-        if (net.family === 'IPv4' && !net.internal) {
+        // Node 18+ returns family as number (4), older as string ('IPv4')
+        const isIPv4 = net.family === 'IPv4' || net.family === 4;
+        if (isIPv4 && !net.internal) {
           return net.address;
         }
       }
