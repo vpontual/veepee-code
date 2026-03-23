@@ -55,7 +55,7 @@ const COMMANDS: CommandDef[] = [
   { name: '/sync auto', args: '', description: 'Toggle auto-sync on save' },
   { name: '/sync status', args: '', description: 'Show sync configuration' },
   { name: '/rc', args: '', description: 'Show Remote Connect URL and status' },
-  { name: '/rc qr', args: '', description: 'Show Remote Connect URL for phone' },
+  { name: '/rc qr', args: '', description: 'Show scannable QR code for phone access' },
   { name: '/settings', args: '', description: 'View and toggle settings' },
   { name: '/settings progress-bar', args: '', description: 'Toggle progress bar animation' },
   { name: '/settings model_stick', args: '', description: 'Lock current model across mode switches' },

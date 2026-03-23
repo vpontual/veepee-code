@@ -1819,22 +1819,33 @@ ${gathered.join('\n\n')}`;
       }
 
       if (subCmd === 'qr') {
-        // Simple ASCII QR-like display of URL
-        const url = `http://${getLocalIp()}:${apiPort}/rc`;
-        tui.showInfo([
-          `${theme.textBold('Remote Connect URL:')}`,
-          `  ${theme.accent(url)}`,
-          theme.dim('  Open this URL on your phone (via Twingate)'),
-        ].join('\n'));
+        const rcUrl = config.apiToken
+          ? `http://${getLocalIp()}:${apiPort}/rc?token=${config.apiToken}`
+          : `http://${getLocalIp()}:${apiPort}/rc`;
+
+        // Generate QR code in terminal
+        const qrcode = await import('qrcode-terminal');
+        const qrGenerate = qrcode.default?.generate || qrcode.generate;
+        qrGenerate(rcUrl, { small: true }, (code: string) => {
+          tui.showInfo([
+            `${theme.textBold('Scan with your phone:')}`,
+            '',
+            code,
+            '',
+            `  ${theme.accent(rcUrl)}`,
+          ].join('\n'));
+        });
         return;
       }
 
-      // Default: show RC status
-      const url = `http://${getLocalIp()}:${apiPort}/rc`;
+      // Default: show RC status + QR hint
+      const url = config.apiToken
+        ? `http://${getLocalIp()}:${apiPort}/rc?token=${config.apiToken}`
+        : `http://${getLocalIp()}:${apiPort}/rc`;
       tui.showInfo([
         `${theme.textBold('Remote Connect:')} ${theme.success('active')}`,
         `  ${theme.accent(url)}`,
-        theme.dim('  Access via Twingate from any device'),
+        `  ${theme.dim('Tip: /rc qr to show a scannable QR code')}`,
       ].join('\n'));
       return;
     }

@@ -3,3 +3,7 @@ declare module 'marked-terminal' {
   const renderer: (...args: any[]) => any;
   export default renderer;
 }
+
+declare module 'qrcode-terminal' {
+  export function generate(text: string, options?: { small?: boolean }, callback?: (code: string) => void): void;
+}
