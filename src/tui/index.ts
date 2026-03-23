@@ -234,7 +234,7 @@ export class TUI {
     process.stdin.setRawMode?.(true);
     process.stdin.resume();
     process.stdin.on('data', this.handleKey.bind(this));
-    process.stdout.on('resize', () => this.render());
+    process.stdout.on('resize', () => this.scheduleRender());
 
     // Enable mouse wheel tracking (SGR extended mode for modern terminals)
     process.stdout.write('\x1b[?1000h'); // enable basic mouse
@@ -1187,7 +1187,7 @@ export class TUI {
         key +
         this.queuedInput.slice(this.queuedCursor);
       this.queuedCursor++;
-      this.render(); // re-render to show queued text in input box
+      this.scheduleRender(); // re-render to show queued text in input box
       return;
     }
 
@@ -1198,7 +1198,7 @@ export class TUI {
           this.queuedInput.slice(0, this.queuedCursor - 1) +
           this.queuedInput.slice(this.queuedCursor);
         this.queuedCursor--;
-        this.render();
+        this.scheduleRender();
       }
       return;
     }
@@ -1209,13 +1209,13 @@ export class TUI {
         this.queuedInput.slice(0, this.queuedCursor) + '\n' +
         this.queuedInput.slice(this.queuedCursor);
       this.queuedCursor++;
-      this.render();
+      this.scheduleRender();
       return;
     }
 
     // Left/Right arrows
-    if (key === '\x1b[C') { this.queuedCursor = Math.min(this.queuedCursor + 1, this.queuedInput.length); this.render(); return; }
-    if (key === '\x1b[D') { this.queuedCursor = Math.max(this.queuedCursor - 1, 0); this.render(); return; }
+    if (key === '\x1b[C') { this.queuedCursor = Math.min(this.queuedCursor + 1, this.queuedInput.length); this.scheduleRender(); return; }
+    if (key === '\x1b[D') { this.queuedCursor = Math.max(this.queuedCursor - 1, 0); this.scheduleRender(); return; }
 
     // Paste detection
     if (key.length > 1 && key.includes('\n') && !key.startsWith('\x1b')) {
@@ -1224,7 +1224,7 @@ export class TUI {
         this.queuedInput.slice(0, this.queuedCursor) + cleanPaste +
         this.queuedInput.slice(this.queuedCursor);
       this.queuedCursor += cleanPaste.length;
-      this.render();
+      this.scheduleRender();
       return;
     }
   }
@@ -1243,12 +1243,12 @@ export class TUI {
     if (this.modelSelectorActive && this.modelSelectorResolve) {
       if (key === '\x1b[A' || key === '\x1bOA' || key === 'k') {
         this.modelSelectorIndex = Math.max(0, this.modelSelectorIndex - 1);
-        this.render();
+        this.scheduleRender();
         return;
       }
       if (key === '\x1b[B' || key === '\x1bOB' || key === 'j') {
         this.modelSelectorIndex = Math.min(this.modelSelectorItems.length - 1, this.modelSelectorIndex + 1);
-        this.render();
+        this.scheduleRender();
         return;
       }
       if (key === '\r' || key === '\n') {
@@ -1257,7 +1257,7 @@ export class TUI {
         this.modelSelectorActive = false;
         this.modelSelectorResolve({ name: selected.name, action: 'use' });
         this.modelSelectorResolve = null;
-        this.render();
+        this.scheduleRender();
         return;
       }
       if (key === ' ') {
@@ -1266,14 +1266,14 @@ export class TUI {
         this.modelSelectorActive = false;
         this.modelSelectorResolve({ name: selected.name, action: 'default' });
         this.modelSelectorResolve = null;
-        this.render();
+        this.scheduleRender();
         return;
       }
       if (key === '\x1b' || key === '\x03') {
         this.modelSelectorActive = false;
         this.modelSelectorResolve(null);
         this.modelSelectorResolve = null;
-        this.render();
+        this.scheduleRender();
         return;
       }
       return; // swallow all other keys while selector is active
@@ -1286,11 +1286,11 @@ export class TUI {
       if (button === 64) {
         // Scroll up
         this.scrollOffset += 3;
-        this.render();
+        this.scheduleRender();
       } else if (button === 65) {
         // Scroll down
         this.scrollOffset = Math.max(0, this.scrollOffset - 3);
-        this.render();
+        this.scheduleRender();
       }
       return;
     }
@@ -1300,12 +1300,12 @@ export class TUI {
       // Arrow up/down — navigate menu
       if (key === '\x1b[A') {
         this.permissionMenuSelection = Math.max(0, this.permissionMenuSelection - 1);
-        this.render();
+        this.scheduleRender();
         return;
       }
       if (key === '\x1b[B') {
         this.permissionMenuSelection = Math.min(this.permissionOptions.length - 1, this.permissionMenuSelection + 1);
-        this.render();
+        this.scheduleRender();
         return;
       }
       // Enter — select current option
@@ -1315,7 +1315,7 @@ export class TUI {
         this.permissionResolve(selected.value);
         this.permissionResolve = null;
         this.permissionOptions = [];
-        this.render();
+        this.scheduleRender();
         return;
       }
       // Quick keys still work
@@ -1324,7 +1324,7 @@ export class TUI {
         this.permissionResolve('y');
         this.permissionResolve = null;
         this.permissionOptions = [];
-        this.render();
+        this.scheduleRender();
         return;
       }
       if (key === 'a' || key === 'A') {
@@ -1332,7 +1332,7 @@ export class TUI {
         this.permissionResolve('a');
         this.permissionResolve = null;
         this.permissionOptions = [];
-        this.render();
+        this.scheduleRender();
         return;
       }
       if (key === 'n' || key === 'N' || key === '\x1b') {
@@ -1340,7 +1340,7 @@ export class TUI {
         this.permissionResolve('n');
         this.permissionResolve = null;
         this.permissionOptions = [];
-        this.render();
+        this.scheduleRender();
         return;
       }
       return;
@@ -1352,7 +1352,7 @@ export class TUI {
         // During input, just clear
         this.input.text = '';
         this.input.cursor = 0;
-        this.render();
+        this.scheduleRender();
       } else if (this.abortHandler) {
         // During agent execution, abort the stream
         this.abortHandler();
@@ -1413,26 +1413,26 @@ export class TUI {
             return;
           }
         }
-        this.render();
+        this.scheduleRender();
         return;
       }
 
       // Arrow up/down — navigate menu
       if (key === '\x1b[A') {
         this.commandMenuSelection = Math.max(0, this.commandMenuSelection - 1);
-        this.render();
+        this.scheduleRender();
         return;
       }
       if (key === '\x1b[B') {
         this.commandMenuSelection = Math.min(this.filteredCommands.length - 1, this.commandMenuSelection + 1);
-        this.render();
+        this.scheduleRender();
         return;
       }
 
       // Escape — close menu
       if (key === '\x1b' && data.length === 1) {
         this.commandMenuVisible = false;
-        this.render();
+        this.scheduleRender();
         return;
       }
 
@@ -1444,7 +1444,7 @@ export class TUI {
           this.input.cursor = this.input.text.length;
           this.commandMenuVisible = false;
         }
-        this.render();
+        this.scheduleRender();
         return;
       }
 
@@ -1460,7 +1460,7 @@ export class TUI {
           } else {
             this.updateCommandFilter();
           }
-          this.render();
+          this.scheduleRender();
         }
         return;
       }
@@ -1481,7 +1481,7 @@ export class TUI {
         } else {
           this.updateCommandFilter();
         }
-        this.render();
+        this.scheduleRender();
         return;
       }
     }
@@ -1505,26 +1505,26 @@ export class TUI {
           resolve(this.input.text.trim());
           return;
         }
-        this.render();
+        this.scheduleRender();
         return;
       }
 
       // Arrow up/down
       if (key === '\x1b[A') {
         this.modelCompletionSelection = Math.max(0, this.modelCompletionSelection - 1);
-        this.render();
+        this.scheduleRender();
         return;
       }
       if (key === '\x1b[B') {
         this.modelCompletionSelection = Math.min(this.modelCompletionItems.length - 1, this.modelCompletionSelection + 1);
-        this.render();
+        this.scheduleRender();
         return;
       }
 
       // Escape — close
       if (key === '\x1b' && data.length === 1) {
         this.modelCompletionVisible = false;
-        this.render();
+        this.scheduleRender();
         return;
       }
 
@@ -1536,7 +1536,7 @@ export class TUI {
           this.input.cursor = this.input.text.length;
           this.modelCompletionVisible = false;
         }
-        this.render();
+        this.scheduleRender();
         return;
       }
 
@@ -1548,7 +1548,7 @@ export class TUI {
             this.input.text.slice(this.input.cursor);
           this.input.cursor--;
           this.updateCommandFilter();
-          this.render();
+          this.scheduleRender();
         }
         return;
       }
@@ -1562,7 +1562,7 @@ export class TUI {
         this.input.cursor++;
         this.modelCompletionSelection = 0;
         this.updateCommandFilter();
-        this.render();
+        this.scheduleRender();
         return;
       }
     }
@@ -1577,7 +1577,7 @@ export class TUI {
         '\n' +
         this.input.text.slice(this.input.cursor);
       this.input.cursor++;
-      this.render();
+      this.scheduleRender();
       return;
     }
 
@@ -1588,7 +1588,7 @@ export class TUI {
         '\n' +
         this.input.text.slice(this.input.cursor);
       this.input.cursor++;
-      this.render();
+      this.scheduleRender();
       return;
     }
 
@@ -1622,7 +1622,7 @@ export class TUI {
         cleanPaste +
         this.input.text.slice(this.input.cursor);
       this.input.cursor += cleanPaste.length;
-      this.render();
+      this.scheduleRender();
       return;
     }
 
@@ -1634,7 +1634,7 @@ export class TUI {
           this.input.text.slice(this.input.cursor);
         this.input.cursor--;
         this.updateCommandFilter();
-        this.render();
+        this.scheduleRender();
       }
       return;
     }
@@ -1646,12 +1646,12 @@ export class TUI {
         this.input.text = `/models ${selected.name}`;
         this.input.cursor = this.input.text.length;
         this.modelCompletionVisible = false;
-        this.render();
+        this.scheduleRender();
       } else if (this.toolsShown) {
         // Toggle off — remove the tools message
         this.messages.pop();
         this.toolsShown = false;
-        this.render();
+        this.scheduleRender();
       } else if (this.onTabTools) {
         this.toolsShown = true;
         this.onTabTools();
@@ -1666,7 +1666,7 @@ export class TUI {
       this.commandMenuVisible = true;
       this.commandMenuSelection = 0;
       this.filteredCommands = [...COMMANDS];
-      this.render();
+      this.scheduleRender();
       return;
     }
 
@@ -1674,7 +1674,7 @@ export class TUI {
     if (key === '\x0c') {
       this.messages = [];
       this.state = 'welcome';
-      this.render();
+      this.scheduleRender();
       return;
     }
 
@@ -1682,13 +1682,13 @@ export class TUI {
     if (key === '\x1b[1;2A' || key === '\x1b[5~') {
       // Shift+Up or Page Up — scroll up
       this.scrollOffset += (key === '\x1b[5~' ? 10 : 3);
-      this.render();
+      this.scheduleRender();
       return;
     }
     if (key === '\x1b[1;2B' || key === '\x1b[6~') {
       // Shift+Down or Page Down — scroll down
       this.scrollOffset = Math.max(0, this.scrollOffset - (key === '\x1b[6~' ? 10 : 3));
-      this.render();
+      this.scheduleRender();
       return;
     }
 
@@ -1696,7 +1696,7 @@ export class TUI {
     if (key === '\x1b[A') {
       if (this.modelCompletionVisible) {
         this.modelCompletionSelection = Math.max(0, this.modelCompletionSelection - 1);
-        this.render();
+        this.scheduleRender();
         return;
       }
       // Up — history
@@ -1704,14 +1704,14 @@ export class TUI {
         this.input.historyIdx = Math.min(this.input.historyIdx + 1, this.input.history.length - 1);
         this.input.text = this.input.history[this.input.historyIdx];
         this.input.cursor = this.input.text.length;
-        this.render();
+        this.scheduleRender();
       }
       return;
     }
     if (key === '\x1b[B') {
       if (this.modelCompletionVisible) {
         this.modelCompletionSelection = Math.min(this.modelCompletionItems.length - 1, this.modelCompletionSelection + 1);
-        this.render();
+        this.scheduleRender();
         return;
       }
       // Down — history forward
@@ -1724,31 +1724,31 @@ export class TUI {
         this.input.text = '';
         this.input.cursor = 0;
       }
-      this.render();
+      this.scheduleRender();
       return;
     }
     if (key === '\x1b[C') {
       // Right
       this.input.cursor = Math.min(this.input.cursor + 1, this.input.text.length);
-      this.render();
+      this.scheduleRender();
       return;
     }
     if (key === '\x1b[D') {
       // Left
       this.input.cursor = Math.max(this.input.cursor - 1, 0);
-      this.render();
+      this.scheduleRender();
       return;
     }
 
     // Home / End
     if (key === '\x1b[H' || key === '\x01') {
       this.input.cursor = 0;
-      this.render();
+      this.scheduleRender();
       return;
     }
     if (key === '\x1b[F' || key === '\x05') {
       this.input.cursor = this.input.text.length;
-      this.render();
+      this.scheduleRender();
       return;
     }
 
@@ -1770,7 +1770,7 @@ export class TUI {
         this.updateCommandFilter();
       }
 
-      this.render();
+      this.scheduleRender();
     }
   }
 
