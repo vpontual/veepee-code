@@ -1,5 +1,5 @@
 import type { Config } from './config.js';
-import { theme, icons } from './tui/index.js';
+import { theme, icons } from './tui/theme.js';
 
 export interface IntegrationStatus {
   name: string;

@@ -4,7 +4,7 @@ import { existsSync } from 'fs';
 import type { Message } from 'ollama';
 import type { AgentMode } from './agent.js';
 import type { KnowledgeStateData } from './knowledge.js';
-import { theme, icons } from './tui/index.js';
+import { theme, icons } from './tui/theme.js';
 
 export interface Session {
   id: string;
