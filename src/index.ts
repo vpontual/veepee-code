@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import dns from 'dns';
+import os from 'os';
 // Prefer IPv4 — prevents failures on IPv4-only tunnels (WireGuard, VPN)
 dns.setDefaultResultOrder('ipv4first');
 
@@ -1847,12 +1848,10 @@ ${gathered.join('\n\n')}`;
 /** Get local IP for RC URL display */
 function getLocalIp(): string {
   try {
-    const { networkInterfaces } = require('os');
-    const nets = networkInterfaces();
+    const nets = os.networkInterfaces();
     for (const name of Object.keys(nets)) {
       for (const net of nets[name] || []) {
-        // Node 18+ returns family as number (4), older as string ('IPv4')
-        const isIPv4 = net.family === 'IPv4' || net.family === 4;
+        const isIPv4 = net.family === 'IPv4' || String(net.family) === '4';
         if (isIPv4 && !net.internal) {
           return net.address;
         }

@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, type Instance } from 'ink';
+import { execSync } from 'child_process';
 import { App, type AppHandle } from './App.js';
 import { theme, icons } from './theme.js';
 import type { Message, TurnTracker, CommandDef, ModelItem, PermissionOption } from './types.js';
@@ -390,7 +391,7 @@ export class TUI {
 
     const text = lastAssistant.content;
     // Try platform clipboard tools
-    const { execSync } = require('child_process') as typeof import('child_process');
+    // execSync imported at top of file
     try {
       if (process.platform === 'darwin') {
         execSync('pbcopy', { input: text, stdio: ['pipe', 'pipe', 'pipe'] });
