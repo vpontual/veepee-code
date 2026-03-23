@@ -281,9 +281,22 @@ function createBashTool(): ToolDef {
 
         let stdout = '';
         let stderr = '';
+        const MAX_OUTPUT = 512 * 1024; // 512KB cap per stream
+        let truncated = false;
 
-        child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
-        child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+        child.stdout.on('data', (data: Buffer) => {
+          if (stdout.length < MAX_OUTPUT) {
+            stdout += data.toString();
+          } else if (!truncated) {
+            truncated = true;
+            stdout += '\n...(output truncated at 512KB)';
+          }
+        });
+        child.stderr.on('data', (data: Buffer) => {
+          if (stderr.length < MAX_OUTPUT) {
+            stderr += data.toString();
+          }
+        });
 
         child.on('close', (code) => {
           const output = stdout + (stderr ? `\n[stderr]\n${stderr}` : '');

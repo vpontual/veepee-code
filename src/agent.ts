@@ -353,7 +353,7 @@ export class Agent {
 
     // Check for context compaction
     if (this.context.needsCompaction()) {
-      if (this.context.compact()) {
+      if (this.context.compact(this.config.proxyUrl, this.modelManager.getCurrentModel())) {
         yield { type: 'thinking', content: 'Compacted conversation to free context space' };
       }
     }
@@ -392,6 +392,17 @@ export class Agent {
         }
       }
 
+      // Stall timeout: 5 minutes with no chunks = assume Ollama is hung
+      // Resets on each chunk, so model loading time doesn't trigger it
+      const STALL_TIMEOUT_MS = 5 * 60 * 1000;
+      let stallTimer: ReturnType<typeof setTimeout> | null = null;
+      const resetStallTimer = () => {
+        if (stallTimer) clearTimeout(stallTimer);
+        stallTimer = setTimeout(() => {
+          this.abortController?.abort();
+        }, STALL_TIMEOUT_MS);
+      };
+
       // Stream LLM response with thinking detection
       let fullContent = '';
       let toolCalls: ToolCall[] = [];
@@ -422,22 +433,53 @@ export class Agent {
           tools = tools.filter(t => this.allowedTools!.has(t.function?.name || ''));
         }
         const effortOpts = this.getEffortOptions();
-        const stream = await this.ollama.chat({
-          model: currentModel,
-          messages,
-          ...(tools.length > 0 ? { tools } : {}),
-          stream: true,
-          think: useThinking,
-          keep_alive: '30m',
-          options: {
-            ...(numCtx ? { num_ctx: numCtx } : {}),
-            ...effortOpts,
-          },
-        } as never);
+
+        // Retry wrapper: one retry with 3s backoff on connection errors
+        const chatWithRetry = async () => {
+          try {
+            return await this.ollama.chat({
+              model: currentModel,
+              messages,
+              ...(tools.length > 0 ? { tools } : {}),
+              stream: true,
+              think: useThinking,
+              keep_alive: '30m',
+              options: {
+                ...(numCtx ? { num_ctx: numCtx } : {}),
+                ...effortOpts,
+              },
+            } as never);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            // Retry on connection errors (not on model errors)
+            if (msg.includes('ECONNREFUSED') || msg.includes('ECONNRESET') || msg.includes('ETIMEDOUT') || msg.includes('fetch failed')) {
+              await new Promise(r => setTimeout(r, 3000));
+              return this.ollama.chat({
+                model: currentModel,
+                messages,
+                ...(tools.length > 0 ? { tools } : {}),
+                stream: true,
+                think: useThinking,
+                keep_alive: '30m',
+                options: {
+                  ...(numCtx ? { num_ctx: numCtx } : {}),
+                  ...effortOpts,
+                },
+              } as never);
+            }
+            throw err;
+          }
+        };
+
+        resetStallTimer();
+        const stream = await chatWithRetry();
 
         for await (const chunk of stream) {
+          resetStallTimer();
+
           // Check for abort
           if (this.abortController?.signal.aborted) {
+            if (stallTimer) clearTimeout(stallTimer);
             yield { type: 'error', error: 'Interrupted by user' };
             this.abortController = null;
             return;
@@ -497,15 +539,18 @@ export class Agent {
           if (c.eval_duration) evalDuration += c.eval_duration;
         }
 
+        if (stallTimer) clearTimeout(stallTimer);
+
         // If thinking was still open (malformed output), flush it
         if (inThinking && thinkingBuffer) {
           yield { type: 'thinking', content: thinkingBuffer.trim() };
         }
       } catch (err) {
+        if (stallTimer) clearTimeout(stallTimer);
         const wasAborted = this.abortController?.signal.aborted;
         this.abortController = null;
         if (wasAborted) {
-          yield { type: 'error', error: 'Interrupted by user' };
+          yield { type: 'error', error: 'Response timed out or interrupted' };
           return;
         }
         const msg = err instanceof Error ? err.message : String(err);
@@ -544,54 +589,84 @@ export class Agent {
         return;
       }
 
-      // Execute tool calls with permission checks
-      for (const call of toolCalls) {
-        const toolName = call.function.name;
-        const toolArgs = (call.function.arguments || {}) as Record<string, unknown>;
+      // Execute tool calls — parallelize independent read-only calls
+      const READ_ONLY_TOOLS = new Set(['read_file', 'glob', 'grep', 'list_files', 'system_info', 'web_search', 'web_fetch']);
 
-        // Enforce tool allowlist (for API requests with client-constrained tools)
-        if (this.allowedTools && !this.allowedTools.has(toolName) && toolName !== 'update_memory') {
-          yield { type: 'tool_result', name: toolName, success: false, content: `Tool "${toolName}" is not in the allowed set for this request` };
-          this.context.addToolResult(toolName, `Tool "${toolName}" not allowed`);
-          continue;
+      // Check if all calls are independent read-only (safe to parallelize)
+      const allReadOnly = toolCalls.length > 1 && toolCalls.every(c => READ_ONLY_TOOLS.has(c.function.name));
+
+      if (allReadOnly) {
+        // Parallel execution for independent read-only calls
+        for (const call of toolCalls) {
+          yield { type: 'tool_call', name: call.function.name, args: (call.function.arguments || {}) as Record<string, unknown> };
         }
-
-        // Handle update_memory tool internally
-        if (toolName === 'update_memory') {
-          const key = (toolArgs.key as string) || '';
-          const value = (toolArgs.value as string) || '';
-          this.context.getKnowledgeState().updateMemory(key, value);
-          yield { type: 'tool_result', name: toolName, success: true, content: `Stored: ${key} = ${value}` };
-          this.context.addToolResult(toolName, `Stored: ${key} = ${value}`);
-          continue;
+        const results = await Promise.all(toolCalls.map(async (call) => {
+          const name = call.function.name;
+          const args = (call.function.arguments || {}) as Record<string, unknown>;
+          if (this.allowedTools && !this.allowedTools.has(name)) {
+            return { name, args, result: { success: false, output: '', error: `Tool "${name}" not allowed` } };
+          }
+          const decision = await this.permissions.check(name, args);
+          if (decision === 'deny') {
+            return { name, args, result: { success: false, output: '', error: 'Permission denied' } };
+          }
+          const result = await this.registry.execute(name, args);
+          return { name, args, result };
+        }));
+        for (const { name, args, result } of results) {
+          yield {
+            type: 'tool_result', name,
+            success: result.success,
+            content: result.success ? result.output : result.error,
+            error: result.error,
+          };
+          const resultContent = result.success ? result.output : `Error: ${result.error}`;
+          this.context.addToolResult(name, resultContent, (args.path as string) || undefined);
         }
+      } else {
+        // Sequential execution for write/mixed calls
+        for (const call of toolCalls) {
+          const toolName = call.function.name;
+          const toolArgs = (call.function.arguments || {}) as Record<string, unknown>;
 
-        yield { type: 'tool_call', name: toolName, args: toolArgs };
+          if (this.allowedTools && !this.allowedTools.has(toolName) && toolName !== 'update_memory') {
+            yield { type: 'tool_result', name: toolName, success: false, content: `Tool "${toolName}" is not in the allowed set for this request` };
+            this.context.addToolResult(toolName, `Tool "${toolName}" not allowed`);
+            continue;
+          }
 
-        // Permission check
-        const decision = await this.permissions.check(toolName, toolArgs);
-        if (decision === 'deny') {
-          yield { type: 'permission_denied', name: toolName };
-          this.context.addToolResult(toolName, `Permission denied: user rejected ${toolName}`);
-          continue;
+          if (toolName === 'update_memory') {
+            const key = (toolArgs.key as string) || '';
+            const value = (toolArgs.value as string) || '';
+            this.context.getKnowledgeState().updateMemory(key, value);
+            yield { type: 'tool_result', name: toolName, success: true, content: `Stored: ${key} = ${value}` };
+            this.context.addToolResult(toolName, `Stored: ${key} = ${value}`);
+            continue;
+          }
+
+          yield { type: 'tool_call', name: toolName, args: toolArgs };
+
+          const decision = await this.permissions.check(toolName, toolArgs);
+          if (decision === 'deny') {
+            yield { type: 'permission_denied', name: toolName };
+            this.context.addToolResult(toolName, `Permission denied: user rejected ${toolName}`);
+            continue;
+          }
+
+          const result = await this.registry.execute(toolName, toolArgs);
+
+          yield {
+            type: 'tool_result',
+            name: toolName,
+            success: result.success,
+            content: result.success ? result.output : result.error,
+            error: result.error,
+          };
+
+          const resultContent = result.success ? result.output : `Error: ${result.error}`;
+          const filePath = (toolArgs.path as string) || undefined;
+          this.context.addToolResult(toolName, resultContent, filePath);
         }
-
-        const result = await this.registry.execute(toolName, toolArgs);
-
-        yield {
-          type: 'tool_result',
-          name: toolName,
-          success: result.success,
-          content: result.success ? result.output : result.error,
-          error: result.error,
-        };
-
-        const resultContent = result.success
-          ? result.output
-          : `Error: ${result.error}`;
-        // Pass file path for accurate file tracking
-        const filePath = (toolArgs.path as string) || undefined;
-        this.context.addToolResult(toolName, resultContent, filePath);
       }
 
       // Flush knowledge state update after all tool results are collected

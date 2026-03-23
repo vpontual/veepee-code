@@ -372,13 +372,14 @@ export class ContextManager {
     // Remaining ~50% is the message budget
     const messageBudget = Math.floor(this.contextLimit * 0.5);
 
-    // Build window from newest to oldest, estimating ~4 chars per token
+    // Build window from newest to oldest, estimating ~3 chars per token
+    // (code and JSON have more tokens per character than prose — 3 is more conservative than 4)
     const window: Message[] = [];
     let estimatedTokens = 0;
 
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const msg = this.messages[i];
-      const msgTokens = Math.ceil((msg.content?.length || 0) / 4) + 10; // +10 for role/framing overhead
+      const msgTokens = Math.ceil((msg.content?.length || 0) / 3) + 10; // +10 for role/framing overhead
 
       if (estimatedTokens + msgTokens > messageBudget && window.length >= 2) {
         break; // always include at least the last 2 messages (user + assistant)
@@ -485,12 +486,12 @@ export class ContextManager {
     // Use actual prompt tokens if available (most accurate)
     if (this.lastPromptTokens > 0) return this.lastPromptTokens;
 
-    // Fallback: estimate from chars (~4 chars per token)
+    // Fallback: estimate from chars (~3 chars per token for code-heavy content)
     let chars = this.getSystemPrompt().length;
     for (const msg of this.getMessages()) {
       chars += (msg.content?.length || 0) + 20;
     }
-    return Math.ceil(chars / 4);
+    return Math.ceil(chars / 3);
   }
 
   /** Check if context is approaching the limit and needs compaction */
@@ -501,15 +502,52 @@ export class ContextManager {
     return used > this.contextLimit * 0.75;
   }
 
-  compact(): boolean {
-    // Drop old messages from memory — getMessages() already handles the token-aware window,
-    // but we also trim the full history to prevent unbounded memory growth.
-    // Keep enough messages to fill the budget, plus a small buffer.
+  compact(ollamaHost?: string, model?: string): boolean {
     const windowMessages = this.getMessages();
     if (this.messages.length <= windowMessages.length + 4) return false;
 
+    // Summarize dropped messages into knowledge state via LLM (best-effort, non-blocking)
+    const droppedMessages = this.messages.slice(0, this.messages.length - windowMessages.length);
+    if (ollamaHost && model && droppedMessages.length > 2) {
+      this.summarizeIntoKnowledge(ollamaHost, model, droppedMessages).catch(() => {});
+    }
+
     this.messages = windowMessages;
     return true;
+  }
+
+  private async summarizeIntoKnowledge(host: string, model: string, messages: Message[]): Promise<void> {
+    const { Ollama: OllamaClient } = await import('ollama');
+    const client = new OllamaClient({ host });
+    const ks = this.knowledgeState;
+    const currentState = ks.serialize();
+    const msgSummary = messages.map(m => `[${m.role}] ${(m.content || '').slice(0, 200)}`).join('\n');
+
+    const resp = await client.chat({
+      model,
+      messages: [
+        { role: 'user', content: `Update this knowledge state with any new facts, decisions, files, or context from these messages. Only output the updated state, same format.\n\nCurrent state:\n${currentState}\n\nMessages being compacted:\n${msgSummary}` },
+      ],
+      keep_alive: '30m',
+      options: { num_predict: 512 },
+    } as never) as unknown as { message: { content: string } };
+
+    if (resp.message.content) {
+      for (const line of resp.message.content.split('\n')) {
+        const colonIdx = line.indexOf(':');
+        if (colonIdx === -1) continue;
+        const key = line.slice(0, colonIdx).trim();
+        const val = line.slice(colonIdx + 1).trim();
+        if (['FACTS', 'DECISIONS', 'OPEN_QUESTIONS', 'ERRORS'].includes(key)) {
+          const delimiter = val.includes(' | ') ? ' | ' : ',';
+          const items = val.replace(/^\[/, '').replace(/\]$/, '').split(delimiter).map(s => s.trim()).filter(Boolean);
+          for (const item of items) {
+            ks.updateMemory(key.toLowerCase().replace('_', ''), item);
+          }
+        }
+      }
+      await ks.save();
+    }
   }
 
   clear(): void {
