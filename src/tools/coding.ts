@@ -16,6 +16,7 @@ export function registerCodingTools(): ToolDef[] {
     createGrepTool(),
     createBashTool(),
     createGitTool(),
+    createGithubTool(),
     createListFilesTool(),
     createUpdateMemoryTool(),
   ];
@@ -364,6 +365,151 @@ function parseArgs(str: string): string[] {
   }
   if (current) args.push(current);
   return args;
+}
+
+function createGithubTool(): ToolDef {
+  return {
+    name: 'github',
+    description: 'Interact with GitHub via the gh CLI. Manage repos, pull requests, issues, and releases. Actions: repo_create, repo_list, pr_create, pr_list, pr_view, pr_merge, pr_comment, pr_diff, pr_checks, issue_create, issue_list, issue_view, issue_comment, release_create, release_list.',
+    schema: z.object({
+      action: z.enum([
+        'repo_create', 'repo_list',
+        'pr_create', 'pr_list', 'pr_view', 'pr_merge', 'pr_comment', 'pr_diff', 'pr_checks',
+        'issue_create', 'issue_list', 'issue_view', 'issue_comment',
+        'release_create', 'release_list',
+      ]).describe(
+        'repo_create: create a new repo. repo_list: list your repos. ' +
+        'pr_create: open a PR. pr_list: list PRs. pr_view: view PR details. pr_merge: merge a PR. pr_comment: comment on a PR. pr_diff: view PR diff. pr_checks: view PR CI status. ' +
+        'issue_create: create an issue. issue_list: list issues. issue_view: view issue details. issue_comment: comment on an issue. ' +
+        'release_create: create a release. release_list: list releases.',
+      ),
+      repo: z.string().optional().describe("Repository in owner/name format (e.g. 'vpontual/newsfeed'). Omit to use the repo in cwd."),
+      title: z.string().optional().describe('Title for PR, issue, release, or new repo name'),
+      body: z.string().optional().describe('Body/description for PR, issue, release, or comment text'),
+      branch: z.string().optional().describe('Branch name for PR (head branch) or release tag'),
+      base: z.string().optional().describe('Base branch for PR (default: repo default branch)'),
+      number: z.number().optional().describe('PR or issue number (for view/merge/comment actions)'),
+      labels: z.string().optional().describe('Comma-separated labels for PR or issue'),
+      draft: z.boolean().optional().describe('Create PR as draft'),
+      is_private: z.boolean().optional().describe('Create repo as private (default true)'),
+      limit: z.number().optional().describe('Max results for list actions (default 20)'),
+      cwd: z.string().optional().describe('Git repository directory'),
+    }),
+    execute: async (params) => {
+      const action = params.action as string;
+      const repo = params.repo as string | undefined;
+      const title = params.title as string | undefined;
+      const body = params.body as string | undefined;
+      const branch = params.branch as string | undefined;
+      const base = params.base as string | undefined;
+      const number = params.number as number | undefined;
+      const labels = params.labels as string | undefined;
+      const draft = params.draft as boolean | undefined;
+      const isPrivate = params.is_private as boolean | undefined;
+      const limit = (params.limit as number) || 20;
+      const cwd = resolve((params.cwd as string) || process.cwd());
+
+      const rf = repo ? ['-R', repo] : [];
+
+      function runGh(args: string[]): ToolResult {
+        try {
+          const output = execFileSync('gh', args, {
+            cwd,
+            encoding: 'utf-8',
+            maxBuffer: 2 * 1024 * 1024,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            timeout: 30_000,
+          });
+          return ok(output.trim() || '(no output)');
+        } catch (err) {
+          const error = err as { stderr?: string; stdout?: string; message?: string };
+          const out = [error.stdout, error.stderr ?? error.message].filter(Boolean).join('\n').trim();
+          return fail(out || 'gh command failed');
+        }
+      }
+
+      switch (action) {
+        // ---- Repos ----
+        case 'repo_create': {
+          if (!title) return fail("Missing 'title' (repo name) for repo_create");
+          const a = ['repo', 'create', title, isPrivate === false ? '--public' : '--private', '--confirm'];
+          if (body) a.push('--description', body);
+          return runGh(a);
+        }
+        case 'repo_list':
+          return runGh(['repo', 'list', '--limit', String(limit)]);
+
+        // ---- Pull Requests ----
+        case 'pr_create': {
+          if (!title) return fail("Missing 'title' for pr_create");
+          const a = ['pr', 'create', '--title', title, ...rf];
+          if (body) a.push('--body', body);
+          if (branch) a.push('--head', branch);
+          if (base) a.push('--base', base);
+          if (labels) a.push('--label', labels);
+          if (draft) a.push('--draft');
+          return runGh(a);
+        }
+        case 'pr_list':
+          return runGh(['pr', 'list', '--limit', String(limit), ...rf]);
+        case 'pr_view': {
+          if (!number) return fail("Missing 'number' for pr_view");
+          return runGh(['pr', 'view', String(number), ...rf]);
+        }
+        case 'pr_merge': {
+          if (!number) return fail("Missing 'number' for pr_merge");
+          return runGh(['pr', 'merge', String(number), '--merge', ...rf]);
+        }
+        case 'pr_comment': {
+          if (!number) return fail("Missing 'number' for pr_comment");
+          if (!body) return fail("Missing 'body' for pr_comment");
+          return runGh(['pr', 'comment', String(number), '--body', body, ...rf]);
+        }
+        case 'pr_diff': {
+          if (!number) return fail("Missing 'number' for pr_diff");
+          return runGh(['pr', 'diff', String(number), ...rf]);
+        }
+        case 'pr_checks': {
+          if (!number) return fail("Missing 'number' for pr_checks");
+          return runGh(['pr', 'checks', String(number), ...rf]);
+        }
+
+        // ---- Issues ----
+        case 'issue_create': {
+          if (!title) return fail("Missing 'title' for issue_create");
+          const a = ['issue', 'create', '--title', title, ...rf];
+          if (body) a.push('--body', body);
+          if (labels) a.push('--label', labels);
+          return runGh(a);
+        }
+        case 'issue_list':
+          return runGh(['issue', 'list', '--limit', String(limit), ...rf]);
+        case 'issue_view': {
+          if (!number) return fail("Missing 'number' for issue_view");
+          return runGh(['issue', 'view', String(number), ...rf]);
+        }
+        case 'issue_comment': {
+          if (!number) return fail("Missing 'number' for issue_comment");
+          if (!body) return fail("Missing 'body' for issue_comment");
+          return runGh(['issue', 'comment', String(number), '--body', body, ...rf]);
+        }
+
+        // ---- Releases ----
+        case 'release_create': {
+          if (!branch) return fail("Missing 'branch' (tag name) for release_create");
+          const a = ['release', 'create', branch, ...rf];
+          if (title) a.push('--title', title);
+          if (body) a.push('--notes', body);
+          return runGh(a);
+        }
+        case 'release_list':
+          return runGh(['release', 'list', '--limit', String(limit), ...rf]);
+
+        default:
+          return fail(`Unknown github action: ${action}`);
+      }
+    },
+  };
 }
 
 function createListFilesTool(): ToolDef {
