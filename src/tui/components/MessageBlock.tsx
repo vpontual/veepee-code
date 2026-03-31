@@ -3,6 +3,7 @@ import { Text } from 'ink';
 import chalk from 'chalk';
 import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
+import { highlight } from 'cli-highlight';
 import { theme, icons } from '../theme.js';
 import type { Message } from '../types.js';
 
@@ -38,9 +39,22 @@ function wordWrap(text: string, maxWidth: number): string[] {
   return lines;
 }
 
+function highlightCode(code: string, lang?: string): string {
+  try {
+    return highlight(code, { language: lang || 'auto', ignoreIllegals: true });
+  } catch {
+    return chalk.hex('#E8A87C')(code);
+  }
+}
+
 function setupMarkedTerminal(width: number): void {
   marked.use(markedTerminal({
-    code: chalk.hex('#E8A87C'),
+    code: (code: string, lang?: string) => {
+      const highlighted = highlightCode(code, lang);
+      const border = chalk.dim('─'.repeat(Math.min(40, width - 4)));
+      const langTag = lang ? chalk.dim(` ${lang}`) : '';
+      return `${border}${langTag}\n${highlighted}\n${border}`;
+    },
     codespan: chalk.hex('#E8A87C').bold,
     strong: chalk.bold.white,
     em: chalk.italic,

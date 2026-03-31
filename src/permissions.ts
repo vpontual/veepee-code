@@ -10,6 +10,7 @@ type PromptHandler = (toolName: string, args: Record<string, unknown>, reason?: 
 export class PermissionManager {
   private alwaysAllowed = new Set<string>();
   private sessionAllowed = new Set<string>();
+  private projectAllowed = new Set<string>(); // tool:project pairs (e.g., "write_file:/home/user/myproject")
   private configPath: string;
   private promptHandler: PromptHandler | null = null;
 
@@ -67,6 +68,18 @@ export class PermissionManager {
       return 'allow';
     }
 
+    // Check project-scoped permission (tool allowed for files in this project)
+    const filePath = typeof args.path === 'string' ? args.path
+      : typeof args.file === 'string' ? args.file : null;
+    if (filePath) {
+      for (const entry of this.projectAllowed) {
+        const [tool, projectDir] = entry.split(':', 2);
+        if (tool === toolName && filePath.startsWith(projectDir)) {
+          return 'allow';
+        }
+      }
+    }
+
     return this.prompt(toolName, args);
   }
 
@@ -87,6 +100,13 @@ export class PermissionManager {
       this.alwaysAllowed.add(toolName);
       await this.savePersisted();
       return 'allow_always';
+    }
+
+    if (choice === 'p' || choice === 'project') {
+      const cwd = process.cwd();
+      this.projectAllowed.add(`${toolName}:${cwd}`);
+      await this.savePersisted();
+      return 'allow';
     }
 
     return 'deny';
@@ -121,10 +141,15 @@ export class PermissionManager {
     if (!existsSync(this.configPath)) return;
     try {
       const data = await readFile(this.configPath, 'utf-8');
-      const parsed = JSON.parse(data) as { alwaysAllowed?: string[] };
+      const parsed = JSON.parse(data) as { alwaysAllowed?: string[]; projectAllowed?: string[] };
       if (parsed.alwaysAllowed) {
         for (const tool of parsed.alwaysAllowed) {
           this.alwaysAllowed.add(tool);
+        }
+      }
+      if (parsed.projectAllowed) {
+        for (const entry of parsed.projectAllowed) {
+          this.projectAllowed.add(entry);
         }
       }
     } catch {
@@ -138,6 +163,7 @@ export class PermissionManager {
       await mkdir(dir, { recursive: true });
       await writeFile(this.configPath, JSON.stringify({
         alwaysAllowed: Array.from(this.alwaysAllowed).sort(),
+        projectAllowed: Array.from(this.projectAllowed).sort(),
       }, null, 2));
     } catch {
       // Non-critical failure

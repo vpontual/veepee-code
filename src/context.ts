@@ -3,6 +3,7 @@ import type { ConversationSignals } from './models.js';
 import type { AgentMode } from './agent.js';
 import { KnowledgeState } from './knowledge.js';
 import { detectProject, formatProjectInfo, getCodingGuidance } from './detect.js';
+import { getOutputStyle } from './styles.js';
 import { readdirSync, readFileSync, statSync, existsSync } from 'fs';
 import { join, relative } from 'path';
 
@@ -248,6 +249,7 @@ export class ContextManager {
   private registeredToolNames: string[] = [];
   private additionalDirs: string[] = [];
   private sandboxPath: string | null = null;
+  private activeStyle: string | null = null;
 
   constructor(sessionId?: string) {
     this.knowledgeState = new KnowledgeState(sessionId || Date.now().toString(36));
@@ -273,6 +275,24 @@ export class ContextManager {
   /** Set sandbox directory path (shown in system prompt) */
   setSandboxPath(path: string): void {
     this.sandboxPath = path;
+  }
+
+  /** Set active output style by name */
+  setOutputStyle(name: string | null): boolean {
+    if (name === null) {
+      this.activeStyle = null;
+      this.rebuildSystemPrompt();
+      return true;
+    }
+    const style = getOutputStyle(name);
+    if (!style) return false;
+    this.activeStyle = name;
+    this.rebuildSystemPrompt();
+    return true;
+  }
+
+  getOutputStyleName(): string | null {
+    return this.activeStyle;
   }
 
   setSystemPrompt(model: string): void {
@@ -340,6 +360,14 @@ export class ContextManager {
 
     if (this.mode === 'plan') {
       this.systemPrompt += PLAN_PROMPT;
+    }
+
+    // Inject active output style
+    if (this.activeStyle) {
+      const style = getOutputStyle(this.activeStyle);
+      if (style) {
+        this.systemPrompt += `\n## Output Style: ${style.name}\n\n${style.prompt}\n`;
+      }
     }
 
     if (this.mode === 'chat') {

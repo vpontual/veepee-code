@@ -46,6 +46,7 @@ const COMMANDS: CommandDef[] = [
   { name: '/add-dir', args: '<path>', description: 'Add a working directory' },
   { name: '/worktree', args: '[cmd]', description: 'Git worktree isolation (create/list/cleanup)' },
   { name: '/effort', args: '<level>', description: 'Set effort level (low/medium/high)' },
+  { name: '/style', args: '[name|off]', description: 'Set output style/personality' },
   { name: '/benchmark context', args: '', description: 'Probe optimal context sizes per model' },
   { name: '/shell', args: '', description: 'Enter interactive shell mode (exit to return)' },
   { name: '/sandbox', args: '', description: 'List sandbox files' },
@@ -212,13 +213,18 @@ export class TUI {
       },
     });
 
+    // Check if tool operates on files (offer project-scoped permission)
+    const hasFilePath = args.path || args.file;
+    const options: { label: string; value: string }[] = [
+      { label: 'Yes', value: 'y' },
+      ...(hasFilePath ? [{ label: `Yes, always in this project`, value: 'p' }] : []),
+      { label: `Yes, always allow ${theme.accent(toolName)}`, value: 'a' },
+      { label: 'No', value: 'n' },
+    ];
+
     this.dispatch({
       type: 'SET_PERMISSION',
-      options: [
-        { label: 'Yes', value: 'y' },
-        { label: `Yes, always allow ${theme.accent(toolName)}`, value: 'a' },
-        { label: 'No', value: 'n' },
-      ],
+      options,
       selection: 0,
       toolName,
     });

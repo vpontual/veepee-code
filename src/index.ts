@@ -851,6 +851,40 @@ async function handleCommand(
       return false;
     }
 
+    case '/style': {
+      const { listOutputStyles, getOutputStyle, initOutputStyles } = await import('./styles.js');
+      const styleName = parts[1]?.toLowerCase();
+
+      if (!styleName || styleName === 'list') {
+        const styles = listOutputStyles();
+        if (styles.length === 0) {
+          const dir = initOutputStyles();
+          tui.showInfo(`Created styles directory with example: ${theme.accent(dir)}\nAdd .md files there, then use ${theme.accent('/style <name>')}`);
+        } else {
+          const current = agent.getContext().getOutputStyleName();
+          const list = styles.map(s => {
+            const marker = s.toLowerCase() === current?.toLowerCase() ? theme.success(' (active)') : '';
+            return `  ${theme.accent(s)}${marker}`;
+          }).join('\n');
+          tui.showInfo(`${theme.textBold('Output Styles:')}\n${list}\n\n  ${theme.dim('/style <name>')} to activate, ${theme.dim('/style off')} to deactivate`);
+        }
+        return false;
+      }
+
+      if (styleName === 'off' || styleName === 'none') {
+        agent.getContext().setOutputStyle(null);
+        tui.showInfo('Output style cleared.');
+        return false;
+      }
+
+      if (agent.getContext().setOutputStyle(styleName)) {
+        tui.showInfo(`Style set to: ${theme.accent(styleName)}`);
+      } else {
+        tui.showInfo(`Style ${theme.error(styleName)} not found. Use ${theme.accent('/style list')} to see available styles.`);
+      }
+      return false;
+    }
+
     case '/compact': {
       const ctx = agent.getContext();
       if (ctx.messageCount() <= 4) {
