@@ -1,6 +1,7 @@
 import chalk from 'chalk';
-import { readFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
+import { resolve, join } from 'path';
+import os from 'os';
 import type { Config } from './config.js';
 
 export interface ModelProfile {
@@ -138,6 +139,9 @@ export class ModelManager {
 
   /** Discover all models from proxy + dashboard */
   async discover(): Promise<void> {
+    // Load probe cache before building profiles so inferCapabilities can use it
+    this.loadProbeCache();
+
     const [tags, servers, discoveries] = await Promise.all([
       this.fetchTags(),
       this.fetchServers(),
@@ -384,25 +388,50 @@ export class ModelManager {
     return complexity;
   }
 
-  /** Infer capabilities from model name/family when discovery data unavailable */
+  /**
+   * Infer capabilities from model name/family.
+   *
+   * Default assumption: all non-embedding models support tools.
+   * Modern Ollama models (2024+) almost universally support tool calling.
+   * We only exclude known non-tool families explicitly.
+   * The probe cache (capabilities.json) overrides this for verified results.
+   */
   private inferCapabilities(name: string, family?: string): string[] {
     const caps: string[] = [];
     const lower = name.toLowerCase();
 
-    // Most modern models support tools
-    if (lower.includes('qwen') || lower.includes('llama') ||
-        lower.includes('mistral') || lower.includes('gemma') ||
-        lower.includes('phi') || lower.includes('command-r')) {
-      caps.push('tools');
+    // Embedding-only models — detected by name or family
+    const isEmbedding =
+      lower.includes('embed') ||
+      lower.includes('nomic-embed') ||
+      lower.includes('bge-') ||
+      lower.includes('e5-') ||
+      family === 'bert' ||
+      family === 'nomic-bert';
+
+    if (isEmbedding) {
+      caps.push('embedding');
+      return caps; // embedding models don't do anything else
     }
 
-    // Vision models
+    // Check probe cache for verified tool support
+    const probed = this.probeCache.get(name);
+    if (probed !== undefined) {
+      if (probed) caps.push('tools');
+    } else {
+      // Default: assume tools unless it's a known non-tool family
+      const knownNoTools = lower.includes('whisper') || lower.includes('stable-diffusion');
+      if (!knownNoTools) caps.push('tools');
+    }
+
+    // Vision
     if (lower.includes('vision') || lower.includes('llava') ||
-        lower.includes('minicpm-v') || lower.includes('moondream')) {
+        lower.includes('minicpm-v') || lower.includes('moondream') ||
+        lower.includes('bakllava')) {
       caps.push('vision');
     }
 
-    // Code models
+    // Code specialization
     if (lower.includes('code') || lower.includes('coder') ||
         lower.includes('starcoder') || lower.includes('deepseek-coder') ||
         lower.includes('codestral')) {
@@ -410,17 +439,117 @@ export class ModelManager {
     }
 
     // Thinking/reasoning
-    if (lower.includes('think') || lower.includes('reason') || lower.includes('qwq')) {
+    if (lower.includes('think') || lower.includes('reason') || lower.includes('qwq') ||
+        lower.includes('-r1') || lower.includes('deepseek-r')) {
       caps.push('thinking');
     }
 
-    // Embedding models
-    if (lower.includes('embed') || lower.includes('nomic-embed') ||
-        lower.includes('bge-') || lower.includes('e5-')) {
-      caps.push('embedding');
+    return caps;
+  }
+
+  // ─── Probe cache ──────────────────────────────────────────────────────────────
+  // Stores verified tool-calling results per model so we don't re-probe on every startup.
+  // File: ~/.veepee-code/capabilities.json
+
+  private probeCache = new Map<string, boolean>();
+  private probeCacheLoaded = false;
+
+  private static CAPABILITIES_FILE = join(os.homedir(), '.veepee-code', 'capabilities.json');
+
+  private loadProbeCache(): void {
+    if (this.probeCacheLoaded) return;
+    this.probeCacheLoaded = true;
+    try {
+      if (!existsSync(ModelManager.CAPABILITIES_FILE)) return;
+      const data = JSON.parse(readFileSync(ModelManager.CAPABILITIES_FILE, 'utf-8')) as Record<string, boolean>;
+      for (const [model, hasTools] of Object.entries(data)) {
+        this.probeCache.set(model, hasTools);
+      }
+    } catch { /* ignore */ }
+  }
+
+  private saveProbeCache(): void {
+    try {
+      const dir = join(os.homedir(), '.veepee-code');
+      mkdirSync(dir, { recursive: true });
+      const data: Record<string, boolean> = {};
+      for (const [model, hasTools] of this.probeCache) {
+        data[model] = hasTools;
+      }
+      writeFileSync(ModelManager.CAPABILITIES_FILE, JSON.stringify(data, null, 2));
+    } catch { /* non-critical */ }
+  }
+
+  /**
+   * Probe new models for tool calling support.
+   * Runs a minimal tool-call test against each model not yet in the cache.
+   * Results are cached to capabilities.json so probing only happens once per new model.
+   */
+  async probeNewModels(): Promise<{ probed: number; updated: string[] }> {
+    this.loadProbeCache();
+    const toProbe = this.models.filter(m =>
+      !this.probeCache.has(m.name) &&
+      !m.capabilities.includes('embedding')
+    );
+
+    if (toProbe.length === 0) return { probed: 0, updated: [] };
+
+    const { Ollama } = await import('ollama');
+    const ollama = new Ollama({ host: this.config.proxyUrl });
+
+    const PROBE_TOOL = {
+      type: 'function' as const,
+      function: {
+        name: 'get_answer',
+        description: 'Return the answer',
+        parameters: {
+          type: 'object',
+          properties: { value: { type: 'string', description: 'The answer' } },
+          required: ['value'],
+        },
+      },
+    };
+
+    const updated: string[] = [];
+
+    await Promise.all(toProbe.map(async (m) => {
+      try {
+        const resp = await (ollama.chat as Function)({
+          model: m.name,
+          messages: [{ role: 'user', content: 'Call get_answer with value="yes".' }],
+          tools: [PROBE_TOOL],
+          keep_alive: '5m',
+          options: { num_predict: 64 },
+          stream: false,
+        }) as { message: { tool_calls?: unknown[] } };
+
+        const hasTools = Array.isArray(resp.message.tool_calls) && resp.message.tool_calls.length > 0;
+        this.probeCache.set(m.name, hasTools);
+
+        // Update the live profile so this session uses correct caps immediately
+        const profile = this.getProfile(m.name);
+        if (profile) {
+          if (hasTools && !profile.capabilities.includes('tools')) {
+            profile.capabilities.push('tools');
+          } else if (!hasTools) {
+            profile.capabilities = profile.capabilities.filter(c => c !== 'tools');
+          }
+          profile.score = computeScore(profile);
+        }
+
+        updated.push(m.name);
+      } catch {
+        // Probe failed (model too slow, error, etc.) — leave uncached, keep default assumption
+      }
+    }));
+
+    if (updated.length > 0) {
+      this.saveProbeCache();
+      // Re-sort after score updates
+      this.models.sort((a, b) => b.score - a.score);
     }
 
-    return caps;
+    return { probed: toProbe.length, updated };
   }
 
   private async fetchTags(): Promise<OllamaTagsResponse['models']> {

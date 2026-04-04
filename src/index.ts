@@ -305,6 +305,14 @@ async function main() {
     }
   }, 0);
 
+  // Probe new models for tool-calling support in background (non-blocking)
+  // Only runs for models not yet in the capabilities cache — one cheap test call each
+  modelManager.probeNewModels().then(({ updated }) => {
+    if (updated.length > 0) {
+      tui.showInfo(theme.dim(`  Probed ${updated.length} new model(s) for tool support: ${updated.join(', ')}`));
+    }
+  }).catch(() => {});
+
   // Set model list for input completion
   tui.setModelList(allModels);
 
@@ -1064,6 +1072,22 @@ async function handleCommand(
           tui.updateModel(result.name, profile?.parameterSize);
           tui.showInfo(`Using ${theme.accent(result.name)} for this session`);
         }
+      }
+      return false;
+    }
+
+    case '/probe': {
+      tui.showInfo(theme.dim('Probing all models for tool-calling support...'));
+      try {
+        const { updated } = await modelManager.probeNewModels();
+        if (updated.length === 0) {
+          tui.showInfo('All models already probed. Delete ~/.veepee-code/capabilities.json to re-probe.');
+        } else {
+          tui.showInfo(`Probed ${updated.length} model(s): ${updated.join(', ')}`);
+          tui.showInfo(theme.dim('Results cached in ~/.veepee-code/capabilities.json'));
+        }
+      } catch (err) {
+        tui.showError(`Probe failed: ${(err as Error).message}`);
       }
       return false;
     }
