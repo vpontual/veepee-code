@@ -19,6 +19,11 @@ import { Benchmarker } from '../src/benchmark.js';
 import { loadConfig } from '../src/config.js';
 import { ModelManager } from '../src/models.js';
 import chalk from 'chalk';
+import { writeFile } from 'fs/promises';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const args = process.argv.slice(2);
 const listOnly = args.includes('--list');
@@ -101,6 +106,11 @@ async function main() {
 
   const savedPath = `${process.env.HOME}/.veepee-code/benchmarks/latest.json`;
   console.log(chalk.dim(`Results saved to ${savedPath}`));
+
+  // Also save a copy to the repo so results are tracked in git
+  const repoResultsPath = resolve(__dirname, '..', 'benchmarks', 'results.json');
+  await writeFile(repoResultsPath, JSON.stringify(results, null, 2));
+  console.log(chalk.dim(`Repo copy saved to ${repoResultsPath}`));
   console.log(chalk.dim('Run /benchmark results inside the TUI to view at any time.'));
 }
 

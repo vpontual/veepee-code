@@ -1,0 +1,1451 @@
+[
+  {
+    "model": "qwen3-coder-next:tools",
+    "server": "dgx-spark",
+    "serverUrl": "http://10.0.154.246:11434",
+    "tier": "heavy",
+    "parameterSize": "79.7B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 8616,
+      "tokensPerSecond": 29,
+      "timeToFirstToken": 1466
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 100,
+    "timestamp": "2026-04-04T16:27:52.680Z",
+    "errors": []
+  },
+  {
+    "model": "qwen3-coder-next:latest",
+    "server": "dgx-spark",
+    "serverUrl": "http://10.0.154.246:11434",
+    "tier": "heavy",
+    "parameterSize": "79.7B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 8674,
+      "tokensPerSecond": 29,
+      "timeToFirstToken": 1563
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 100,
+    "timestamp": "2026-04-04T16:29:36.772Z",
+    "errors": []
+  },
+  {
+    "model": "gpt-oss:120b",
+    "server": "dgx-spark",
+    "serverUrl": "http://10.0.154.246:11434",
+    "tier": "heavy",
+    "parameterSize": "116.8B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 12439,
+      "tokensPerSecond": 21,
+      "timeToFirstToken": 4635
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 100,
+    "timestamp": "2026-04-04T16:37:35.406Z",
+    "errors": []
+  },
+  {
+    "model": "mistral-small3.2:24b",
+    "server": "orin-agx",
+    "serverUrl": "http://10.0.154.245:11434",
+    "tier": "standard",
+    "parameterSize": "24.0B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 25467,
+      "tokensPerSecond": 8,
+      "timeToFirstToken": 2906
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 100,
+    "timestamp": "2026-04-04T17:00:18.607Z",
+    "errors": []
+  },
+  {
+    "model": "qwen3-coder-next:tools",
+    "tier": "heavy",
+    "parameterSize": "79.7B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 4461,
+      "tokensPerSecond": 23,
+      "timeToFirstToken": 1549
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 100,
+    "timestamp": "2026-04-04T01:08:58.496Z",
+    "errors": []
+  },
+  {
+    "model": "qwen3-coder-next:latest",
+    "tier": "heavy",
+    "parameterSize": "79.7B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 4296,
+      "tokensPerSecond": 24,
+      "timeToFirstToken": 1339
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 100,
+    "timestamp": "2026-04-04T01:09:45.750Z",
+    "errors": []
+  },
+  {
+    "model": "gpt-oss:120b",
+    "tier": "heavy",
+    "parameterSize": "116.8B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 8209,
+      "tokensPerSecond": 14,
+      "timeToFirstToken": 4671
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 100,
+    "timestamp": "2026-04-04T01:24:08.628Z",
+    "errors": []
+  },
+  {
+    "model": "mistral-small3.2:24b",
+    "tier": "standard",
+    "parameterSize": "24.0B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 10968,
+      "tokensPerSecond": 6,
+      "timeToFirstToken": 3053
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 100,
+    "timestamp": "2026-04-04T02:02:54.827Z",
+    "errors": []
+  },
+  {
+    "model": "lfm2:latest",
+    "server": "orin-agx",
+    "serverUrl": "http://10.0.154.245:11434",
+    "tier": "standard",
+    "parameterSize": "23.8B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 90
+    },
+    "performance": {
+      "avgLatencyMs": 6134,
+      "tokensPerSecond": 29,
+      "timeToFirstToken": 1788
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 99,
+    "timestamp": "2026-04-04T16:47:41.526Z",
+    "errors": []
+  },
+  {
+    "model": "gpt-oss:20b-16k",
+    "server": "orin-agx",
+    "serverUrl": "http://10.0.154.245:11434",
+    "tier": "standard",
+    "parameterSize": "20.9B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 93
+    },
+    "performance": {
+      "avgLatencyMs": 15560,
+      "tokensPerSecond": 16,
+      "timeToFirstToken": 6307
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 99,
+    "timestamp": "2026-04-04T17:03:25.325Z",
+    "errors": []
+  },
+  {
+    "model": "lfm2:latest",
+    "tier": "standard",
+    "parameterSize": "23.8B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 83
+    },
+    "performance": {
+      "avgLatencyMs": 3677,
+      "tokensPerSecond": 20,
+      "timeToFirstToken": 1900
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 97,
+    "timestamp": "2026-04-04T02:29:10.635Z",
+    "errors": []
+  },
+  {
+    "model": "gpt-oss:20b",
+    "server": "dgx-spark",
+    "serverUrl": "http://10.0.154.246:11434",
+    "tier": "standard",
+    "parameterSize": "20.9B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 50
+    },
+    "performance": {
+      "avgLatencyMs": 8670,
+      "tokensPerSecond": 23,
+      "timeToFirstToken": 3282
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 93,
+    "timestamp": "2026-04-04T16:26:09.282Z",
+    "errors": [
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "gpt-oss:20b-16k",
+    "tier": "standard",
+    "parameterSize": "20.9B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 50
+    },
+    "performance": {
+      "avgLatencyMs": 10709,
+      "tokensPerSecond": 7,
+      "timeToFirstToken": 6199
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 93,
+    "timestamp": "2026-04-04T02:39:32.175Z",
+    "errors": [
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "qwen2.5:14b",
+    "server": "dgx-spark",
+    "serverUrl": "http://10.0.154.246:11434",
+    "tier": "standard",
+    "parameterSize": "14.8B",
+    "scores": {
+      "toolCalling": 71,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 11802,
+      "tokensPerSecond": 17,
+      "timeToFirstToken": 714
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 91,
+    "timestamp": "2026-04-04T16:32:25.951Z",
+    "errors": [
+      "Simple tool call: No tool call made"
+    ]
+  },
+  {
+    "model": "qwen2.5:14b",
+    "server": "orin-agx",
+    "serverUrl": "http://10.0.154.245:11434",
+    "tier": "standard",
+    "parameterSize": "14.8B",
+    "scores": {
+      "toolCalling": 71,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 17116,
+      "tokensPerSecond": 11,
+      "timeToFirstToken": 2273
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 91,
+    "timestamp": "2026-04-04T16:51:58.965Z",
+    "errors": [
+      "Simple tool call: No tool call made"
+    ]
+  },
+  {
+    "model": "qwen2.5:14b",
+    "tier": "standard",
+    "parameterSize": "14.8B",
+    "scores": {
+      "toolCalling": 71,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 10677,
+      "tokensPerSecond": 10,
+      "timeToFirstToken": 2762
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 91,
+    "timestamp": "2026-04-04T02:21:12.729Z",
+    "errors": [
+      "Simple tool call: No tool call made"
+    ]
+  },
+  {
+    "model": "llama3.1:8b",
+    "tier": "standard",
+    "parameterSize": "8.0B",
+    "scores": {
+      "toolCalling": 71,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 10743,
+      "tokensPerSecond": 10,
+      "timeToFirstToken": 1431
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 91,
+    "timestamp": "2026-04-04T02:36:04.264Z",
+    "errors": [
+      "Simple tool call: FAILED - model 'llama3.1:8b' not found on any available server"
+    ]
+  },
+  {
+    "model": "gpt-oss:20b",
+    "server": "orin-agx",
+    "serverUrl": "http://10.0.154.245:11434",
+    "tier": "standard",
+    "parameterSize": "20.9B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 57,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 16169,
+      "tokensPerSecond": 13,
+      "timeToFirstToken": 6712
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 89,
+    "timestamp": "2026-04-04T16:55:12.999Z",
+    "errors": [
+      "Bug fix: Bug analysis: 0/100"
+    ]
+  },
+  {
+    "model": "gemma4:31b",
+    "tier": "heavy",
+    "parameterSize": "31.3B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 57,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 33868,
+      "tokensPerSecond": 1,
+      "timeToFirstToken": 21576
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 89,
+    "timestamp": "2026-04-04T01:58:03.792Z",
+    "errors": [
+      "Bug fix: Bug analysis: 0/100"
+    ]
+  },
+  {
+    "model": "nemotron-3-super:120b",
+    "tier": "heavy",
+    "parameterSize": "123.6B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 14233,
+      "tokensPerSecond": 6,
+      "timeToFirstToken": 7914
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 85,
+    "timestamp": "2026-04-04T01:22:38.332Z",
+    "errors": [
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "nemotron-cascade-2:latest",
+    "tier": "heavy",
+    "parameterSize": "31.6B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 9384,
+      "tokensPerSecond": 10,
+      "timeToFirstToken": 6881
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 85,
+    "timestamp": "2026-04-04T02:14:29.009Z",
+    "errors": [
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "llama4:latest",
+    "server": "dgx-spark",
+    "serverUrl": "http://10.0.154.246:11434",
+    "tier": "heavy",
+    "parameterSize": "108.6B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 93
+    },
+    "performance": {
+      "avgLatencyMs": 13349,
+      "tokensPerSecond": 12,
+      "timeToFirstToken": 2262
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 84,
+    "timestamp": "2026-04-04T16:35:06.140Z",
+    "errors": [
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "llama4:latest",
+    "tier": "heavy",
+    "parameterSize": "108.6B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 93
+    },
+    "performance": {
+      "avgLatencyMs": 8490,
+      "tokensPerSecond": 9,
+      "timeToFirstToken": 3203
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 84,
+    "timestamp": "2026-04-04T01:13:37.071Z",
+    "errors": [
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "llama3.2:3b",
+    "server": "dgx-spark",
+    "serverUrl": "http://10.0.154.246:11434",
+    "tier": "light",
+    "parameterSize": "3.2B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 94,
+      "reasoning": 83
+    },
+    "performance": {
+      "avgLatencyMs": 2296,
+      "tokensPerSecond": 55,
+      "timeToFirstToken": 535
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 82,
+    "timestamp": "2026-04-04T16:30:04.319Z",
+    "errors": [
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "llama3.2:3b",
+    "server": "orin-agx",
+    "serverUrl": "http://10.0.154.245:11434",
+    "tier": "light",
+    "parameterSize": "3.2B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 94,
+      "reasoning": 83
+    },
+    "performance": {
+      "avgLatencyMs": 4337,
+      "tokensPerSecond": 28,
+      "timeToFirstToken": 1365
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 82,
+    "timestamp": "2026-04-04T16:48:33.572Z",
+    "errors": [
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "llama3.2:3b",
+    "server": "nano-1",
+    "serverUrl": "http://10.0.154.234:11434",
+    "tier": "light",
+    "parameterSize": "3.2B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 94,
+      "reasoning": 83
+    },
+    "performance": {
+      "avgLatencyMs": 6308,
+      "tokensPerSecond": 18,
+      "timeToFirstToken": 1220
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 82,
+    "timestamp": "2026-04-04T17:08:19.669Z",
+    "errors": [
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "gpt-oss:20b",
+    "tier": "standard",
+    "parameterSize": "20.9B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 57,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 50
+    },
+    "performance": {
+      "avgLatencyMs": 8192,
+      "tokensPerSecond": 4,
+      "timeToFirstToken": 4395
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 82,
+    "timestamp": "2026-04-04T02:37:34.379Z",
+    "errors": [
+      "Bug fix: Bug analysis: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "llama3.2:3b",
+    "tier": "light",
+    "parameterSize": "3.2B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 83
+    },
+    "performance": {
+      "avgLatencyMs": 2916,
+      "tokensPerSecond": 22,
+      "timeToFirstToken": 1388
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 82,
+    "timestamp": "2026-04-04T02:51:10.816Z",
+    "errors": [
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "qwen2.5:3b-instruct",
+    "server": "nano-1",
+    "serverUrl": "http://10.0.154.234:11434",
+    "tier": "light",
+    "parameterSize": "3.1B",
+    "scores": {
+      "toolCalling": 94,
+      "codeGeneration": 87,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 10756,
+      "tokensPerSecond": 20,
+      "timeToFirstToken": 1391
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 80,
+    "timestamp": "2026-04-04T17:07:03.976Z",
+    "errors": [
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "qwen2.5:3b-instruct",
+    "tier": "light",
+    "parameterSize": "3.1B",
+    "scores": {
+      "toolCalling": 94,
+      "codeGeneration": 87,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 6647,
+      "tokensPerSecond": 19,
+      "timeToFirstToken": 1379
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 80,
+    "timestamp": "2026-04-04T02:52:23.935Z",
+    "errors": [
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "qwen3-coder:30b-32k",
+    "tier": "heavy",
+    "parameterSize": "30.5B",
+    "scores": {
+      "toolCalling": 0,
+      "codeGeneration": 100,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 93
+    },
+    "performance": {
+      "avgLatencyMs": 12939,
+      "tokensPerSecond": 19,
+      "timeToFirstToken": 1881
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 69,
+    "timestamp": "2026-04-04T01:20:01.766Z",
+    "errors": [
+      "Simple tool call: FAILED - registry.ollama.ai/library/qwen3-coder:30b-32k does not support tools",
+      "Multi-arg tool call: FAILED - registry.ollama.ai/library/qwen3-coder:30b-32k does not support tools",
+      "Tool selection (multiple available): FAILED - registry.ollama.ai/library/qwen3-coder:30b-32k does not support tools"
+    ]
+  },
+  {
+    "model": "qwen3:8b-32k",
+    "tier": "standard",
+    "parameterSize": "8.2B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 0,
+      "codeEditing": 100,
+      "instructionFollowing": 100,
+      "reasoning": 0
+    },
+    "performance": {
+      "avgLatencyMs": 16225,
+      "tokensPerSecond": 0,
+      "timeToFirstToken": 6125
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 60,
+    "timestamp": "2026-04-04T02:34:26.365Z",
+    "errors": [
+      "Simple function: Code quality: 0/100",
+      "TypeScript with types: TypeScript quality: 0/100",
+      "Bug fix: Bug analysis: 0/100",
+      "Multi-step logic: Reasoning: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "qwen2.5-coder:32b-instruct",
+    "tier": "heavy",
+    "parameterSize": "32.8B",
+    "scores": {
+      "toolCalling": 0,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 21260,
+      "tokensPerSecond": 6,
+      "timeToFirstToken": 2036
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 55,
+    "timestamp": "2026-04-04T01:17:28.766Z",
+    "errors": [
+      "Simple tool call: FAILED - model 'qwen2.5-coder:32b-instruct' not found on any available server",
+      "Multi-arg tool call: No tool call",
+      "Tool selection (multiple available): No tool call",
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "gemma3:27b",
+    "tier": "heavy",
+    "parameterSize": "27.4B",
+    "scores": {
+      "toolCalling": 0,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 23514,
+      "tokensPerSecond": 6,
+      "timeToFirstToken": 2696
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 55,
+    "timestamp": "2026-04-04T02:00:54.174Z",
+    "errors": [
+      "Simple tool call: FAILED - registry.ollama.ai/library/gemma3:27b does not support tools",
+      "Multi-arg tool call: FAILED - registry.ollama.ai/library/gemma3:27b does not support tools",
+      "Tool selection (multiple available): FAILED - registry.ollama.ai/library/gemma3:27b does not support tools",
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "qwen2.5-coder:7b-instruct",
+    "tier": "standard",
+    "parameterSize": "7.6B",
+    "scores": {
+      "toolCalling": 0,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 4506,
+      "tokensPerSecond": 20,
+      "timeToFirstToken": 1555
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 55,
+    "timestamp": "2026-04-04T02:22:02.301Z",
+    "errors": [
+      "Simple tool call: No tool call made",
+      "Multi-arg tool call: No tool call",
+      "Tool selection (multiple available): No tool call",
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "qwen2.5-coder:latest",
+    "tier": "standard",
+    "parameterSize": "7.6B",
+    "scores": {
+      "toolCalling": 0,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 8648,
+      "tokensPerSecond": 10,
+      "timeToFirstToken": 1887
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 55,
+    "timestamp": "2026-04-04T02:23:37.427Z",
+    "errors": [
+      "Simple tool call: No tool call made",
+      "Multi-arg tool call: No tool call",
+      "Tool selection (multiple available): No tool call",
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "gemma3:4b",
+    "tier": "light",
+    "parameterSize": "4.3B",
+    "scores": {
+      "toolCalling": 0,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 100
+    },
+    "performance": {
+      "avgLatencyMs": 12770,
+      "tokensPerSecond": 30,
+      "timeToFirstToken": 1389
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 55,
+    "timestamp": "2026-04-04T02:46:30.595Z",
+    "errors": [
+      "Simple tool call: FAILED - registry.ollama.ai/library/gemma3:4b does not support tools",
+      "Multi-arg tool call: FAILED - registry.ollama.ai/library/gemma3:4b does not support tools",
+      "Tool selection (multiple available): FAILED - registry.ollama.ai/library/gemma3:4b does not support tools",
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "llama3.2-vision:latest",
+    "tier": "standard",
+    "parameterSize": "10.7B",
+    "scores": {
+      "toolCalling": 0,
+      "codeGeneration": 100,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 93
+    },
+    "performance": {
+      "avgLatencyMs": 13728,
+      "tokensPerSecond": 18,
+      "timeToFirstToken": 1499
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 54,
+    "timestamp": "2026-04-04T02:24:39.742Z",
+    "errors": [
+      "Simple tool call: FAILED - registry.ollama.ai/library/llama3.2-vision:latest does not support tools",
+      "Multi-arg tool call: FAILED - registry.ollama.ai/library/llama3.2-vision:latest does not support tools",
+      "Tool selection (multiple available): FAILED - registry.ollama.ai/library/llama3.2-vision:latest does not support tools",
+      "Exact string replacement: Edit precision: 0/100"
+    ]
+  },
+  {
+    "model": "qwen3.5:9b",
+    "tier": "standard",
+    "parameterSize": "9.7B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 36,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 0
+    },
+    "performance": {
+      "avgLatencyMs": 20950,
+      "tokensPerSecond": 0,
+      "timeToFirstToken": 10470
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 54,
+    "timestamp": "2026-04-04T02:28:30.189Z",
+    "errors": [
+      "TypeScript with types: TypeScript quality: 0/100",
+      "Bug fix: Bug analysis: 30/100",
+      "Exact string replacement: Edit precision: 0/100",
+      "Multi-step logic: Reasoning: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "qwen3-vl:32b",
+    "tier": "heavy",
+    "parameterSize": "33.4B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 29,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 0
+    },
+    "performance": {
+      "avgLatencyMs": 151147,
+      "tokensPerSecond": 0,
+      "timeToFirstToken": 48559
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 52,
+    "timestamp": "2026-04-04T01:51:51.240Z",
+    "errors": [
+      "TypeScript with types: TypeScript quality: 0/100",
+      "Bug fix: Bug analysis: 0/100",
+      "Exact string replacement: Edit precision: 0/100",
+      "Multi-step logic: Reasoning: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "qwen3.5:35b",
+    "tier": "heavy",
+    "parameterSize": "36.0B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 13,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 0
+    },
+    "performance": {
+      "avgLatencyMs": 9056,
+      "tokensPerSecond": 1,
+      "timeToFirstToken": 3734
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 48,
+    "timestamp": "2026-04-04T01:19:08.382Z",
+    "errors": [
+      "Simple function: Code quality: 0/100",
+      "TypeScript with types: TypeScript quality: 0/100",
+      "Bug fix: Bug analysis: 30/100",
+      "Exact string replacement: Edit precision: 0/100",
+      "Multi-step logic: Reasoning: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "glm-4.7-flash:q8_0",
+    "tier": "heavy",
+    "parameterSize": "29.9B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 0,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 0
+    },
+    "performance": {
+      "avgLatencyMs": 20391,
+      "tokensPerSecond": 0,
+      "timeToFirstToken": 5507
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 45,
+    "timestamp": "2026-04-04T02:12:45.783Z",
+    "errors": [
+      "Simple function: Code quality: 0/100",
+      "TypeScript with types: TypeScript quality: 0/100",
+      "Bug fix: Bug analysis: 0/100",
+      "Exact string replacement: Edit precision: 0/100",
+      "Multi-step logic: Reasoning: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "glm-4.7-flash:latest",
+    "tier": "heavy",
+    "parameterSize": "29.9B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 0,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 0
+    },
+    "performance": {
+      "avgLatencyMs": 8283,
+      "tokensPerSecond": 0,
+      "timeToFirstToken": 1931
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 45,
+    "timestamp": "2026-04-04T02:16:00.128Z",
+    "errors": [
+      "Simple function: Code quality: 0/100",
+      "TypeScript with types: TypeScript quality: 0/100",
+      "Bug fix: Bug analysis: 0/100",
+      "Exact string replacement: Edit precision: 0/100",
+      "Multi-step logic: Reasoning: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "glm-4.7-flash-64k:latest",
+    "tier": "heavy",
+    "parameterSize": "29.9B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 0,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 0
+    },
+    "performance": {
+      "avgLatencyMs": 17741,
+      "tokensPerSecond": 0,
+      "timeToFirstToken": 4483
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 45,
+    "timestamp": "2026-04-04T02:19:15.278Z",
+    "errors": [
+      "Simple function: Code quality: 0/100",
+      "TypeScript with types: TypeScript quality: 0/100",
+      "Bug fix: Bug analysis: 0/100",
+      "Exact string replacement: Edit precision: 0/100",
+      "Multi-step logic: Reasoning: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "qwen3:8b",
+    "tier": "standard",
+    "parameterSize": "8.2B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 0,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 0
+    },
+    "performance": {
+      "avgLatencyMs": 12478,
+      "tokensPerSecond": 0,
+      "timeToFirstToken": 3517
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 45,
+    "timestamp": "2026-04-04T02:31:27.892Z",
+    "errors": [
+      "Simple function: Code quality: 0/100",
+      "TypeScript with types: TypeScript quality: 0/100",
+      "Bug fix: Bug analysis: 0/100",
+      "Exact string replacement: Edit precision: 0/100",
+      "Multi-step logic: Reasoning: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "qwen3.5:4b",
+    "tier": "light",
+    "parameterSize": "4.7B",
+    "scores": {
+      "toolCalling": 100,
+      "codeGeneration": 0,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 0
+    },
+    "performance": {
+      "avgLatencyMs": 33316,
+      "tokensPerSecond": 0,
+      "timeToFirstToken": 11611
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 45,
+    "timestamp": "2026-04-04T02:45:38.655Z",
+    "errors": [
+      "Simple function: Code quality: 0/100",
+      "TypeScript with types: TypeScript quality: 0/100",
+      "Bug fix: Bug analysis: 0/100",
+      "Exact string replacement: Edit precision: 0/100",
+      "Multi-step logic: Reasoning: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "deepseek-r1:32b",
+    "tier": "heavy",
+    "parameterSize": "32.8B",
+    "scores": {
+      "toolCalling": 0,
+      "codeGeneration": 29,
+      "codeEditing": 100,
+      "instructionFollowing": 75,
+      "reasoning": 50
+    },
+    "performance": {
+      "avgLatencyMs": 41449,
+      "tokensPerSecond": 1,
+      "timeToFirstToken": 11164
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 41,
+    "timestamp": "2026-04-04T02:09:01.486Z",
+    "errors": [
+      "Simple tool call: FAILED - registry.ollama.ai/library/deepseek-r1:32b does not support tools",
+      "Multi-arg tool call: FAILED - registry.ollama.ai/library/deepseek-r1:32b does not support tools",
+      "Tool selection (multiple available): FAILED - registry.ollama.ai/library/deepseek-r1:32b does not support tools",
+      "Simple function: Code quality: 0/100",
+      "Bug fix: Bug analysis: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "qwen3-next:80b",
+    "tier": "heavy",
+    "parameterSize": "79.7B",
+    "scores": {
+      "toolCalling": 43,
+      "codeGeneration": 29,
+      "codeEditing": 0,
+      "instructionFollowing": 100,
+      "reasoning": 0
+    },
+    "performance": {
+      "avgLatencyMs": 12539,
+      "tokensPerSecond": 1,
+      "timeToFirstToken": 4754
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 35,
+    "timestamp": "2026-04-04T01:12:03.679Z",
+    "errors": [
+      "Simple tool call: No tool call made",
+      "Multi-arg tool call: No tool call",
+      "TypeScript with types: TypeScript quality: 0/100",
+      "Bug fix: Bug analysis: 0/100",
+      "Exact string replacement: Edit precision: 0/100",
+      "Multi-step logic: Reasoning: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "qwen3:4b",
+    "tier": "light",
+    "parameterSize": "4.0B",
+    "scores": {
+      "toolCalling": 71,
+      "codeGeneration": 0,
+      "codeEditing": 0,
+      "instructionFollowing": 80,
+      "reasoning": 0
+    },
+    "performance": {
+      "avgLatencyMs": 22181,
+      "tokensPerSecond": 0,
+      "timeToFirstToken": 4178
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 33,
+    "timestamp": "2026-04-04T02:50:34.594Z",
+    "errors": [
+      "Multi-arg tool call: No tool call",
+      "Simple function: Code quality: 0/100",
+      "TypeScript with types: TypeScript quality: 0/100",
+      "Bug fix: Bug analysis: 0/100",
+      "Exact string replacement: Edit precision: 0/100",
+      "Format constraint: Format adherence: 60/100",
+      "Multi-step logic: Reasoning: 0/100",
+      "Edge case awareness: Edge cases: 0/100"
+    ]
+  },
+  {
+    "model": "embeddinggemma:latest",
+    "tier": "light",
+    "parameterSize": "307.58M",
+    "scores": {
+      "toolCalling": 0,
+      "codeGeneration": 0,
+      "codeEditing": 0,
+      "instructionFollowing": 0,
+      "reasoning": 0
+    },
+    "performance": {
+      "avgLatencyMs": 30000,
+      "tokensPerSecond": 0,
+      "timeToFirstToken": 0
+    },
+    "context": {
+      "optimalSize": 8192,
+      "maxUsable": 32768,
+      "speedByContext": {}
+    },
+    "overall": 0,
+    "timestamp": "2026-04-04T02:50:38.735Z",
+    "errors": [
+      "Simple tool call: FAILED - \"embeddinggemma:latest\" does not support chat",
+      "Multi-arg tool call: FAILED - \"embeddinggemma:latest\" does not support chat",
+      "Tool selection (multiple available): FAILED - \"embeddinggemma:latest\" does not support chat",
+      "Simple function: FAILED - \"embeddinggemma:latest\" does not support chat",
+      "TypeScript with types: FAILED - \"embeddinggemma:latest\" does not support chat",
+      "Bug fix: FAILED - \"embeddinggemma:latest\" does not support chat",
+      "Exact string replacement: FAILED - \"embeddinggemma:latest\" does not support chat",
+      "Format constraint: FAILED - \"embeddinggemma:latest\" does not support chat",
+      "Conciseness: FAILED - \"embeddinggemma:latest\" does not support chat",
+      "Multi-step logic: FAILED - \"embeddinggemma:latest\" does not support chat",
+      "Edge case awareness: FAILED - \"embeddinggemma:latest\" does not support chat"
+    ]
+  }
+]

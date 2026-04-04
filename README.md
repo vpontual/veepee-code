@@ -178,9 +178,57 @@ VEEPEE Code runs on your machine. Inference goes to Ollama (local or remote). To
 
 ## Supported models
 
-Any Ollama model with tool-calling support. The built-in benchmark automatically ranks your models and assigns them to roles — no manual config needed. Tested with:
+Any Ollama model with tool-calling support. The built-in benchmark automatically ranks your models and assigns them to roles — no manual config needed.
 
-`qwen3.5:35b` · `qwen3:8b` · `llama3.3:70b` · `deepseek-r1:32b` · `mistral-small:24b` · `gemma3:27b` · `glm-4.7-flash` · `llama3.2-vision`
+### Benchmark results
+
+Results from a full fleet benchmark (2026-04-04). The benchmark runs 12 tests across 5 categories: tool calling (30%), code generation (25%), code editing (15%), instruction following (15%), reasoning (15%). Models below 8 tok/s or without tool support are filtered out automatically.
+
+| Model | Server | Overall | Tools | CodeGen | Edit | Follow | Reason | tok/s |
+|---|---|---|---|---|---|---|---|---|
+| qwen3-coder-next:tools | dgx-spark | **100** | 100 | 100 | 100 | 100 | 100 | 29 |
+| qwen3-coder-next:latest | dgx-spark | **100** | 100 | 100 | 100 | 100 | 100 | 29 |
+| gpt-oss:120b | dgx-spark | **100** | 100 | 100 | 100 | 100 | 100 | 21 |
+| mistral-small3.2:24b | orin-agx | **100** | 100 | 100 | 100 | 100 | 100 | 8 |
+| lfm2:latest | orin-agx | 99 | 100 | 100 | 100 | 100 | 90 | 29 |
+| gpt-oss:20b-16k | orin-agx | 99 | 100 | 100 | 100 | 100 | 93 | 16 |
+| gpt-oss:20b | dgx-spark | 93 | 100 | 100 | 100 | 100 | 50 | 23 |
+| qwen2.5:14b | dgx-spark | 91 | 71 | 100 | 100 | 100 | 100 | 17 |
+| qwen2.5:14b | orin-agx | 91 | 71 | 100 | 100 | 100 | 100 | 11 |
+| gpt-oss:20b | orin-agx | 89 | 100 | 57 | 100 | 100 | 100 | 13 |
+| llama4:latest | dgx-spark | 84 | 100 | 100 | 0 | 100 | 93 | 12 |
+| llama3.2:3b | dgx-spark | 82 | 100 | 100 | 0 | 94 | 83 | 55 |
+| llama3.2:3b | orin-agx | 82 | 100 | 100 | 0 | 94 | 83 | 28 |
+| llama3.2:3b | nano-1 | 82 | 100 | 100 | 0 | 94 | 83 | 18 |
+| qwen2.5:3b-instruct | nano-1 | 80 | 94 | 87 | 0 | 100 | 100 | 20 |
+
+Full results (all servers + proxy) in [`benchmarks/results.json`](benchmarks/results.json).
+
+**Filtered out:** Models without tool-calling support (`qwen3.5`, `qwen3`, `gemma3`, `glm-4.7-flash`, `deepseek-r1`, `gemma4:26b`, etc.) and models below 8 tok/s (`gemma4:31b` at 0 tok/s, `nemotron-cascade-2` at 0 tok/s).
+
+### Benchmarking your fleet
+
+Run `scripts/benchmark.ts` to benchmark all servers in your fleet config. Results are saved to `~/.veepee-code/benchmarks/latest.json` and `benchmarks/results.json` in the repo.
+
+```bash
+# Benchmark all fleet servers (8 tok/s floor, skip already-benchmarked)
+npx tsx scripts/benchmark.ts
+
+# Options
+npx tsx scripts/benchmark.ts --list              # show saved results
+npx tsx scripts/benchmark.ts --force             # re-run everything
+npx tsx scripts/benchmark.ts --server dgx-spark  # one server only
+npx tsx scripts/benchmark.ts --min-tps=0         # disable speed filter
+```
+
+Configure fleet servers in `~/.veepee-code/vcode.config.json`:
+
+```json
+"fleet": [
+  { "name": "dgx-spark", "url": "http://10.0.154.246:11434" },
+  { "name": "orin-agx",  "url": "http://10.0.154.245:11434" }
+]
+```
 
 ## CLI flags
 
