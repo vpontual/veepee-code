@@ -4,6 +4,7 @@ import type { AgentMode } from './agent.js';
 import { KnowledgeState } from './knowledge.js';
 import { detectProject, formatProjectInfo, getCodingGuidance } from './detect.js';
 import { getOutputStyle } from './styles.js';
+import { getRecentShellHistory, formatShellHistoryBlock } from './shellhistory.js';
 import { readdirSync, readFileSync, statSync, existsSync } from 'fs';
 import { join, relative } from 'path';
 
@@ -129,7 +130,7 @@ const SYSTEM_PROMPT = `You are VEEPEE Code, a CLI coding assistant powered by lo
 - Date: {{DATE}} | Model: {{MODEL}} (cutoff: ~{{CUTOFF}}) | Mode: {{MODE}}
 - CWD: {{CWD}} | Platform: {{PLATFORM}}
 {{PROJECT_INFO}}
-{{PROJECT_TREE}}{{LLAMA_MD}}
+{{PROJECT_TREE}}{{LLAMA_MD}}{{SHELL_HISTORY}}
 ## Rules
 
 **Cutoff: {{CUTOFF}}.** For anything post-cutoff (versions, events, APIs, news), use web_search BEFORE answering. Never say "as of my last update."
@@ -250,6 +251,7 @@ export class ContextManager {
   private additionalDirs: string[] = [];
   private sandboxPath: string | null = null;
   private activeStyle: string | null = null;
+  private shellHistoryBlock: string = '';
 
   constructor(sessionId?: string) {
     this.knowledgeState = new KnowledgeState(sessionId || Date.now().toString(36));
@@ -270,6 +272,13 @@ export class ContextManager {
   /** Get all search directories (cwd + additional) */
   getSearchDirs(): string[] {
     return [process.cwd(), ...this.additionalDirs];
+  }
+
+  /** Capture recent shell history once on session start */
+  captureShellHistory(): void {
+    const commands = getRecentShellHistory(20);
+    this.shellHistoryBlock = formatShellHistoryBlock(commands);
+    this.rebuildSystemPrompt();
   }
 
   /** Set sandbox directory path (shown in system prompt) */
@@ -354,6 +363,7 @@ export class ContextManager {
       .replace(/\{\{PROJECT_TREE\}\}/g, projectTree)
       .replace(/\{\{LLAMA_MD\}\}/g, llamaMd)
       .replace(/\{\{CODING_GUIDANCE\}\}/g, codingGuidance)
+      .replace(/\{\{SHELL_HISTORY\}\}/g, this.shellHistoryBlock)
       .replace(/\{\{SANDBOX\}\}/g, this.sandboxPath
         ? `\n**Sandbox:** \`${this.sandboxPath}\` — use for scratch files, experiments, temp code. Auto-cleaned on session end.\n`
         : '');

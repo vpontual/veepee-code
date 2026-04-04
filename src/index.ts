@@ -18,6 +18,10 @@ import { startApiServer } from './api.js';
 import { TUI, theme, icons } from './tui/index.js';
 import { validateIntegrations, formatSetupReport } from './setup.js';
 import { saveSession, listSessions, findSession, formatSessionList, autoName } from './sessions.js';
+import { getProjectSession, setProjectSession, listProjects, formatProjectList } from './projects.js';
+import { IgnoreManager } from './ignore.js';
+import { ObservabilityManager } from './observability.js';
+import { RalphEngine } from './ralph.js';
 import { MoeEngine, type MoeStrategy } from './moe.js';
 import { KnowledgeState } from './knowledge.js';
 import { createWorktree, listWorktrees, cleanupWorktrees, isGitRepo } from './worktree.js';
@@ -30,6 +34,7 @@ import { checkForUpdate } from './update.js';
 
 // Tool registrations
 import { registerCodingTools } from './tools/coding.js';
+
 import { registerWebTools } from './tools/web.js';
 import { registerDevOpsTools } from './tools/devops.js';
 import { discoverRemoteTools } from './tools/remote.js';
@@ -38,6 +43,13 @@ const VERSION = '0.3.0';
 
 
 async function main() {
+  // Project list: vcode --projects
+  if (process.argv.includes('--projects')) {
+    const projects = await listProjects();
+    console.log(formatProjectList(projects));
+    process.exit(0);
+  }
+
   // Self-update: vcode --update
   if (process.argv.includes('--update')) {
     const { execSync } = await import('child_process');
@@ -109,9 +121,10 @@ async function main() {
   let defaultModel = modelManager.selectDefault();
   let defaultProfile = modelManager.getProfile(defaultModel);
 
-  // Register tools
+  // Register tools — pass IgnoreManager for .veepeignore support
+  const ignoreManager = new IgnoreManager(process.cwd());
   const registry = new ToolRegistry();
-  for (const tool of registerCodingTools()) registry.register(tool);
+  for (const tool of registerCodingTools(ignoreManager)) registry.register(tool);
   for (const tool of registerWebTools(config)) registry.register(tool);
   for (const tool of registerDevOpsTools()) registry.register(tool);
 
@@ -133,6 +146,14 @@ async function main() {
   agent.getContext().setRegisteredTools(registry.names());
   agent.getContext().setSystemPrompt(defaultModel);
   if (config.modelStick) agent.setModelStick(true);
+
+  // Capture shell history for context (once on startup, if enabled)
+  if (config.shellHistoryContext !== false) {
+    agent.getContext().captureShellHistory();
+  }
+
+  // Optional observability
+  const observability = new ObservabilityManager(config);
 
   // Initialize sandbox
   const sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -521,6 +542,41 @@ async function main() {
     }
   }
 
+  // Auto-resume: if no session was explicitly requested, check if there's a saved session for this cwd
+  if (!currentSessionId && !continueFlag && !resumeArg) {
+    const proj = await getProjectSession(process.cwd());
+    if (proj) {
+      const session = await findSession(proj.sessionId);
+      if (session) {
+        if (session.knowledgeState) {
+          const savedKs = await KnowledgeState.load(session.id);
+          if (savedKs) agent.getContext().setKnowledgeState(savedKs);
+        }
+        const recentMessages = session.messages.slice(-6);
+        for (const msg of recentMessages) {
+          if (msg.role === 'user') {
+            agent.getContext().addUser(msg.content || '');
+            tui.addUserMessage(msg.content || '');
+          } else if (msg.role === 'assistant') {
+            agent.getContext().addAssistant(msg.content || '');
+            tui.showInfo(msg.content || '');
+          } else if (msg.role === 'tool') {
+            agent.getContext().addToolResult('resumed', msg.content || '');
+          }
+        }
+        currentSessionId = session.id;
+        if (session.model) {
+          const profile = modelManager.getProfile(session.model);
+          if (profile) {
+            agent.setModel(session.model);
+            tui.updateModel(session.model);
+          }
+        }
+        tui.showInfo(`${theme.success('Auto-resumed:')} ${theme.accent(session.name)} ${theme.dim('(project session)')}`);
+      }
+    }
+  }
+
   // Main loop
   let sessionStart = Date.now();
 
@@ -578,11 +634,16 @@ async function main() {
 
     tui.startStream();
 
+    // Accumulate turn data for observability
+    let turnAssistantContent = '';
+    const turnToolCalls: Array<{ name: string; success: boolean }> = [];
+
     for await (const event of agent.run(trimmed)) {
       switch (event.type) {
         case 'text':
           if (event.content) {
             tui.appendStream(event.content);
+            turnAssistantContent += event.content;
           }
           break;
 
@@ -594,6 +655,7 @@ async function main() {
 
         case 'tool_result':
           tui.showToolResult(event.name!, event.success!, event.content || event.error || '');
+          turnToolCalls.push({ name: event.name!, success: event.success! });
           refreshStats();
           tui.startStream(); // resume streaming for next assistant text
           break;
@@ -624,6 +686,21 @@ async function main() {
             promptEvalCount: event.promptEvalCount,
             tokensPerSecond: event.tokensPerSecond,
           });
+          // Log to Langfuse if enabled
+          if (observability.isEnabled()) {
+            observability.logTurn({
+              sessionId: currentSessionId || sessionId,
+              model: modelManager.getCurrentModel(),
+              mode: agent.getMode(),
+              userMessage: trimmed,
+              assistantMessage: turnAssistantContent,
+              evalCount: event.evalCount || 0,
+              promptEvalCount: event.promptEvalCount || 0,
+              tokensPerSecond: event.tokensPerSecond || 0,
+              latencyMs: Date.now() - turnStart,
+              toolCalls: turnToolCalls,
+            }).catch(() => {});
+          }
           break;
       }
     }
@@ -787,7 +864,9 @@ async function handleCommand(
         `  ${theme.accent('/init')}             Create VEEPEE.md    ${theme.accent('/setup')}       Validate tools`,
         `  ${theme.accent('/save [name]')}      Save session        ${theme.accent('/sessions')}    List saved sessions`,
         `  ${theme.accent('/resume <name>')}    Resume a session    ${theme.accent('/rename <name>')} Rename session`,
+        `  ${theme.accent('/fork [name]')}      Fork current session ${theme.accent('/projects')}    List tracked projects`,
         `  ${theme.accent('/add-dir <path>')}   Add working dir     ${theme.accent('/worktree')}     Git worktree isolation`,
+        `  ${theme.accent('/ralph <task>')}      Work→Review loop    ${theme.dim('/ralph --max <n> <task>')}`,
         `  ${theme.accent('/effort low|med|hi')} Set response depth  ${theme.accent('/settings')}    View/toggle settings`,
         '',
         `${theme.textBold('Modes:')}`,
@@ -1533,6 +1612,8 @@ ${gathered.join('\n\n')}`;
       );
       // Also save the knowledge state file
       await ks.save();
+      // Track in project registry so this session auto-resumes next time
+      await setProjectSession(process.cwd(), session.id, session.name);
       tui.showInfo(`${theme.success('Saved:')} ${theme.accent(session.name)} ${theme.dim(`(ID: ${session.id})`)}`);
       return `session:${session.id}`;
     }
@@ -1576,6 +1657,130 @@ ${gathered.join('\n\n')}`;
       );
       tui.showInfo(`${theme.success('Renamed to:')} ${theme.accent(newName)}`);
       return `session:${session.id}`;
+    }
+
+    case '/fork': {
+      if (agent.getContext().messageCount() === 0) {
+        tui.showInfo('Nothing to fork — start a conversation first.');
+        return;
+      }
+      const forkName = parts.slice(1).join(' ') || `${autoName(agent.getContext().getAllMessages())} (fork)`;
+      const ks = agent.getContext().getKnowledgeState();
+      // Save a new session (no existingId → new ID generated) with a copy of all messages
+      const forkedSession = await saveSession(
+        forkName,
+        agent.getContext().getAllMessages(),
+        modelManager.getCurrentModel(),
+        agent.getMode(),
+        process.cwd(),
+        undefined,
+        ks.getData(),
+      );
+      await setProjectSession(process.cwd(), forkedSession.id, forkedSession.name);
+      tui.showInfo([
+        `${theme.success('Forked:')} ${theme.accent(forkedSession.name)} ${theme.dim(`(ID: ${forkedSession.id})`)}`,
+        theme.dim('  You are now working in the fork. The original session is preserved.'),
+        theme.dim('  Use /sessions to see both sessions.'),
+      ].join('\n'));
+      return `session:${forkedSession.id}`;
+    }
+
+    case '/projects': {
+      const projects = await listProjects();
+      tui.showInfo(formatProjectList(projects));
+      return;
+    }
+
+    case '/ralph': {
+      const ralphTask = parts.slice(1).join(' ').trim();
+      if (!ralphTask) {
+        tui.showInfo([
+          `${theme.textBold('Ralph Loop')} — iterative Work→Review until SHIP`,
+          '',
+          `  Usage: /ralph <task description>`,
+          `  Options: /ralph --max <n> <task>  (default: 5 iterations)`,
+          '',
+          `  Worker model:   ${theme.accent(agent.getRoster()?.act ?? modelManager.getCurrentModel())}`,
+          `  Reviewer model: ${theme.accent(agent.getRoster()?.plan ?? modelManager.getCurrentModel())}`,
+          '',
+          theme.dim('  State saved to .veepee/ralph/ — survives context compaction.'),
+        ].join('\n'));
+        return;
+      }
+
+      // Parse optional --max <n> flag
+      let task = ralphTask;
+      let maxIter = 5;
+      const maxIdx = parts.indexOf('--max');
+      if (maxIdx >= 0) {
+        const parsed = parseInt(parts[maxIdx + 1] || '5', 10);
+        if (!isNaN(parsed)) maxIter = Math.max(1, Math.min(20, parsed));
+        // Remove --max and its value from the task string
+        task = parts.slice(1)
+          .filter((_, i) => i !== maxIdx - 1 && i !== maxIdx)
+          .join(' ')
+          .trim();
+      }
+
+      const ralph = new RalphEngine(config, agent.getRoster(), modelManager.getCurrentModel());
+
+      tui.showInfo([
+        `${theme.accent('Ralph Loop')} — ${maxIter} max iterations`,
+        `  Worker:   ${theme.dim(agent.getRoster()?.act ?? modelManager.getCurrentModel())}`,
+        `  Reviewer: ${theme.dim(agent.getRoster()?.plan ?? modelManager.getCurrentModel())}`,
+        `  Task: ${task}`,
+        '',
+      ].join('\n'));
+
+      for await (const event of ralph.run(task, maxIter)) {
+        switch (event.type) {
+          case 'worker_start':
+            tui.showInfo(theme.dim(`\n[Iteration ${event.iteration}] Worker (${event.model}) producing...`));
+            tui.startStream();
+            break;
+          case 'worker_chunk':
+            tui.appendStream(event.content);
+            break;
+          case 'worker_done':
+            tui.endStream();
+            break;
+          case 'reviewer_start':
+            tui.showInfo(theme.dim(`[Iteration ${event.iteration}] Reviewer (${event.model}) evaluating...`));
+            tui.startStream();
+            break;
+          case 'reviewer_chunk':
+            tui.appendStream(event.content);
+            break;
+          case 'reviewer_done':
+            tui.endStream();
+            break;
+          case 'decision': {
+            const col = event.decision === 'SHIP'
+              ? theme.success
+              : event.decision === 'ABANDON'
+                ? theme.error
+                : theme.warning;
+            tui.showInfo(`Decision: ${col(event.decision)}`);
+            break;
+          }
+          case 'done': {
+            const statusLabel: Record<string, string> = {
+              shipped: theme.success('SHIPPED'),
+              abandoned: theme.error('ABANDONED'),
+              max_iterations_reached: theme.warning('MAX ITERATIONS'),
+              running: theme.muted('INCOMPLETE'),
+            };
+            tui.showInfo([
+              '',
+              `${theme.textBold('Ralph complete')} — ${statusLabel[event.state.status] ?? event.state.status}`,
+              `  Iterations: ${event.state.iteration}/${event.state.maxIterations}`,
+              theme.dim(`  State saved to .veepee/ralph/${event.state.id}.json`),
+            ].join('\n'));
+            break;
+          }
+        }
+      }
+      return;
     }
 
     case '/add-dir': {
@@ -1919,6 +2124,7 @@ function getLocalIp(): string {
 // Handle signals gracefully
 process.on('SIGINT', () => { /* handled in TUI */ });
 process.on('SIGTERM', () => process.exit(0));
+
 
 main().catch((err) => {
   // Make sure we exit alt screen on error

@@ -6,14 +6,15 @@ import { glob as globFn } from 'glob';
 import { z } from 'zod';
 import type { ToolDef, ToolResult } from './types.js';
 import { ok, fail } from './types.js';
+import type { IgnoreManager } from '../ignore.js';
 
-export function registerCodingTools(): ToolDef[] {
+export function registerCodingTools(ignoreManager?: IgnoreManager): ToolDef[] {
   return [
-    createReadFileTool(),
-    createWriteFileTool(),
-    createEditFileTool(),
-    createGlobTool(),
-    createGrepTool(),
+    createReadFileTool(ignoreManager),
+    createWriteFileTool(ignoreManager),
+    createEditFileTool(ignoreManager),
+    createGlobTool(ignoreManager),
+    createGrepTool(ignoreManager),
     createBashTool(),
     createGitTool(),
     createGithubTool(),
@@ -22,7 +23,7 @@ export function registerCodingTools(): ToolDef[] {
   ];
 }
 
-function createReadFileTool(): ToolDef {
+function createReadFileTool(ignoreManager?: IgnoreManager): ToolDef {
   return {
     name: 'read_file',
     description: 'Read a file from the filesystem. Returns the full file content with line numbers. Use this to understand code before making changes.',
@@ -34,6 +35,8 @@ function createReadFileTool(): ToolDef {
     execute: async (params) => {
       try {
         const filePath = resolve(params.path as string);
+        const blocked = ignoreManager?.getBlockedReason(filePath);
+        if (blocked) return fail(`Access blocked by .veepeignore (${blocked}): ${filePath}`);
         const content = await readFile(filePath, 'utf-8');
         const lines = content.split('\n');
 
@@ -53,7 +56,7 @@ function createReadFileTool(): ToolDef {
   };
 }
 
-function createWriteFileTool(): ToolDef {
+function createWriteFileTool(ignoreManager?: IgnoreManager): ToolDef {
   return {
     name: 'write_file',
     description: 'Write content to a file, creating it if it does not exist or overwriting if it does. Use for creating new files.',
@@ -64,6 +67,8 @@ function createWriteFileTool(): ToolDef {
     execute: async (params) => {
       try {
         const filePath = resolve(params.path as string);
+        const blocked = ignoreManager?.getBlockedReason(filePath);
+        if (blocked) return fail(`Access blocked by .veepeignore (${blocked}): ${filePath}`);
         await writeFile(filePath, params.content as string, 'utf-8');
         const lines = (params.content as string).split('\n').length;
         return ok(`Wrote ${lines} lines to ${relative(process.cwd(), filePath)}`);
@@ -74,7 +79,7 @@ function createWriteFileTool(): ToolDef {
   };
 }
 
-function createEditFileTool(): ToolDef {
+function createEditFileTool(ignoreManager?: IgnoreManager): ToolDef {
   return {
     name: 'edit_file',
     description: 'Edit a file by replacing a string match. Provide old_string (text to find) and new_string (replacement). By default old_string must be unique; set replace_all=true to replace every occurrence.',
@@ -87,6 +92,8 @@ function createEditFileTool(): ToolDef {
     execute: async (params) => {
       try {
         const filePath = resolve(params.path as string);
+        const blocked = ignoreManager?.getBlockedReason(filePath);
+        if (blocked) return fail(`Access blocked by .veepeignore (${blocked}): ${filePath}`);
         const content = await readFile(filePath, 'utf-8');
         const oldStr = params.old_string as string;
         const newStr = params.new_string as string;
@@ -165,7 +172,7 @@ function createEditFileTool(): ToolDef {
   };
 }
 
-function createGlobTool(): ToolDef {
+function createGlobTool(ignoreManager?: IgnoreManager): ToolDef {
   return {
     name: 'glob',
     description: 'Find files matching a glob pattern. Use patterns like "**/*.ts", "src/**/*.js", "*.json". Returns matching file paths.',
@@ -176,11 +183,16 @@ function createGlobTool(): ToolDef {
     execute: async (params) => {
       try {
         const cwd = resolve((params.cwd as string) || process.cwd());
-        const matches = await globFn(params.pattern as string, {
+        const rawMatches = await globFn(params.pattern as string, {
           cwd,
           ignore: ['node_modules/**', '.git/**', 'dist/**', 'build/**', '.next/**'],
           nodir: true,
         });
+
+        // Filter out .veepeignore-blocked paths
+        const matches = ignoreManager
+          ? rawMatches.filter(m => !ignoreManager.isBlocked(resolve(cwd, m)))
+          : rawMatches;
 
         if (matches.length === 0) {
           return ok('No files matched the pattern.');
@@ -199,7 +211,7 @@ function createGlobTool(): ToolDef {
   };
 }
 
-function createGrepTool(): ToolDef {
+function createGrepTool(ignoreManager?: IgnoreManager): ToolDef {
   return {
     name: 'grep',
     description: 'Search file contents using a regex pattern. Returns matching lines with file paths and line numbers. Great for finding where functions, classes, or patterns are defined or used.',
@@ -212,6 +224,11 @@ function createGrepTool(): ToolDef {
     execute: async (params) => {
       try {
         const searchPath = resolve((params.path as string) || '.');
+        // Block grep on a directly specified sensitive file
+        if (params.path) {
+          const blocked = ignoreManager?.getBlockedReason(searchPath);
+          if (blocked) return fail(`Access blocked by .veepeignore (${blocked}): ${searchPath}`);
+        }
         const include = params.include as string | undefined;
         const maxResults = (params.max_results as number) || 50;
         const pattern = params.pattern as string;

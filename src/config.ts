@@ -18,6 +18,8 @@ export interface Config {
   sync: { url: string; user: string; pass: string; auto: boolean } | null;
   rc: { enabled: boolean } | null;
   remote: { url: string; apiKey: string } | null;
+  langfuse: { secretKey: string; publicKey: string; host?: string } | null;
+  shellHistoryContext: boolean;
 }
 
 export interface ConfigFile {
@@ -37,6 +39,8 @@ export interface ConfigFile {
   sync?: { url: string; user: string; pass: string; auto: boolean } | null;
   rc?: { enabled: boolean } | null;
   remote?: { url: string; apiKey: string } | null;
+  langfuse?: { secretKey: string; publicKey: string; host?: string } | null;
+  shellHistoryContext?: boolean;
 }
 
 const DEFAULTS: Config = {
@@ -56,6 +60,8 @@ const DEFAULTS: Config = {
   sync: null,
   rc: null,
   remote: null,
+  langfuse: null,
+  shellHistoryContext: true,
 };
 
 export function getConfigDir(): string {
@@ -160,6 +166,8 @@ export function loadConfig(configPath?: string): Config {
     sync: file.sync ?? DEFAULTS.sync,
     rc: file.rc ?? DEFAULTS.rc,
     remote: file.remote ?? DEFAULTS.remote,
+    langfuse: file.langfuse ?? DEFAULTS.langfuse,
+    shellHistoryContext: file.shellHistoryContext ?? DEFAULTS.shellHistoryContext,
   };
 }
 
