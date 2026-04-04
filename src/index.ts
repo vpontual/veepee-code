@@ -373,7 +373,7 @@ async function main() {
   tui.setAbortHandler(() => agent.abort());
 
   // First-launch: smart benchmark all models, build roster
-  const benchmarker = new Benchmarker(config.proxyUrl);
+  const benchmarker = new Benchmarker(config.proxyUrl, config.fleet);
   const existingRoster = await benchmarker.loadRoster();
   if (!existingRoster) {
     tui.showInfo(`${theme.accent('⚡ First launch')} — testing all your models to find the best for each role.`);
@@ -1149,7 +1149,7 @@ async function handleCommand(
       const subCmd = parts[1]?.toLowerCase();
 
       if (subCmd === 'results' || subCmd === 'show') {
-        const b = new Benchmarker(config.proxyUrl);
+        const b = new Benchmarker(config.proxyUrl, config.fleet);
         const results = await b.loadLatest();
         if (!results) {
           tui.showInfo('No benchmark results. Run /benchmark to generate.');
@@ -1160,7 +1160,7 @@ async function handleCommand(
       }
 
       if (subCmd === 'summary') {
-        const b = new Benchmarker(config.proxyUrl);
+        const b = new Benchmarker(config.proxyUrl, config.fleet);
         const results = await b.loadLatest();
         if (!results) {
           tui.showInfo('No benchmark results. Run /benchmark to generate.');
@@ -1172,7 +1172,7 @@ async function handleCommand(
 
       if (subCmd === 'context') {
         tui.showInfo('Running context probing on all benchmarked models... This will take a while.');
-        const b = new Benchmarker(config.proxyUrl);
+        const b = new Benchmarker(config.proxyUrl, config.fleet);
         const existing = await b.loadLatest();
         if (!existing) {
           tui.showInfo('No benchmark results. Run /benchmark first.');
@@ -1185,6 +1185,7 @@ async function handleCommand(
           onProgress: (model, test, mi, mt, ti, tt) => {
             tui.showInfo(`[${mi}/${mt}] ${model} — ${test} (${ti}/${tt})`);
           },
+          onStatusUpdate: (msg) => tui.showInfo(msg),
         });
         tui.showInfo(Benchmarker.formatTable(results));
         return false;
@@ -1197,13 +1198,14 @@ async function handleCommand(
 
       tui.showInfo(`Running benchmarks on ${candidates.length} models... This may take a while.`);
 
-      const b = new Benchmarker(config.proxyUrl);
+      const b = new Benchmarker(config.proxyUrl, config.fleet);
       const results = await b.benchmarkAll(candidates, {
         filter,
         skipContextProbing: true, // fast by default, use /benchmark context for full probing
         onProgress: (model, test, mi, mt, ti, tt) => {
           tui.showInfo(`[${mi}/${mt}] ${model} — ${test} (${ti}/${tt})`);
         },
+        onStatusUpdate: (msg) => tui.showInfo(msg),
       });
 
       tui.showInfo(Benchmarker.formatTable(results));

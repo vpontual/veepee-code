@@ -20,6 +20,7 @@ export interface Config {
   remote: { url: string; apiKey: string } | null;
   langfuse: { secretKey: string; publicKey: string; host?: string } | null;
   shellHistoryContext: boolean;
+  fleet: Array<{ name: string; url: string }>;
 }
 
 export interface ConfigFile {
@@ -41,6 +42,7 @@ export interface ConfigFile {
   remote?: { url: string; apiKey: string } | null;
   langfuse?: { secretKey: string; publicKey: string; host?: string } | null;
   shellHistoryContext?: boolean;
+  fleet?: Array<{ name: string; url: string }>;
 }
 
 const DEFAULTS: Config = {
@@ -62,6 +64,7 @@ const DEFAULTS: Config = {
   remote: null,
   langfuse: null,
   shellHistoryContext: true,
+  fleet: [],
 };
 
 export function getConfigDir(): string {
@@ -168,6 +171,7 @@ export function loadConfig(configPath?: string): Config {
     remote: file.remote ?? DEFAULTS.remote,
     langfuse: file.langfuse ?? DEFAULTS.langfuse,
     shellHistoryContext: file.shellHistoryContext ?? DEFAULTS.shellHistoryContext,
+    fleet: file.fleet ?? DEFAULTS.fleet,
   };
 }
 

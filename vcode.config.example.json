@@ -6,5 +6,10 @@
   "minModelSize": 12,
   "apiPort": 8484,
   "apiHost": "127.0.0.1",
-  "searxngUrl": null
+  "searxngUrl": null,
+  "fleet": [
+    { "name": "dgx-spark", "url": "http://10.0.154.246:11434" },
+    { "name": "orin-agx",  "url": "http://10.0.154.245:11434" },
+    { "name": "nano-1",    "url": "http://10.0.154.234:11434" }
+  ]
 }

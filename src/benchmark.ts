@@ -18,6 +18,8 @@ export interface ModelRoster {
 
 export interface BenchmarkResult {
   model: string;
+  server: string;     // server name, e.g. "dgx-spark" or "proxy" for single-server mode
+  serverUrl: string;  // server URL for reference
   tier: string;
   parameterSize: string;
   scores: {
@@ -46,6 +48,7 @@ interface TestCase {
   name: string;
   category: keyof BenchmarkResult['scores'];
   weight: number;
+  maxTokens?: number;
   prompt: string;
   tools?: unknown[];
   validate: (response: string, toolCalls?: ToolCallResult[]) => { pass: boolean; score: number; reason: string };
@@ -332,6 +335,34 @@ const TEST_SUITE: TestCase[] = [
       return { pass: score >= 50, score, reason: `Edge cases: ${score}/100` };
     },
   },
+
+  // Streaming Endurance Test
+  // Generates ~1500+ tokens in a single stream. A slow or unstable model
+  // will drop the stream mid-way, producing a short truncated response.
+  // This catches the failure mode where a model passes all short tests
+  // but silently times out on real agentic tasks (e.g. large refactors).
+  {
+    name: 'Streaming endurance',
+    category: 'instructionFollowing',
+    weight: 1.5,
+    maxTokens: 2000,
+    prompt: 'Write a comprehensive TypeScript generics guide. Cover all of these sections with code examples: 1) Generic functions with type parameters, 2) Generic interfaces and type aliases, 3) Generic classes, 4) Type constraints with extends, 5) Conditional types, 6) Mapped types with keyof, 7) The infer keyword, 8) Common utility types: Partial, Required, Pick, Omit, Record, ReturnType. For each section write a short explanation and a working code example. Be thorough.',
+    validate: (response) => {
+      // Primary gate: must produce a substantial response (stream did not drop)
+      if (response.length < 1500) {
+        return { pass: false, score: 0, reason: `Stream may have dropped: ${response.length} chars received (need 1500+)` };
+      }
+      let score = 0;
+      const lower = response.toLowerCase();
+      if (lower.includes('generic') && response.includes('<T>')) score += 25;
+      if (lower.includes('extends') || lower.includes('constraint')) score += 20;
+      if (lower.includes('conditional') || lower.includes('infer')) score += 20;
+      if (lower.includes('partial') || lower.includes('record') || lower.includes('omit')) score += 20;
+      // Must have at least 4 code blocks
+      if ((response.match(/```/g) || []).length >= 4) score += 15;
+      return { pass: score >= 60, score, reason: `Endurance: ${response.length} chars, ${score}/100` };
+    },
+  },
 ];
 
 // ─── Benchmark Runner ────────────────────────────────────────────────────────
@@ -339,14 +370,19 @@ const TEST_SUITE: TestCase[] = [
 export class Benchmarker {
   private ollama: Ollama;
   private resultsDir: string;
+  private fleet: Array<{ name: string; url: string }>;
 
-  constructor(proxyUrl: string) {
+  constructor(
+    private proxyUrl: string,
+    fleet: Array<{ name: string; url: string }> = [],
+  ) {
     this.ollama = new Ollama({ host: proxyUrl });
     this.resultsDir = resolve(process.env.HOME || '~', '.veepee-code', 'benchmarks');
+    this.fleet = fleet;
   }
 
   /** Run full benchmark suite against a single model */
-  async benchmarkModel(model: ModelProfile, onProgress?: (test: string, idx: number, total: number) => void, options?: { skipContextProbing?: boolean }): Promise<BenchmarkResult> {
+  async benchmarkModel(model: ModelProfile, onProgress?: (test: string, idx: number, total: number) => void, options?: { skipContextProbing?: boolean }, ollamaOverride?: Ollama): Promise<BenchmarkResult> {
     const errors: string[] = [];
     const categoryScores: Record<string, { total: number; weight: number }> = {
       toolCalling: { total: 0, weight: 0 },
@@ -373,14 +409,15 @@ export class Benchmarker {
         let toolCalls: ToolCallResult[] = [];
         let tokenCount = 0;
 
-        const stream = await this.ollama.chat({
+        const client = ollamaOverride ?? this.ollama;
+        const stream = await client.chat({
           model: model.name,
           messages: [{ role: 'user', content: test.prompt }],
           tools: test.tools as never,
           stream: true,
           keep_alive: '30m',
           options: {
-            num_predict: 512,
+            num_predict: test.maxTokens ?? 512,
             temperature: 0.1, // low temp for reproducibility
           },
         });
@@ -465,6 +502,8 @@ export class Benchmarker {
 
     return {
       model: model.name,
+      server: 'proxy',     // default; caller overrides when using fleet mode
+      serverUrl: this.proxyUrl,
       tier: model.tier,
       parameterSize: model.parameterSize,
       scores,
@@ -555,10 +594,88 @@ export class Benchmarker {
     return { optimalSize, maxUsable, speedByContext };
   }
 
+  /**
+   * Check whether a model actually supports tool calls by sending a real
+   * tool-call request and checking if the response contains tool_calls.
+   * More reliable than trusting ModelProfile.capabilities metadata.
+   */
+  private async checkToolSupport(modelName: string, ollamaOverride?: Ollama): Promise<boolean> {
+    try {
+      const client = ollamaOverride ?? this.ollama;
+      const response = await client.chat({
+        model: modelName,
+        messages: [{ role: 'user', content: "What's the weather in Miami?" }],
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'get_weather',
+            description: 'Get current weather for a city',
+            parameters: {
+              type: 'object',
+              properties: { city: { type: 'string', description: 'City name' } },
+              required: ['city'],
+            },
+          },
+        }],
+        keep_alive: '30m',
+        options: { num_predict: 64, temperature: 0 },
+      });
+      return !!(response.message.tool_calls && response.message.tool_calls.length > 0);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Warm up a model and measure its generation speed.
+   * Generates 60 tokens, returns measured tok/s.
+   * Returns 0 if the model fails to respond.
+   */
+  private async measureTps(modelName: string, ollamaOverride?: Ollama): Promise<number> {
+    try {
+      const client = ollamaOverride ?? this.ollama;
+      const start = Date.now();
+      let tokenCount = 0;
+      let genStart = 0;
+
+      const stream = await client.chat({
+        model: modelName,
+        messages: [{ role: 'user', content: 'Count from 1 to 60, one number per line.' }],
+        stream: true,
+        keep_alive: '30m',
+        options: { num_predict: 60, temperature: 0 },
+      });
+
+      for await (const chunk of stream) {
+        if (chunk.message.content) {
+          if (genStart === 0) genStart = Date.now();
+          tokenCount++;
+        }
+      }
+
+      if (genStart === 0) return 0;
+      const genTime = Date.now() - genStart;
+      return genTime > 0 ? Math.round((tokenCount / genTime) * 1000) : 0;
+    } catch {
+      return 0;
+    }
+  }
+
   /** Run benchmarks against all models (or a filtered set) */
   async benchmarkAll(
     models: ModelProfile[],
-    options: { filter?: 'heavy' | 'standard' | 'light'; maxModels?: number; skipContextProbing?: boolean; onProgress?: (model: string, test: string, modelIdx: number, totalModels: number, testIdx: number, totalTests: number) => void } = {},
+    options: {
+      filter?: 'heavy' | 'standard' | 'light';
+      maxModels?: number;
+      skipContextProbing?: boolean;
+      /** Skip models already present in the latest results file (default: true) */
+      skipExisting?: boolean;
+      /** Minimum tok/s a model must sustain to proceed to full benchmark (default: 0 = no filter) */
+      minTps?: number;
+      onProgress?: (model: string, test: string, modelIdx: number, totalModels: number, testIdx: number, totalTests: number) => void;
+      /** Called for phase-level status updates (tool-check, skip notices, etc.) */
+      onStatusUpdate?: (message: string) => void;
+    } = {},
   ): Promise<BenchmarkResult[]> {
     let candidates = models
       .filter(m => !m.capabilities.includes('embedding') || m.capabilities.length > 1); // skip embedding-only
@@ -571,23 +688,170 @@ export class Benchmarker {
       candidates = candidates.slice(0, options.maxModels);
     }
 
-    const results: BenchmarkResult[] = [];
-
-    for (let mi = 0; mi < candidates.length; mi++) {
-      const model = candidates[mi];
-      const result = await this.benchmarkModel(model, (test, testIdx, totalTests) => {
-        options.onProgress?.(model.name, test, mi + 1, candidates.length, testIdx, totalTests);
-      }, { skipContextProbing: options.skipContextProbing });
-      results.push(result);
+    // Load existing results for skip-existing checks
+    const existingResults: BenchmarkResult[] = [];
+    const existingKeys = new Set<string>(); // keyed as "model@server"
+    if (options.skipExisting !== false) {
+      const existing = await this.loadLatest();
+      if (existing && existing.length > 0) {
+        existingResults.push(...existing);
+        for (const r of existing) {
+          existingKeys.add(`${r.model}@${r.server ?? 'proxy'}`);
+        }
+      }
     }
 
-    // Sort by overall score descending
-    results.sort((a, b) => b.overall - a.overall);
+    const newResults: BenchmarkResult[] = [];
 
-    // Save results
-    await this.saveResults(results);
+    if (this.fleet.length > 0) {
+      // ── Fleet mode: hit each server directly, key results as model@server ──
+      for (const server of this.fleet) {
+        options.onStatusUpdate?.(`\n── Server: ${server.name} (${server.url}) ──`);
+        const serverOllama = new Ollama({ host: server.url });
 
-    return results;
+        // Fetch model list directly from this server
+        let serverModelNames: string[];
+        try {
+          const { models: tags } = await serverOllama.list();
+          serverModelNames = tags.map(m => m.name);
+        } catch {
+          options.onStatusUpdate?.(`  ✗ ${server.name} unreachable — skipping`);
+          continue;
+        }
+
+        options.onStatusUpdate?.(`  ${serverModelNames.length} models found on ${server.name}`);
+
+        // Build a lookup map from passed ModelProfile[] for metadata enrichment
+        const profileMap = new Map(models.map(m => [m.name, m]));
+
+        // Build candidates: enrich from profile map if available, else minimal profile
+        let serverCandidates: ModelProfile[] = serverModelNames.map(name => {
+          const profile = profileMap.get(name);
+          if (profile) return profile;
+          // Model exists on this server but not visible through proxy — create minimal profile
+          return {
+            name,
+            parameterSize: '?',
+            parameterCount: 0,
+            family: 'unknown',
+            families: [],
+            quantization: 'unknown',
+            contextLength: 0,
+            capabilities: ['tools'], // assume tools; live check will verify
+            isLoaded: false,
+            serverName: server.name,
+            diskSize: 0,
+            tier: 'standard' as const,
+            score: 0,
+          };
+        });
+
+        // Apply tier filter
+        if (options.filter) {
+          serverCandidates = serverCandidates.filter(m => m.tier === options.filter);
+        }
+
+        // Skip already-benchmarked on this server
+        const skipped = serverCandidates.filter(m => existingKeys.has(`${m.name}@${server.name}`));
+        serverCandidates = serverCandidates.filter(m => !existingKeys.has(`${m.name}@${server.name}`));
+        if (skipped.length > 0) {
+          options.onStatusUpdate?.(`  Skipping ${skipped.length} already-benchmarked: ${skipped.map(m => m.name).join(', ')}`);
+        }
+
+        // Tool support check + speed filter
+        const toolCapable: ModelProfile[] = [];
+        for (const model of serverCandidates) {
+          options.onStatusUpdate?.(`  Checking tool support: ${model.name}...`);
+          const hasTools = await this.checkToolSupport(model.name, serverOllama);
+          if (!hasTools) {
+            options.onStatusUpdate?.(`    ✗ ${model.name}: no tool support — skipping`);
+            continue;
+          }
+
+          if (options.minTps && options.minTps > 0) {
+            options.onStatusUpdate?.(`    Measuring speed: ${model.name}...`);
+            const tps = await this.measureTps(model.name, serverOllama);
+            if (tps < options.minTps) {
+              options.onStatusUpdate?.(`    ✗ ${model.name}: ${tps} tok/s < ${options.minTps} minimum — skipping`);
+              continue;
+            }
+            options.onStatusUpdate?.(`    ✓ ${model.name}: tool capable, ${tps} tok/s`);
+          } else {
+            options.onStatusUpdate?.(`    ✓ ${model.name}: tool capable`);
+          }
+
+          toolCapable.push(model);
+        }
+
+        // Full benchmark
+        for (let mi = 0; mi < toolCapable.length; mi++) {
+          const model = toolCapable[mi];
+          const result = await this.benchmarkModel(
+            model,
+            (test, testIdx, totalTests) => {
+              options.onProgress?.(model.name, test, mi + 1, toolCapable.length, testIdx, totalTests);
+            },
+            { skipContextProbing: options.skipContextProbing },
+            serverOllama,
+          );
+          // Tag with the actual server this was measured on
+          newResults.push({ ...result, server: server.name, serverUrl: server.url });
+        }
+      }
+    } else {
+      // ── Single-server mode (proxy) ──
+      const skipped = candidates.filter(m => existingKeys.has(`${m.name}@proxy`));
+      candidates = candidates.filter(m => !existingKeys.has(`${m.name}@proxy`));
+      if (skipped.length > 0) {
+        options.onStatusUpdate?.(`Skipping ${skipped.length} already-benchmarked model(s): ${skipped.map(m => m.name).join(', ')}`);
+      }
+
+      // Tool support check + speed filter
+      const toolCapable: ModelProfile[] = [];
+      for (const model of candidates) {
+        options.onStatusUpdate?.(`Checking tool support: ${model.name}...`);
+        const hasTools = await this.checkToolSupport(model.name);
+        if (!hasTools) {
+          options.onStatusUpdate?.(`  ✗ ${model.name}: no tool support — skipping`);
+          continue;
+        }
+
+        if (options.minTps && options.minTps > 0) {
+          options.onStatusUpdate?.(`  Measuring speed: ${model.name}...`);
+          const tps = await this.measureTps(model.name);
+          if (tps < options.minTps) {
+            options.onStatusUpdate?.(`  ✗ ${model.name}: ${tps} tok/s < ${options.minTps} minimum — skipping`);
+            continue;
+          }
+          options.onStatusUpdate?.(`  ✓ ${model.name}: tool capable, ${tps} tok/s`);
+        } else {
+          options.onStatusUpdate?.(`  ✓ ${model.name}: tool capable`);
+        }
+
+        toolCapable.push(model);
+      }
+      candidates = toolCapable;
+
+      for (let mi = 0; mi < candidates.length; mi++) {
+        const model = candidates[mi];
+        const result = await this.benchmarkModel(model, (test, testIdx, totalTests) => {
+          options.onProgress?.(model.name, test, mi + 1, candidates.length, testIdx, totalTests);
+        }, { skipContextProbing: options.skipContextProbing });
+        newResults.push(result); // server defaults to 'proxy' from benchmarkModel
+      }
+    }
+
+    // Merge new results with existing; new results take precedence for same model@server key
+    const newKeys = new Set(newResults.map(r => `${r.model}@${r.server}`));
+    const merged = [
+      ...newResults,
+      ...existingResults.filter(r => !newKeys.has(`${r.model}@${r.server ?? 'proxy'}`)),
+    ];
+
+    merged.sort((a, b) => b.overall - a.overall);
+    await this.saveResults(merged);
+
+    return merged;
   }
 
   /**
@@ -825,10 +1089,15 @@ export class Benchmarker {
 
     const lines: string[] = [''];
 
+    // Show server column only when results span multiple servers
+    const servers = new Set(results.map(r => r.server ?? 'proxy'));
+    const showServer = servers.size > 1;
+
     // Header
     const header = [
       chalk.bold('Rank'),
       chalk.bold('Model'.padEnd(30)),
+      ...(showServer ? [chalk.bold('Server'.padEnd(12))] : []),
       chalk.bold('Size'.padEnd(7)),
       chalk.bold('Overall'),
       chalk.bold('Tools'),
@@ -841,12 +1110,13 @@ export class Benchmarker {
       chalk.bold('Ctx'),
     ];
     lines.push('  ' + header.join('  '));
-    lines.push('  ' + '─'.repeat(130));
+    lines.push('  ' + '─'.repeat(showServer ? 148 : 130));
 
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
       const rank = String(i + 1).padStart(4);
       const name = r.model.padEnd(30).slice(0, 30);
+      const server = (r.server ?? 'proxy').padEnd(12).slice(0, 12);
       const size = r.parameterSize.padEnd(7);
       const overall = colorScore(r.overall).padStart(5);
       const tools = colorScore(r.scores.toolCalling).padStart(5);
@@ -858,7 +1128,8 @@ export class Benchmarker {
       const ttft = (r.performance.timeToFirstToken + 'ms').padStart(7);
       const ctx = r.context ? formatCtxSize(r.context.optimalSize).padStart(5) : chalk.dim('  n/a');
 
-      lines.push(`  ${rank}  ${name}  ${size}  ${overall}  ${tools}  ${codegen}  ${edit}  ${follow}  ${reason}  ${tps}  ${ttft}  ${ctx}`);
+      const serverCol = showServer ? `  ${server}` : '';
+      lines.push(`  ${rank}  ${name}${serverCol}  ${size}  ${overall}  ${tools}  ${codegen}  ${edit}  ${follow}  ${reason}  ${tps}  ${ttft}  ${ctx}`);
     }
 
     lines.push('');
