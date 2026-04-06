@@ -119,7 +119,7 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
           let fullContent = '';
           let toolCallIndex = -1;
 
-          for await (const event of agent.run(userContent)) {
+          for await (const event of agent.run(userContent, { permissionMode: 'auto_allow' })) {
             if (event.type === 'text' && event.content) {
               fullContent += event.content;
               const chunk = {
@@ -203,7 +203,7 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
         }
 
         // Non-streaming response
-        const result = await agent.runSync(userContent);
+        const result = await agent.runSync(userContent, { permissionMode: 'auto_allow' });
         const model = modelManager.getCurrentModel();
 
         // Build standard OpenAI tool_calls array

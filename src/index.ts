@@ -31,6 +31,7 @@ import { PreviewManager } from './preview.js';
 import { SyncManager } from './sync.js';
 import { registerRcRoutes, generateRcToken } from './rc.js';
 import { checkForUpdate } from './update.js';
+import { resolveApiHost } from './api-host.js';
 
 // Tool registrations
 import { registerCodingTools } from './tools/coding.js';
@@ -260,7 +261,7 @@ async function main() {
 
   // Start API server
   const apiPort = parseInt(cliPort || String(config.apiPort), 10);
-  const apiHost = cliHost || config.apiHost;
+  const apiHost = resolveApiHost(cliHost, config.apiHost, rcEnabled);
   const api = startApiServer({
     port: apiPort,
     host: apiHost,

@@ -41,6 +41,7 @@ const PLAN_PATTERNS = [
 
 export type AgentMode = 'act' | 'plan' | 'chat';
 export type EffortLevel = 'low' | 'medium' | 'high';
+export type PermissionMode = 'interactive' | 'auto_allow';
 
 export class Agent {
   private ollama: Ollama;
@@ -377,7 +378,8 @@ export class Agent {
   }
 
   /** Run the agent loop for a user message, yielding events as they occur */
-  async *run(userMessage: string): AsyncGenerator<AgentEvent> {
+  async *run(userMessage: string, options?: { permissionMode?: PermissionMode }): AsyncGenerator<AgentEvent> {
+    const permissionMode = options?.permissionMode || 'interactive';
     this.abortController = new AbortController();
 
     // Expand @file mentions — read files and append content
@@ -696,19 +698,31 @@ export class Agent {
         for (const call of toolCalls) {
           yield { type: 'tool_call', name: call.function.name, args: (call.function.arguments || {}) as Record<string, unknown> };
         }
-        const results = await Promise.all(toolCalls.map(async (call) => {
+        // Permission checks must be serialized to avoid concurrent prompt races.
+        const executableCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+        const earlyResults: Array<{ name: string; args: Record<string, unknown>; result: { success: boolean; output: string; error?: string } }> = [];
+        for (const call of toolCalls) {
           const name = call.function.name;
           const args = (call.function.arguments || {}) as Record<string, unknown>;
           if (this.allowedTools && !this.allowedTools.has(name)) {
-            return { name, args, result: { success: false, output: '', error: `Tool "${name}" not allowed` } };
+            earlyResults.push({ name, args, result: { success: false, output: '', error: `Tool "${name}" not allowed` } });
+            continue;
           }
-          const decision = await this.permissions.check(name, args);
+          const decision = permissionMode === 'auto_allow'
+            ? 'allow'
+            : await this.permissions.check(name, args);
           if (decision === 'deny') {
-            return { name, args, result: { success: false, output: '', error: 'Permission denied' } };
+            earlyResults.push({ name, args, result: { success: false, output: '', error: 'Permission denied' } });
+            continue;
           }
-          const result = await this.registry.execute(name, args);
-          return { name, args, result };
-        }));
+          executableCalls.push({ name, args });
+        }
+        const executed = await Promise.all(executableCalls.map(async ({ name, args }) => ({
+          name,
+          args,
+          result: await this.registry.execute(name, args),
+        })));
+        const results = [...earlyResults, ...executed];
         for (const { name, args, result } of results) {
           yield {
             type: 'tool_result', name,
@@ -742,7 +756,9 @@ export class Agent {
 
           yield { type: 'tool_call', name: toolName, args: toolArgs };
 
-          const decision = await this.permissions.check(toolName, toolArgs);
+          const decision = permissionMode === 'auto_allow'
+            ? 'allow'
+            : await this.permissions.check(toolName, toolArgs);
           if (decision === 'deny') {
             yield { type: 'permission_denied', name: toolName };
             this.context.addToolResult(toolName, `Permission denied: user rejected ${toolName}`);
@@ -811,11 +827,14 @@ export class Agent {
   }
 
   /** Non-streaming version for API use (no permission prompts — auto-allows) */
-  async runSync(userMessage: string): Promise<{ content: string; toolCalls: Array<{ name: string; args: Record<string, unknown>; result: string }> }> {
+  async runSync(
+    userMessage: string,
+    options?: { permissionMode?: PermissionMode },
+  ): Promise<{ content: string; toolCalls: Array<{ name: string; args: Record<string, unknown>; result: string }> }> {
     let content = '';
     const toolCallResults: Array<{ name: string; args: Record<string, unknown>; result: string }> = [];
 
-    for await (const event of this.run(userMessage)) {
+    for await (const event of this.run(userMessage, options)) {
       switch (event.type) {
         case 'text':
           content += event.content || '';

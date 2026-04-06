@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
+    "prebuild": "node scripts/check-types-folders.mjs",
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",

@@ -1,5 +1,5 @@
 import { writeFile, readFile, mkdir } from 'fs/promises';
-import { resolve } from 'path';
+import { resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 
 export type PermissionDecision = 'allow' | 'allow_always' | 'deny';
@@ -69,11 +69,15 @@ export class PermissionManager {
     }
 
     // Check project-scoped permission (tool allowed for files in this project)
-    const filePath = typeof args.path === 'string' ? args.path
+    const filePathRaw = typeof args.path === 'string' ? args.path
       : typeof args.file === 'string' ? args.file : null;
-    if (filePath) {
+    if (filePathRaw) {
+      const filePath = isAbsolute(filePathRaw) ? filePathRaw : resolve(process.cwd(), filePathRaw);
       for (const entry of this.projectAllowed) {
-        const [tool, projectDir] = entry.split(':', 2);
+        const sep = entry.indexOf(':');
+        if (sep <= 0) continue;
+        const tool = entry.slice(0, sep);
+        const projectDir = entry.slice(sep + 1);
         if (tool === toolName && filePath.startsWith(projectDir)) {
           return 'allow';
         }

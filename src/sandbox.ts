@@ -2,7 +2,9 @@ import { mkdir, readdir, stat, rename, cp, rm } from 'fs/promises';
 import { resolve, join, basename } from 'path';
 import { existsSync } from 'fs';
 
-const SANDBOX_ROOT = resolve(process.env.HOME || '~', '.veepee-code', 'sandbox');
+function getSandboxRoot(): string {
+  return resolve(process.env.HOME || '~', '.veepee-code', 'sandbox');
+}
 
 export interface SandboxFileInfo {
   name: string;
@@ -13,12 +15,14 @@ export interface SandboxFileInfo {
 
 export class SandboxManager {
   private sessionId: string;
+  private root: string;
   private dir: string;
   private created = false;
 
-  constructor(sessionId: string) {
+  constructor(sessionId: string, rootDir?: string) {
     this.sessionId = sessionId;
-    this.dir = join(SANDBOX_ROOT, sessionId);
+    this.root = rootDir || getSandboxRoot();
+    this.dir = join(this.root, sessionId);
   }
 
   /** Lazy-create and return the sandbox directory path */
@@ -99,16 +103,17 @@ export class SandboxManager {
   }
 
   /** Remove sandbox directories older than 24 hours (call on startup) */
-  static async cleanupStale(): Promise<number> {
-    if (!existsSync(SANDBOX_ROOT)) return 0;
+  static async cleanupStale(rootDir?: string): Promise<number> {
+    const sandboxRoot = rootDir || getSandboxRoot();
+    if (!existsSync(sandboxRoot)) return 0;
 
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     let cleaned = 0;
 
     try {
-      const dirs = await readdir(SANDBOX_ROOT);
+      const dirs = await readdir(sandboxRoot);
       for (const dir of dirs) {
-        const dirPath = join(SANDBOX_ROOT, dir);
+        const dirPath = join(sandboxRoot, dir);
         try {
           const s = await stat(dirPath);
           if (s.isDirectory() && s.mtimeMs < cutoff) {

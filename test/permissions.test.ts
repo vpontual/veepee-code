@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { PermissionManager } from '../src/permissions.js';
+import { resolve } from 'path';
 
 describe('PermissionManager', () => {
   it('auto-allows safe tools without prompting', async () => {
@@ -184,5 +185,50 @@ describe('PermissionManager', () => {
     expect(Array.isArray(perms.safeTools)).toBe(true);
     expect(perms.safeTools).toContain('read_file');
     expect(perms.safeTools).toContain('glob');
+  });
+
+  it('project-scoped allow matches relative file paths after normalization', async () => {
+    const pm = new PermissionManager();
+    let promptCount = 0;
+    pm.setPromptHandler(async () => {
+      promptCount++;
+      return 'p';
+    });
+
+    // First call prompts and stores project-scoped allow for write_file
+    const first = await pm.check('write_file', { path: 'src/demo.ts' });
+    expect(first).toBe('allow');
+    expect(promptCount).toBe(1);
+
+    // Switch handler to deny; second call should still auto-allow from project scope
+    pm.setPromptHandler(async () => {
+      promptCount++;
+      return 'n';
+    });
+    const second = await pm.check('write_file', { path: 'src/other.ts' });
+    expect(second).toBe('allow');
+    expect(promptCount).toBe(1);
+  });
+
+  it('project-scoped allow matches absolute file paths', async () => {
+    const pm = new PermissionManager();
+    const absPath = resolve(process.cwd(), 'src/demo-abs.ts');
+    let promptCount = 0;
+    pm.setPromptHandler(async () => {
+      promptCount++;
+      return 'p';
+    });
+
+    const first = await pm.check('edit_file', { path: absPath });
+    expect(first).toBe('allow');
+    expect(promptCount).toBe(1);
+
+    pm.setPromptHandler(async () => {
+      promptCount++;
+      return 'n';
+    });
+    const second = await pm.check('edit_file', { path: absPath });
+    expect(second).toBe('allow');
+    expect(promptCount).toBe(1);
   });
 });

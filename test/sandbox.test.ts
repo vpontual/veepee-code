@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SandboxManager, formatSize } from '../src/sandbox.js';
 import { mkdirSync, rmSync, writeFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, join } from 'path';
 import { tmpdir } from 'os';
 
 describe('formatSize', () => {
@@ -61,44 +61,38 @@ describe('SandboxManager', () => {
 
 describe('SandboxManager filesystem operations', () => {
   let tmpDir: string;
-  let origHome: string | undefined;
+  let sandboxRoot: string;
 
   beforeEach(() => {
     tmpDir = resolve(tmpdir(), `veepee-sandbox-test-${Date.now()}`);
     mkdirSync(tmpDir, { recursive: true });
-    origHome = process.env.HOME;
-    process.env.HOME = tmpDir;
+    sandboxRoot = join(tmpDir, '.veepee-code', 'sandbox');
   });
 
   afterEach(() => {
-    process.env.HOME = origHome;
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it('getPath creates the directory lazily', async () => {
-    // SandboxManager uses SANDBOX_ROOT which is computed at module load time from HOME,
-    // so we create our own manager that will use the module-level SANDBOX_ROOT.
-    // Since SANDBOX_ROOT is captured at import time, this test verifies the creation logic
-    // by using the actual sandbox path.
-    const sm = new SandboxManager('lazy-create-test');
+    const sm = new SandboxManager('lazy-create-test', sandboxRoot);
     const path = await sm.getPath();
     expect(existsSync(path)).toBe(true);
   });
 
   it('list returns empty array when directory does not exist', async () => {
-    const sm = new SandboxManager('nonexistent-session');
+    const sm = new SandboxManager('nonexistent-session', sandboxRoot);
     const files = await sm.list();
     expect(files).toEqual([]);
   });
 
   it('hasFiles returns false when directory does not exist', async () => {
-    const sm = new SandboxManager('nonexistent-session');
+    const sm = new SandboxManager('nonexistent-session', sandboxRoot);
     const has = await sm.hasFiles();
     expect(has).toBe(false);
   });
 
   it('clean removes the sandbox directory', async () => {
-    const sm = new SandboxManager('clean-test');
+    const sm = new SandboxManager('clean-test', sandboxRoot);
     const path = await sm.getPath();
     expect(existsSync(path)).toBe(true);
 
@@ -107,7 +101,7 @@ describe('SandboxManager filesystem operations', () => {
   });
 
   it('clean is safe to call when directory does not exist', async () => {
-    const sm = new SandboxManager('never-created');
+    const sm = new SandboxManager('never-created', sandboxRoot);
     // Should not throw
     await sm.clean();
   });
