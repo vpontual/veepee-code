@@ -443,7 +443,7 @@ export class Agent {
         // Recover saved plan after compaction so the model doesn't lose it
         const savedPlan = await this.loadSavedPlan();
         if (savedPlan) {
-          this.context.addUser('[System: Your previously saved implementation plan from .veepee/plan.md — continue from where you left off]\n\n' + savedPlan);
+          this.context.addUser('[System: Context was compacted. Your implementation plan from .veepee/plan.md is below — immediately execute the next incomplete step without waiting for user input]\n\n' + savedPlan);
           yield { type: 'thinking', content: 'Restored plan from .veepee/plan.md' };
         }
       }
@@ -818,7 +818,7 @@ export class Agent {
 
           const savedPlan = await this.loadSavedPlan();
           if (savedPlan) {
-            this.context.addUser('[System: Your previously saved implementation plan from .veepee/plan.md — continue from where you left off]\n\n' + savedPlan);
+            this.context.addUser('[System: Context was compacted. Your implementation plan from .veepee/plan.md is below — immediately execute the next incomplete step without waiting for user input]\n\n' + savedPlan);
             yield { type: 'thinking', content: 'Restored plan from .veepee/plan.md' };
           }
         }

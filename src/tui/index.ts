@@ -372,6 +372,17 @@ export class TUI {
   }
 
   showError(msg: string): void {
+    // Stop turn tracker (same cleanup as showCompletionBadge — error path skips that)
+    const state = this.getState();
+    if (state?.turnTracker) {
+      this.dispatch({ type: 'SET_TURN_TRACKER', tracker: { ...state.turnTracker, active: false } });
+    }
+    if (this.turnTrackerInterval) {
+      clearInterval(this.turnTrackerInterval);
+      this.turnTrackerInterval = null;
+    }
+    this.dispatch({ type: 'SET_TURN_TRACKER', tracker: null });
+    this.dispatch({ type: 'SET_PROGRESS_BAR_ACTIVE', active: false });
     this.dispatch({ type: 'ADD_MESSAGE', message: { role: 'system', content: `${theme.error(msg)}` } });
     this.dispatch({ type: 'SET_VIEW', view: 'conversation' });
   }
