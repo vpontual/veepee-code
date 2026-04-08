@@ -176,7 +176,7 @@ export function registerRcRoutes(
       const eventStream = agent.run(data.message);
 
       // Broadcast user message to SSE clients immediately
-      broadcast('text', { role: 'user', content: data.message });
+      broadcast('user_message', { content: data.message });
 
       if (remoteMessageHandler) {
         // TUI handler consumes the stream for laptop display;
@@ -199,6 +199,13 @@ export function registerRcRoutes(
         });
       }
 
+      return true;
+    }
+
+    // Abort the current generation
+    if (path === '/rc/abort' && req.method === 'POST') {
+      agent.abort();
+      sendJson(res, 200, { ok: true });
       return true;
     }
 

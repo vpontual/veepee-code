@@ -301,6 +301,7 @@ let token = localStorage.getItem('vcode_rc_token') || '';
 let eventSource = null;
 let streaming = false;
 let currentStreamEl = null;
+let historyResetPending = false;
 
 // ─── Auth ───
 function authenticate() {
@@ -346,12 +347,24 @@ function showApp() {
 // ─── SSE Stream ───
 function connectStream() {
   if (eventSource) eventSource.close();
+  historyResetPending = true;
 
   eventSource = new EventSource(API_BASE + '/rc/stream?token=' + encodeURIComponent(token));
 
   eventSource.addEventListener('history', (e) => {
+    if (historyResetPending) {
+      document.getElementById('messages').innerHTML = '';
+      currentStreamEl = null;
+      historyResetPending = false;
+    }
     const data = JSON.parse(e.data);
     addMessage(data.role === 'user' ? 'user' : 'assistant', data.content);
+  });
+
+  eventSource.addEventListener('user_message', (e) => {
+    finishStream();
+    const data = JSON.parse(e.data);
+    addMessage('user', data.content);
   });
 
   eventSource.addEventListener('text', (e) => {
@@ -398,6 +411,7 @@ function connectStream() {
   });
 
   eventSource.onerror = () => {
+    historyResetPending = true;
     document.getElementById('status-dot').textContent = 'Reconnecting...';
     document.getElementById('status-dot').style.color = 'var(--warning)';
     setTimeout(() => {
@@ -487,12 +501,11 @@ function historyDown() {
 }
 
 function stopGeneration() {
-  // Send Ctrl+C equivalent — just send /stop as a message
+  // Send an explicit abort request to the RC API
   if (!streaming) return;
-  fetch(API_BASE + '/rc/send', {
+  fetch(API_BASE + '/rc/abort', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-    body: JSON.stringify({ message: '/stop' }),
   }).catch(() => {});
   streaming = false;
   document.getElementById('send-btn').disabled = false;
