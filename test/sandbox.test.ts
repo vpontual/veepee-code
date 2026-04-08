@@ -46,6 +46,11 @@ describe('SandboxManager', () => {
     expect(resolved).toMatch(/output\.txt$/);
   });
 
+  it('resolvePath rejects sandbox traversal attempts', () => {
+    const sm = new SandboxManager('test-resolve');
+    expect(() => sm.resolvePath('sandbox:../../escape.txt')).toThrow('Sandbox path escapes sandbox root');
+  });
+
   it('resolvePath handles normal paths', () => {
     const sm = new SandboxManager('test-resolve');
     const resolved = sm.resolvePath('/tmp/some-file.txt');
@@ -104,5 +109,11 @@ describe('SandboxManager filesystem operations', () => {
     const sm = new SandboxManager('never-created', sandboxRoot);
     // Should not throw
     await sm.clean();
+  });
+
+  it('keep rejects traversal in sandbox source path', async () => {
+    const sm = new SandboxManager('keep-traversal', sandboxRoot);
+    await sm.getPath();
+    await expect(sm.keep('../../escape.txt')).rejects.toThrow('Sandbox path escapes sandbox root');
   });
 });

@@ -1,4 +1,4 @@
-import { readFile, writeFile, readdir } from 'fs/promises';
+import { readFile, writeFile, readdir, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { request as httpsRequest } from 'https';
@@ -52,6 +52,7 @@ export class SyncManager {
   /** Pull sessions from WebDAV. Returns count of updated files. */
   async pull(sessionId?: string): Promise<number> {
     const sessionsDir = getSessionDir();
+    await mkdir(sessionsDir, { recursive: true });
 
     // List remote files
     const remoteFiles = await this.webdavPropfind(this.url);

@@ -104,9 +104,6 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
             .map((t: any) => t?.function?.name)
             .filter(Boolean) as string[];
         }
-        // Set tool filter before running (cleared after)
-        agent.setAllowedTools(clientToolNames);
-
         if (data.stream) {
           // Streaming response (SSE)
           res.writeHead(200, {
@@ -116,12 +113,13 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
           });
 
           const model = modelManager.getCurrentModel();
-          let fullContent = '';
           let toolCallIndex = -1;
 
-          for await (const event of agent.run(userContent, { permissionMode: 'auto_allow' })) {
+          for await (const event of agent.run(userContent, {
+            permissionMode: 'auto_allow',
+            allowedTools: clientToolNames,
+          })) {
             if (event.type === 'text' && event.content) {
-              fullContent += event.content;
               const chunk = {
                 id: `chatcmpl-${Date.now()}`,
                 object: 'chat.completion.chunk',
@@ -197,13 +195,15 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
             }
           }
 
-          agent.setAllowedTools(null); // clear filter
           res.end();
           return;
         }
 
         // Non-streaming response
-        const result = await agent.runSync(userContent, { permissionMode: 'auto_allow' });
+        const result = await agent.runSync(userContent, {
+          permissionMode: 'auto_allow',
+          allowedTools: clientToolNames,
+        });
         const model = modelManager.getCurrentModel();
 
         // Build standard OpenAI tool_calls array
@@ -235,7 +235,6 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
             total_tokens: 0,
           },
         });
-        agent.setAllowedTools(null); // clear filter
         return;
       }
 
@@ -321,7 +320,7 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
     if (err.code === 'EADDRINUSE') {
       config.port++;
       const bindHost = config.rcEnabled ? '0.0.0.0' : (config.host || '127.0.0.1');
-  server.listen(config.port, bindHost);
+      server.listen(config.port, bindHost);
     }
   });
 
@@ -329,7 +328,10 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
   server.listen(config.port, bindHost);
 
   return {
-    get port() { return config.port; },
+    get port() {
+      const address = server.address();
+      return typeof address === 'object' && address ? address.port : config.port;
+    },
     close: () => server.close(),
   };
 }

@@ -33,6 +33,20 @@ describe('PermissionManager', () => {
     expect(promptedTool).toBe('bash');
   });
 
+  it('plain yes only allows the current call', async () => {
+    const pm = new PermissionManager();
+    let promptCount = 0;
+    pm.setPromptHandler(async () => {
+      promptCount++;
+      return 'y';
+    });
+
+    await pm.check('bash', { command: 'echo hello' });
+    await pm.check('bash', { command: 'echo world' });
+
+    expect(promptCount).toBe(2);
+  });
+
   it('detects dangerous rm -rf pattern', async () => {
     const pm = new PermissionManager();
     let promptReason = '';
@@ -89,7 +103,7 @@ describe('PermissionManager', () => {
     let promptCount = 0;
     pm.setPromptHandler(async () => {
       promptCount++;
-      return 'y'; // session allow
+      return 's';
     });
 
     await pm.check('bash', { command: 'echo hello' });
@@ -105,7 +119,7 @@ describe('PermissionManager', () => {
     let promptCount = 0;
     pm.setPromptHandler(async () => {
       promptCount++;
-      return 'y';
+      return 's';
     });
 
     // First: normal bash (prompts, gets session allowed)
@@ -163,7 +177,7 @@ describe('PermissionManager', () => {
     let promptCount = 0;
     pm.setPromptHandler(async () => {
       promptCount++;
-      return 'y';
+      return 's';
     });
 
     await pm.check('bash', { command: 'echo' });
@@ -230,5 +244,22 @@ describe('PermissionManager', () => {
     const second = await pm.check('edit_file', { path: absPath });
     expect(second).toBe('allow');
     expect(promptCount).toBe(1);
+  });
+
+  it('project-scoped allow does not leak to sibling directories with the same prefix', async () => {
+    const pm = new PermissionManager();
+    let promptCount = 0;
+    pm.setPromptHandler(async () => {
+      promptCount++;
+      return promptCount === 1 ? 'p' : 'n';
+    });
+
+    const first = await pm.check('write_file', { path: 'src/demo.ts' });
+    expect(first).toBe('allow');
+
+    const siblingPath = `${process.cwd()}-sibling/src/escape.ts`;
+    const second = await pm.check('write_file', { path: siblingPath });
+    expect(second).toBe('deny');
+    expect(promptCount).toBe(2);
   });
 });

@@ -57,7 +57,6 @@ export class Agent {
   private config: Config;
   private abortController: AbortController | null = null;
   private effort: EffortLevel = 'medium';
-  private allowedTools: Set<string> | null = null; // null = all allowed
   private modelStick = false; // when true, mode switches don't change the model
 
   constructor(config: Config, registry: ToolRegistry, modelManager: ModelManager, permissions: PermissionManager) {
@@ -340,11 +339,6 @@ export class Agent {
     return this.subAgents;
   }
 
-  /** Restrict tools to a specific set (for API requests with client-defined tools) */
-  setAllowedTools(names: string[] | null): void {
-    this.allowedTools = names ? new Set(names) : null;
-  }
-
   setEffort(level: EffortLevel): void {
     this.effort = level;
   }
@@ -378,8 +372,12 @@ export class Agent {
   }
 
   /** Run the agent loop for a user message, yielding events as they occur */
-  async *run(userMessage: string, options?: { permissionMode?: PermissionMode }): AsyncGenerator<AgentEvent> {
+  async *run(
+    userMessage: string,
+    options?: { permissionMode?: PermissionMode; allowedTools?: string[] | null },
+  ): AsyncGenerator<AgentEvent> {
     const permissionMode = options?.permissionMode || 'interactive';
+    const allowedTools = options?.allowedTools ? new Set(options.allowedTools) : null;
     this.abortController = new AbortController();
 
     // Expand @file mentions — read files and append content
@@ -520,8 +518,8 @@ export class Agent {
           : this.registry.toOllamaTools();
 
         // Filter tools for API requests with client-constrained tool sets
-        if (this.allowedTools) {
-          tools = tools.filter(t => this.allowedTools!.has(t.function?.name || ''));
+        if (allowedTools) {
+          tools = tools.filter(t => allowedTools.has(t.function?.name || ''));
         }
         const effortOpts = this.getEffortOptions();
 
@@ -704,7 +702,7 @@ export class Agent {
         for (const call of toolCalls) {
           const name = call.function.name;
           const args = (call.function.arguments || {}) as Record<string, unknown>;
-          if (this.allowedTools && !this.allowedTools.has(name)) {
+          if (allowedTools && !allowedTools.has(name)) {
             earlyResults.push({ name, args, result: { success: false, output: '', error: `Tool "${name}" not allowed` } });
             continue;
           }
@@ -739,7 +737,7 @@ export class Agent {
           const toolName = call.function.name;
           const toolArgs = (call.function.arguments || {}) as Record<string, unknown>;
 
-          if (this.allowedTools && !this.allowedTools.has(toolName) && toolName !== 'update_memory') {
+          if (allowedTools && !allowedTools.has(toolName) && toolName !== 'update_memory') {
             yield { type: 'tool_result', name: toolName, success: false, content: `Tool "${toolName}" is not in the allowed set for this request` };
             this.context.addToolResult(toolName, `Tool "${toolName}" not allowed`);
             continue;
@@ -829,7 +827,7 @@ export class Agent {
   /** Non-streaming version for API use (no permission prompts — auto-allows) */
   async runSync(
     userMessage: string,
-    options?: { permissionMode?: PermissionMode },
+    options?: { permissionMode?: PermissionMode; allowedTools?: string[] | null },
   ): Promise<{ content: string; toolCalls: Array<{ name: string; args: Record<string, unknown>; result: string }> }> {
     let content = '';
     const toolCallResults: Array<{ name: string; args: Record<string, unknown>; result: string }> = [];

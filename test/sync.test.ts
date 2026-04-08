@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SyncManager } from '../src/sync.js';
+import { readFileSync } from 'fs';
 
 // SyncManager methods all require a live WebDAV server (push, pull, webdavPut, etc.).
 // The only pure logic we can test is construction behavior and the parsePropfindResponse
@@ -32,6 +33,11 @@ describe('SyncManager', () => {
     // At minimum, constructing with or without slash should not throw.
     expect(() => new SyncManager('https://dav.example.com/path', 'u', 'p')).not.toThrow();
     expect(() => new SyncManager('https://dav.example.com/path/', 'u', 'p')).not.toThrow();
+  });
+
+  it('pull ensures the local sessions directory exists before writing downloads', () => {
+    const source = readFileSync(new URL('../src/sync.ts', import.meta.url), 'utf-8');
+    expect(source).toContain("await mkdir(sessionsDir, { recursive: true });");
   });
 });
 

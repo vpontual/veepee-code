@@ -51,6 +51,7 @@ export interface PreviewResult {
 export class PreviewManager {
   private server: Server | null = null;
   private serverPort: number | null = null;
+  private serverRoot: string | null = null;
   private sandbox: SandboxManager;
 
   constructor(sandbox: SandboxManager) {
@@ -88,9 +89,15 @@ export class PreviewManager {
 
   /** Start a static file server in the given directory */
   async startServer(rootDir: string, port?: number): Promise<{ url: string; close: () => void }> {
-    // Reuse existing server if same root
-    if (this.server && this.serverPort) {
+    const resolvedRoot = resolve(rootDir);
+
+    // Reuse existing server only for the same root
+    if (this.server && this.serverPort && this.serverRoot === resolvedRoot) {
       return { url: `http://localhost:${this.serverPort}`, close: () => this.stopServer() };
+    }
+
+    if (this.server) {
+      this.stopServer();
     }
 
     const startPort = port || 8485;
@@ -98,10 +105,10 @@ export class PreviewManager {
     return new Promise((resolvePromise, reject) => {
       const srv = createServer(async (req, res) => {
         const urlPath = decodeURIComponent(new URL(req.url || '/', 'http://localhost').pathname);
-        const filePath = join(rootDir, urlPath === '/' ? 'index.html' : urlPath);
+        const filePath = resolve(resolvedRoot, `.${urlPath}`);
 
         // Security: prevent directory traversal
-        if (!filePath.startsWith(rootDir)) {
+        if (!filePath.startsWith(resolvedRoot)) {
           res.writeHead(403);
           res.end('Forbidden');
           return;
@@ -145,6 +152,7 @@ export class PreviewManager {
         srv.listen(currentPort, '127.0.0.1', () => {
           this.server = srv;
           this.serverPort = currentPort;
+          this.serverRoot = resolvedRoot;
           resolvePromise({
             url: `http://localhost:${currentPort}`,
             close: () => this.stopServer(),
@@ -161,6 +169,7 @@ export class PreviewManager {
       this.server.close();
       this.server = null;
       this.serverPort = null;
+      this.serverRoot = null;
     }
   }
 

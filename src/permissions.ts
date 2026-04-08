@@ -1,5 +1,5 @@
 import { writeFile, readFile, mkdir } from 'fs/promises';
-import { resolve, isAbsolute } from 'path';
+import { resolve, isAbsolute, relative } from 'path';
 import { existsSync } from 'fs';
 
 export type PermissionDecision = 'allow' | 'allow_always' | 'deny';
@@ -78,7 +78,9 @@ export class PermissionManager {
         if (sep <= 0) continue;
         const tool = entry.slice(0, sep);
         const projectDir = entry.slice(sep + 1);
-        if (tool === toolName && filePath.startsWith(projectDir)) {
+        const rel = relative(projectDir, filePath);
+        const inProject = rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+        if (tool === toolName && inProject) {
           return 'allow';
         }
       }
@@ -96,6 +98,10 @@ export class PermissionManager {
     const choice = answer.trim().toLowerCase();
 
     if (choice === 'y' || choice === 'yes') {
+      return 'allow';
+    }
+
+    if (choice === 's' || choice === 'session') {
       this.sessionAllowed.add(toolName);
       return 'allow';
     }

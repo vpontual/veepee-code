@@ -217,6 +217,7 @@ export class TUI {
     const hasFilePath = args.path || args.file;
     const options: { label: string; value: string }[] = [
       { label: 'Yes', value: 'y' },
+      { label: `Yes, allow ${theme.accent(toolName)} for this session`, value: 's' },
       ...(hasFilePath ? [{ label: `Yes, always in this project`, value: 'p' }] : []),
       { label: `Yes, always allow ${theme.accent(toolName)}`, value: 'a' },
       { label: 'No', value: 'n' },
@@ -555,6 +556,20 @@ export class TUI {
       if (key === 'y' || key === 'Y') {
         this.dispatch({ type: 'ADD_MESSAGE', message: { role: 'system', content: theme.dim(`  ${icons.arrow} Yes`) } });
         this.permissionResolve('y');
+        this.permissionResolve = null;
+        this.dispatch({ type: 'CLEAR_PERMISSION' });
+        return;
+      }
+      if (key === 's' || key === 'S') {
+        this.dispatch({ type: 'ADD_MESSAGE', message: { role: 'system', content: theme.dim(`  ${icons.arrow} Allow for this session`) } });
+        this.permissionResolve('s');
+        this.permissionResolve = null;
+        this.dispatch({ type: 'CLEAR_PERMISSION' });
+        return;
+      }
+      if (key === 'p' || key === 'P') {
+        this.dispatch({ type: 'ADD_MESSAGE', message: { role: 'system', content: theme.dim(`  ${icons.arrow} Always allow in this project`) } });
+        this.permissionResolve('p');
         this.permissionResolve = null;
         this.dispatch({ type: 'CLEAR_PERMISSION' });
         return;

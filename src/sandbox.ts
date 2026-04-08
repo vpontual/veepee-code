@@ -1,5 +1,5 @@
 import { mkdir, readdir, stat, rename, cp, rm } from 'fs/promises';
-import { resolve, join, basename } from 'path';
+import { resolve, join, basename, relative, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 
 function getSandboxRoot(): string {
@@ -66,7 +66,7 @@ export class SandboxManager {
 
   /** Move a file out of sandbox to a real location */
   async keep(file: string, destination?: string): Promise<string> {
-    const srcPath = join(this.dir, file);
+    const srcPath = this.resolveSandboxPath(file);
     if (!existsSync(srcPath)) {
       throw new Error(`File not found in sandbox: ${file}`);
     }
@@ -130,9 +130,19 @@ export class SandboxManager {
   /** Resolve a path that may be sandbox-relative (sandbox:filename) */
   resolvePath(input: string): string {
     if (input.startsWith('sandbox:')) {
-      return join(this.dir, input.slice(8));
+      return this.resolveSandboxPath(input.slice(8));
     }
     return resolve(process.cwd(), input);
+  }
+
+  private resolveSandboxPath(file: string): string {
+    const resolved = resolve(this.dir, file);
+    const rel = relative(this.dir, resolved);
+    const inSandbox = rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+    if (!inSandbox) {
+      throw new Error(`Sandbox path escapes sandbox root: ${file}`);
+    }
+    return resolved;
   }
 }
 
