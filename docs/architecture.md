@@ -6,7 +6,7 @@ weight: 15
 
 # Architecture
 
-VEEPEE Code is a TypeScript application built on Node.js 20+. It uses the Ollama JavaScript SDK for model inference, Zod for schema validation, marked + marked-terminal for markdown rendering, and raw terminal escape codes for the TUI. This document covers the technical design.
+VEEPEE Code is a TypeScript application built on Node.js 20+. It uses the Ollama JavaScript SDK for model inference, Zod for schema validation, marked + marked-terminal for markdown rendering, and Ink (React) for the TUI (with raw stdin bypassing Ink for keystroke handling). This document covers the technical design.
 
 ## File Structure
 
@@ -17,7 +17,7 @@ veepee-code/
 │   ├── agent.ts           # ReAct agent loop, mode management, roster integration
 │   ├── models.ts          # Model discovery, ranking, auto-switching
 │   ├── context.ts         # System prompt builder, context manager
-│   ├── config.ts          # .env loading, Config interface
+│   ├── config.ts          # vcode.config.json loading, .env→JSON migration, Config interface
 │   ├── permissions.ts     # Permission system
 │   ├── api.ts             # OpenAI-compatible HTTP API server
 │   ├── benchmark.ts       # Benchmark runner, test suite, roster builder
@@ -36,19 +36,22 @@ veepee-code/
 │   ├── tools/
 │   │   ├── types.ts       # ToolDef, ToolResult, Zod-to-Ollama converter
 │   │   ├── registry.ts    # ToolRegistry class
-│   │   ├── coding.ts      # read_file, write_file, edit_file, glob, grep, bash, git, list_files
-│   │   ├── web.ts         # web_fetch, http_request, web_search
+│   │   ├── coding.ts      # read_file, write_file, edit_file, glob, grep, bash, git, github, list_files, update_memory
+│   │   ├── web.ts         # web_fetch, http_request, web_search (conditional)
 │   │   ├── devops.ts      # docker, system_info
-│   │   ├── home.ts        # weather, home_assistant, timer
-│   │   ├── social.ts      # mastodon, spotify
-│   │   ├── google.ts      # email, calendar, google_drive, google_docs, google_sheets, notes
-│   │   └── news.ts        # news
+│   │   └── remote.ts      # discoverRemoteTools — fetches and proxies tools from a remote agent
 │   └── tui/
-│       ├── index.ts       # TUI class: rendering, input, command palette, turn tracker
-│       ├── screen.ts      # Terminal primitives (cursor, clear, write, wrap)
+│       ├── index.ts       # TUI class: thin imperative wrapper over Ink, raw stdin keystroke handler
+│       ├── App.tsx        # React/Ink root with useReducer-based state management
+│       ├── reducer.ts     # Pure reducer (testable, no React dependency)
+│       ├── components/    # 16 React components (Conversation, MessagesArea, InputBox, CommandMenu, ...)
+│       ├── hooks/         # useScrollable, useMouseScroll
+│       ├── screen.ts      # Raw terminal primitives (used by wizard, not by main TUI)
 │       ├── theme.ts       # Color palette, box drawing, icons
-│       └── logo.ts        # ASCII art logo generation
-├── test/                  # 54 unit tests (Vitest)
+│       ├── logo.ts        # ASCII art logo generation
+│       ├── keybindings.ts # Raw keystroke → named action map (with user overrides)
+│       └── vim.ts         # Optional vim-style input bindings
+├── test/                  # 326 unit tests across 21 files (Vitest)
 ├── vitest.config.ts       # Vitest configuration
 ├── dist/                  # Compiled JavaScript output
 ├── docs/                  # Documentation (this site)
@@ -65,13 +68,10 @@ index.ts
 ├── models.ts ─── config.ts
 ├── tools/
 │   ├── registry.ts ─── types.ts
-│   ├── coding.ts ──── types.ts
+│   ├── coding.ts ──── types.ts, ignore.ts
 │   ├── web.ts ─────── types.ts, config.ts
 │   ├── devops.ts ──── types.ts
-│   ├── home.ts ────── types.ts, config.ts
-│   ├── social.ts ──── types.ts, config.ts
-│   ├── google.ts ──── types.ts, config.ts
-│   └── news.ts ────── types.ts, config.ts
+│   └── remote.ts ──── types.ts (proxies a configured remote agent's tool catalog)
 ├── agent.ts ─── config.ts, models.ts, context.ts, tools/registry.ts, permissions.ts, benchmark.ts, knowledge.ts
 ├── context.ts ── models.ts, agent.ts (types only), knowledge.ts
 ├── knowledge.ts ─ (standalone, serializable)
@@ -99,13 +99,13 @@ index.ts
 
 ### Config (`config.ts`)
 
-Loads environment variables from `.env` files with a defined search order. Returns a typed `Config` object with nullable fields for optional integrations.
+Loads configuration from `~/.veepee-code/vcode.config.json`. Returns a typed `Config` object with nullable fields for optional integrations. On first load, `migrateEnvToJson()` automatically converts any legacy `.env` file to the new JSON format and renames the old file to `.env.backup`.
 
 Key design decisions:
-- First-match .env loading (local > home > XDG > default)
-- Null for unconfigured integrations (both required vars must be set)
+- Single JSON config file at `~/.veepee-code/vcode.config.json`
+- Null for unconfigured integrations (the `sync`, `rc`, `remote`, `langfuse` fields)
 - Default proxy URL is `http://localhost:11434`; dashboard URL defaults to empty (optional)
-- `maxModelSize` (default 40) and `minModelSize` (default 6) control model candidacy
+- `maxModelSize` (default 40) and `minModelSize` (default 12) control model candidacy
 
 ### Model Manager (`models.ts`)
 
@@ -377,13 +377,10 @@ Argument validation happens at the registry level. If Zod parsing fails, the too
 
 Tools are organized into registration functions per category:
 
-- `registerCodingTools()` -- Always returns 8 tools
-- `registerWebTools(config)` -- Returns 2-3 tools (web_search conditional on SearXNG URL)
-- `registerDevOpsTools()` -- Returns 2 tools
-- `registerHomeTools(config)` -- Returns 1-3 tools (HA conditional)
-- `registerSocialTools(config)` -- Returns 0-2 tools (all conditional)
-- `registerGoogleTools(config)` -- Returns 0-6 tools (all conditional)
-- `registerNewsTools(config)` -- Returns 0-1 tools (conditional)
+- `registerCodingTools(ignoreManager)` -- Always returns 10 tools (`read_file`, `write_file`, `edit_file`, `glob`, `grep`, `bash`, `git`, `github`, `list_files`, `update_memory`)
+- `registerWebTools(config)` -- Returns 2-3 tools (`web_search` conditional on SearXNG URL)
+- `registerDevOpsTools()` -- Returns 2 tools (`docker`, `system_info`)
+- `discoverRemoteTools(remote, localToolNames)` -- Returns 0+ tools fetched from a configured remote agent's `${url}/dashboard/api/tools` endpoint. Each remote tool is registered as native (with a `[remote]` description prefix). Local tools take priority — if a remote tool name collides with a local one, it is skipped. Execution is proxied via HTTP. This is how integrations like Home Assistant, Mastodon, Spotify, Gmail, Calendar, Drive, Docs, Sheets, Tasks, news, weather, and timers are surfaced — they live in a separate agent (e.g. Llama Rider), not in VEEPEE Code itself.
 
 ### Permission Manager (`permissions.ts`)
 
@@ -406,31 +403,38 @@ A raw Node.js `http.createServer` (no Express, no framework). Endpoints:
 - `/v1/chat/completions` -- Consumes the agent's event stream, translating events to standard OpenAI format: non-streaming responses include a `tool_calls` array in the assistant message; streaming responses emit `tool_calls` deltas in standard OpenAI format. Legacy `veepee_code` extensions are still included for backwards compatibility. Incoming `tools` definitions in the request are honored and constrain the agent to the client's tool set.
 - `/v1/models` -- Maps `ModelProfile[]` to OpenAI model list format with custom fields
 - `/api/tools` -- Simple tool enumeration
-- `/api/execute` -- Direct tool execution (bypasses LLM), gated behind `VEEPEE_CODE_API_EXECUTE=1`
+- `/api/execute` -- Direct tool execution (bypasses LLM), gated behind `"apiExecute": true` in `vcode.config.json`
 - `/api/status` -- Session state snapshot
 - `/health` -- Liveness probe
 
-The server binds to `127.0.0.1` (localhost only) by default. When Remote Connect is enabled (`VEEPEE_CODE_RC_ENABLED=1`), it binds to `0.0.0.0` and CORS allows any origin. Auto-increments the port if `EADDRINUSE`. Bearer token auth is supported via `VEEPEE_CODE_API_TOKEN`. RC routes (`/rc/*`) are handled by `rc.ts` when enabled, taking priority over other route matching.
+The server binds to `127.0.0.1` (localhost only) by default. When Remote Connect is enabled (`rc.enabled: true`), it binds to `0.0.0.0` and CORS allows any origin. Auto-increments the port if `EADDRINUSE`. Bearer token auth is supported via the `apiToken` config field. RC routes (`/rc/*`) are handled by `rc.ts` when enabled, taking priority over other route matching.
 
 ### TUI (`tui/`)
 
-The TUI is built on raw terminal escape codes:
+The TUI is built on **Ink (React)** with raw stdin bypassing Ink for keystroke handling:
 
-- **`screen.ts`** -- Primitives: `moveTo`, `writeAt`, `clearScreen`, `enterAltScreen`, `exitAltScreen`, `wordWrap`, `truncate`, `stripAnsi`, `center`
-- **`theme.ts`** -- Color palette (chalk hex colors), box drawing characters, icon definitions
-- **`logo.ts`** -- ASCII art "VEEPEE CODE" generation with responsive fallback
-- **`index.ts`** -- `TUI` class with full rendering pipeline, command palette, turn tracker
+- **`App.tsx`** -- Root React component using `useReducer + forwardRef + useImperativeHandle`. Renders all 16 sub-components based on the reducer state.
+- **`reducer.ts`** -- Pure reducer (no React dependency, fully testable). Holds view, messages, input, scroll, model info, stats, stream state, turn tracker, command menu, model selector, permission queue, type-ahead queue, etc.
+- **`index.ts`** -- `TUI` class is a thin imperative wrapper over Ink. Calls `render(<App ref={appRef}>)`, exposes methods that dispatch reducer actions through the ref. Sets up raw stdin (`stdin.setRawMode(true)`) and handles all keystrokes via `handleKey()` — Ink's `useInput` is kept active just to maintain raw mode but isn't used for actual input.
+- **`components/`** -- 16 React components: `WelcomeScreen`, `Conversation`, `MessagesArea`, `MessageBlock`, `VirtualMessageList`, `InputBox`, `CommandMenu`, `ProgressBar`, `StatusBar`, `TurnTracker`, `DiffView`, `HistorySearch`, `WorkspaceSearch`, `ModelCompletion`, `ModelSelector`, `PermissionPrompt`.
+- **`hooks/`** -- `useScrollable`, `useMouseScroll`.
+- **`keybindings.ts`** -- Maps raw key codes (`\r`, `\x03`, `\x1b[A`, etc.) to named actions. User overrides at `~/.veepee-code/keybindings.json`.
+- **`screen.ts`** -- Raw terminal primitives (`moveTo`, `clearScreen`, etc.). **Used by the wizard**, not by the main TUI. The wizard runs *before* Ink mounts so it has to use raw escape codes directly.
+- **`theme.ts`** -- Color palette (chalk hex colors), box drawing characters, icon definitions.
+- **`logo.ts`** -- ASCII art "VEEPEE CODE" generation with responsive fallback.
 
-The TUI operates in raw mode (`stdin.setRawMode(true)`) and handles all keystrokes manually. It uses the alternate screen buffer to preserve the user's terminal history.
+The TUI uses the alternate screen buffer (`\x1b[?1049h`) to preserve the user's terminal history.
 
-**Rendering approach:** Full screen clear + redraw on every render call. No incremental updates except during streaming (partial message area update). The render rate is limited by:
+**Rendering approach:** Ink manages the React reconciliation; the TUI class triggers re-renders by dispatching reducer actions. The `progressBarActive` and `streamActive` flags drive partial updates. Render rate constraints:
 - Turn tracker: 500ms interval
 - Input: immediate on keystroke
-- Stream: on each token
+- Stream: token-by-token (Ink handles batching)
 
-**Markdown rendering:** Assistant messages are rendered through marked + marked-terminal with styled code blocks, headings, bold, italic, links, and horizontal rules.
+**Markdown rendering:** Assistant messages are rendered through `marked + marked-terminal` (`render.ts`) with brand-colored code blocks (terracotta `#E8A87C`), bold, italic, headings, links, and horizontal rules.
 
 **Command palette:** Opens when `/` is typed as the first character or `Ctrl+P` is pressed. Renders above the input box as a bordered menu with filter-as-you-type, arrow key navigation, and immediate submission for argument-free commands.
+
+**Type-ahead:** While the agent is running, keystrokes accumulate in the `queuedInput` reducer slot. On the next `getInput()`, queued text is moved into the active input. Full editing supported during type-ahead (backspace, arrows, paste, Shift+Enter).
 
 ## Data Flow
 
@@ -486,7 +490,7 @@ Each agent turn:
 
 3. **No framework for the API server.** A single `createServer` keeps dependencies minimal and startup fast.
 
-4. **Raw terminal escape codes for TUI.** No blessed, no ink, no terminal framework. Direct control over rendering with minimal dependencies.
+4. **Ink (React) for the TUI.** Component-based rendering with `useReducer` state management, but raw stdin bypasses Ink's `useInput` for keystroke handling. The wizard (which runs before Ink mounts) uses raw terminal escape codes directly via `screen.ts` primitives.
 
 5. **Config-driven tool registration.** Tools with missing credentials are simply not registered. The agent never sees tools it cannot use, avoiding hallucinated tool calls.
 
@@ -503,11 +507,14 @@ Each agent turn:
 | `ollama` | Ollama JavaScript SDK for model inference |
 | `zod` | Schema validation for tool parameters |
 | `chalk` | Terminal color output |
-| `dotenv` | .env file loading |
 | `glob` | File pattern matching |
 | `marked` + `marked-terminal` | Markdown rendering for assistant output in the TUI |
-| `vitest` | Test runner (54 tests) |
+| `cli-highlight` | Syntax highlighting for code blocks |
+| `ink` + `ink-text-input` + `react` | TUI rendering (component-based, with raw stdin for keystrokes) |
+| `qrcode-terminal` | QR code rendering for Remote Connect |
+| `langfuse` (optional) | Lazy-loaded observability — agent turn traces |
+| `vitest` | Test runner (326 tests across 21 files) |
 | `tsx` | TypeScript execution for development |
 | `typescript` | Compiler |
 
-Total dependency footprint is intentionally small -- no Express, no React, no terminal UI frameworks.
+The dependency footprint is intentionally small -- no Express (raw `http.createServer`), no Commander (manual argv parsing), no blessed, no dotenv (config has migrated to `vcode.config.json`).

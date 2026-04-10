@@ -202,7 +202,7 @@ The model is instructed that:
 # Project: VEEPEE Code
 
 ## Overview
-AI coding CLI powered by local Ollama models. TypeScript, full-screen TUI, 25 tools.
+AI coding CLI powered by local Ollama models. TypeScript, full-screen Ink TUI, 14 native tools plus a remote agent bridge.
 
 ## Stack
 - TypeScript 5.8, Node.js 22

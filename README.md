@@ -7,12 +7,12 @@ A Claude Code-style terminal AI assistant that runs entirely on your hardware. C
 ## Features
 
 - **Local-first** — all inference runs on your GPUs via Ollama
-- **15+ coding tools** — file I/O, shell, git, web search, Docker, and more
+- **14 native tools** — file I/O, shell, git, gh CLI, Docker, web fetch/search, and system info (15 with SearXNG)
+- **Remote agent bridge** — connect a remote agent (e.g. Llama Rider) to auto-discover and use its tools as native VEEPEE Code tools
 - **Project-aware** — auto-detects language, framework, package manager, and test runner
 - **Smart model routing** — benchmarks your models and picks the best one per task
-- **Multiple modes** — Act (coding), Plan (reasoning), Chat (fast Q&A), MoE (multi-model debate)
+- **Multiple modes** — Act (coding), Plan (reasoning), Chat (fast Q&A), MoE (multi-model), Ralph (Work→Review loop)
 - **Plan persistence** — implementation plans auto-saved and restored across context compaction
-- **Remote agent bridge** — connect a remote agent to unlock additional tools
 - **Session management** — save, resume, and sync sessions across devices via WebDAV
 - **Remote Connect** — phone-accessible web UI with QR code access
 - **Model stick** — lock your preferred model across mode switches
@@ -106,14 +106,15 @@ Talk to the AI naturally. It reads and writes files, runs commands, searches the
 
 ## Tools
 
-### Native (15)
+### Native (14, plus `web_search` when SearXNG is configured)
 
 | Category | Tools |
 |----------|-------|
-| Coding | `read_file`, `write_file`, `edit_file`, `list_files`, `glob`, `grep`, `bash`, `git`, `update_memory` |
-| Web | `web_fetch`, `http_request`, `web_search` |
+| Coding | `read_file`, `write_file`, `edit_file`, `list_files`, `glob`, `grep`, `bash`, `git`, `github`, `update_memory` |
+| Web | `web_fetch`, `http_request`, `web_search` (conditional on `searxngUrl`) |
 | DevOps | `docker`, `system_info` |
-| Agent | `confirm_action` |
+
+Additional integrations (Home Assistant, Mastodon, Spotify, Gmail, Calendar, Drive, Docs, Sheets, Tasks, news feeds, etc.) are available via the **remote agent bridge** — VEEPEE Code auto-discovers and proxies tools from a configured remote agent like [Llama Rider](https://github.com/vpontual/llama_rider).
 
 ### edit_file
 
@@ -244,7 +245,7 @@ vcode --update                     # Pull latest and rebuild
 ## Testing
 
 ```bash
-npm test                           # 308 tests across 18 files
+npm test                           # 326 tests across 21 files
 ```
 
 ## License

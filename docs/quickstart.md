@@ -77,11 +77,11 @@ vcode
 
 On first launch, VEEPEE Code will:
 
-1. **Run the setup wizard** -- A guided onboarding walks you through all configuration step-by-step: GitHub authentication, Ollama proxy connection, model preferences, and optional integrations (Home Assistant, Mastodon, Spotify, Google Workspace, SearXNG, Newsfeed). Each step explains what it does, which tools it enables, and whether it's required or optional. Optional steps can be skipped by pressing Enter.
+1. **Run the setup wizard** -- A guided onboarding walks you through all configuration step-by-step: Ollama proxy connection, Fleet Manager dashboard, model preferences, API server, SearXNG web search, and the remote agent bridge. Each step explains what it does, which tools it enables, and whether it's required or optional. Optional steps can be skipped by pressing Enter. Each step with a validator tests the connection inline before moving on.
 2. **Connect to the proxy** -- It contacts the Ollama proxy URL from your config.
 3. **Discover models** -- It queries the proxy for available models and (if configured) the Fleet Manager dashboard for loaded model status and capabilities.
 5. **Select an initial model** -- The highest-scoring model with tool-calling support becomes the temporary default.
-6. **Register tools** -- All 26 tools are initialized based on your `.env` configuration. Tools with missing credentials are silently skipped.
+6. **Register tools** -- The 14 native tools (+ `web_search` if SearXNG is configured) are registered. If a remote agent bridge is configured, VEEPEE Code fetches its tool catalog and registers each remote tool as native (with a `[remote]` description prefix).
 7. **Start the API server** -- An OpenAI-compatible API server starts on port 8484 (configurable).
 8. **Launch the TUI** -- The full-screen terminal interface appears with the VEEPEE CODE logo and input box.
 9. **Run the first-launch benchmark** -- Automatically inside the TUI with live progress:
@@ -96,17 +96,19 @@ The setup wizard configures this automatically on first launch. To change it lat
 
 ```bash
 # Edit the global config
-nano ~/.veepee-code/.env
+nano ~/.veepee-code/vcode.config.json
 ```
 
 Set the proxy URL:
 
-```bash
-VEEPEE_CODE_PROXY_URL=http://your-server:11434
-VEEPEE_CODE_DASHBOARD_URL=http://your-server:3334   # Only if using Ollama Fleet Manager
+```json
+{
+  "proxyUrl": "http://your-server:11434",
+  "dashboardUrl": "http://your-server:3334"
+}
 ```
 
-Or create a project-local `.env` file in your working directory, which takes precedence over the global config.
+`dashboardUrl` is only needed if you use the Ollama Fleet Manager. See the full [Configuration](configuration.md) reference for all fields.
 
 ## Basic Usage
 
@@ -207,7 +209,7 @@ Run the setup validation command to check which integrations are active:
 /setup wizard     # Re-run the guided setup wizard
 ```
 
-`/setup` tests connectivity to your proxy, SearXNG, Home Assistant, Mastodon, Spotify, Google Workspace, and news feed. Each integration shows its status (active, missing config, or error) and which tools it provides. Use `/setup wizard` to reconfigure any integration interactively.
+`/setup` tests connectivity to your Ollama proxy and SearXNG (if configured). Each integration shows its status (active, missing config, or error). Use `/setup wizard` to reconfigure, or `/setup wizard <step-id>` (proxy, dashboard, model-prefs, api, searxng, remote) to reconfigure a single step. Tools from the remote agent bridge are not validated here — run `/tools` to see what's actually loaded.
 
 ## Creating Project Instructions
 
@@ -223,7 +225,7 @@ The agent analyzes your project structure, reads config files and source code, a
 
 - [Configuration Reference](configuration.md) -- All environment variables and config files
 - [Modes](modes.md) -- Understanding act, plan, and chat modes
-- [Tools Reference](tools.md) -- All 26 tools with usage examples
+- [Tools Reference](tools.md) -- 14 native tools with usage examples, plus how remote agent tools plug in
 - [Models](models.md) -- Model discovery, ranking, and the model roster
 - [Benchmarking](benchmark.md) -- Smart benchmark, roster building, and interpreting results
 - [Sandbox & Preview](sandbox-preview.md) -- Scratch space, script execution, HTML preview

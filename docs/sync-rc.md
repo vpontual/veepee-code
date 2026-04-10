@@ -16,16 +16,20 @@ Push and pull session files to a WebDAV server (Nextcloud, ownCloud, or any WebD
 
 ### Configuration
 
-Add to `~/.veepee-code/.env`:
+Add a `sync` block to `~/.veepee-code/vcode.config.json`:
 
-```bash
-VEEPEE_CODE_SYNC_URL=https://cloud.example.com/remote.php/dav/files/user/veepee-code/
-VEEPEE_CODE_SYNC_USER=username
-VEEPEE_CODE_SYNC_PASS=password
-VEEPEE_CODE_SYNC_AUTO=false    # Set to true for auto-sync
+```json
+{
+  "sync": {
+    "url": "https://cloud.example.com/remote.php/dav/files/user/veepee-code/",
+    "user": "username",
+    "pass": "password",
+    "auto": false
+  }
+}
 ```
 
-All three URL/user/pass must be set. Uses Node.js built-in `https`/`http` modules — no additional dependencies.
+All three URL/user/pass must be set. `auto: true` enables automatic push/pull on save and listing. Uses Node.js built-in `https`/`http` modules — no additional dependencies.
 
 ### Commands
 
@@ -54,7 +58,7 @@ When pulling, files are compared by `updatedAt` timestamp. The newer version win
 
 ### Auto-Sync
 
-When enabled (`/sync auto` or `VEEPEE_CODE_SYNC_AUTO=true`):
+When enabled (`/sync auto` or `"auto": true` in the `sync` block of `vcode.config.json`):
 
 - After `/save` → auto-push the saved session
 - Before `/sessions` → auto-pull to show the latest list
@@ -74,7 +78,7 @@ Authentication uses HTTP Basic Auth. The remote directory is auto-created on fir
 
 ### Verification
 
-1. Configure WebDAV creds in `~/.veepee-code/.env`
+1. Configure the `sync` block in `~/.veepee-code/vcode.config.json`
 2. `/save test-session` then `/sync push` → files appear on Nextcloud
 3. On another machine: `/sync pull` → session appears in `/sessions`
 4. `/resume test-session` → knowledge state + recent messages restored
@@ -89,12 +93,16 @@ A phone-accessible web chat UI served at `http://{ip}:{port}/rc`. Shared session
 
 ### Configuration
 
-Add to `~/.veepee-code/.env`:
+Add to `~/.veepee-code/vcode.config.json`:
 
-```bash
-VEEPEE_CODE_RC_ENABLED=1
-VEEPEE_CODE_API_TOKEN=your-secret-token    # Required for auth
+```json
+{
+  "rc": { "enabled": true },
+  "apiToken": "your-secret-token"
+}
 ```
+
+Or just run `/rc` inside vcode — the first invocation auto-enables RC, generates a token if one doesn't exist, and prints the URL with the token embedded as a query parameter.
 
 When RC is enabled:
 - The API server binds to `0.0.0.0` (all interfaces) instead of `127.0.0.1`
@@ -144,7 +152,7 @@ See the [API Reference](api.md#remote-connect-endpoints) for the full list of RC
 
 ### Verification
 
-1. Set `VEEPEE_CODE_RC_ENABLED=1` and `VEEPEE_CODE_API_TOKEN=secret`
+1. Set `rc: { enabled: true }` and `apiToken: "secret"` in `vcode.config.json` (or just run `/rc` inside vcode to auto-enable)
 2. Start vcode → `/rc` shows URL
 3. Open URL on phone → enter token → chat interface loads
 4. Send message → streaming response with tool calls

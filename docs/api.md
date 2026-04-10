@@ -13,13 +13,13 @@ VEEPEE Code runs an HTTP API server alongside the TUI, enabling other tools and 
 - **Default port:** 8484 (configurable via `VEEPEE_CODE_API_PORT` or `--port` CLI flag)
 - **Bind address:** `127.0.0.1` (localhost only by default; override with `--host` CLI flag)
 - **Auto-fallback:** If the port is in use, VEEPEE Code automatically tries port + 1
-- **CORS:** Restricted to localhost origins by default. When Remote Connect is enabled (`VEEPEE_CODE_RC_ENABLED=1`), CORS allows any origin (auth via token protects access).
+- **CORS:** Restricted to localhost origins by default. When Remote Connect is enabled (`rc.enabled: true` in `vcode.config.json`), CORS allows any origin (auth via token protects access).
 
 The API starts automatically when VEEPEE Code launches. No separate process needed.
 
 ### Authentication
 
-If the `VEEPEE_CODE_API_TOKEN` environment variable is set, all API requests must include a Bearer token in the `Authorization` header:
+If `apiToken` is set in `~/.veepee-code/vcode.config.json`, all API requests must include a Bearer token in the `Authorization` header:
 
 ```
 Authorization: Bearer your-token-here
@@ -176,7 +176,7 @@ List all registered tools.
 
 Execute a specific tool directly, bypassing the LLM.
 
-**This endpoint is disabled by default.** To enable it, set `VEEPEE_CODE_API_EXECUTE=1` in your environment or `.env` file. Requests to this endpoint when it is disabled receive a `403 Forbidden` response.
+**This endpoint is disabled by default.** To enable it, set `"apiExecute": true` in `~/.veepee-code/vcode.config.json`. Requests to this endpoint when it is disabled receive a `403 Forbidden` response.
 
 **Request:**
 
@@ -208,7 +208,7 @@ Or on error:
 }
 ```
 
-> **Note:** Tool execution through the API bypasses the permission system entirely. This endpoint is gated behind `VEEPEE_CODE_API_EXECUTE=1` as a safety measure.
+> **Note:** Tool execution through the API bypasses the permission system entirely. This endpoint is gated behind `"apiExecute": true` in `vcode.config.json` as a safety measure.
 
 ### GET /api/status
 
@@ -328,7 +328,7 @@ print(result.json()["choices"][0]["message"]["content"])
 
 ## Remote Connect Endpoints
 
-When `VEEPEE_CODE_RC_ENABLED=1`, the following endpoints are available. All `/rc/*` routes (except `GET /rc`) require Bearer token auth.
+When `rc.enabled: true` in `vcode.config.json`, the following endpoints are available. All `/rc/*` routes (except `GET /rc`) require Bearer token auth.
 
 ### GET /rc
 

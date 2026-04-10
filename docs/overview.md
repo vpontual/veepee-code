@@ -6,7 +6,7 @@ weight: 1
 
 # VEEPEE Code
 
-VEEPEE Code (v0.3.0) is an AI coding assistant that runs entirely on your own hardware. It connects to your local [Ollama](https://ollama.com/) instance (or an [Ollama Fleet Manager](https://github.com/vpontual/llm-traffic-manager) proxy), giving you a Claude Code-style terminal experience with zero API costs, full data privacy, 26 integrated tools, cross-device session sync, and a phone-accessible web UI.
+VEEPEE Code (v0.3.0) is an AI coding assistant that runs entirely on your own hardware. It connects to your local [Ollama](https://ollama.com/) instance (or an [Ollama Fleet Manager](https://github.com/vpontual/llm-traffic-manager) proxy), giving you a Claude Code-style terminal experience with zero API costs, full data privacy, 14 native tools (plus optional web search and unlimited remote tools via the agent bridge), cross-device session sync, and a phone-accessible web UI.
 
 ```
 ██╗   ██╗███████╗███████╗██████╗ ███████╗███████╗
@@ -28,13 +28,15 @@ VEEPEE Code (v0.3.0) is an AI coding assistant that runs entirely on your own ha
 
 - **Zero API Cost** -- Every inference runs on your own GPUs. No API keys, no metered billing, no data leaving your network.
 
-- **26 Integrated Tools** -- File operations, shell commands, git, Docker, web search, Home Assistant, Mastodon, Spotify, Google Workspace (Gmail, Calendar, Drive, Docs, Sheets, Tasks), news feeds, memory management (update_memory), and more.
+- **14 Native Tools** -- File operations (`read_file`, `write_file`, `edit_file`, `glob`, `grep`, `list_files`), shell commands (`bash`), git (`git`, `github` via gh CLI), Docker (`docker`), system info (`system_info`), web access (`web_fetch`, `http_request`), and memory management (`update_memory`). Add `web_search` when SearXNG is configured.
+
+- **Remote Agent Bridge** -- Connect a configured remote agent (e.g. [Llama Rider](https://github.com/vpontual/llama_rider)) and VEEPEE Code auto-discovers and proxies its tools as native VEEPEE Code tools. This is how integrations like Home Assistant, Mastodon, Spotify, Gmail, Calendar, Drive, Docs, Sheets, Tasks, and news feeds plug in — they live in the remote agent, not in VEEPEE Code itself.
 
 - **Smart Benchmark & Model Roster** -- On first launch, VEEPEE Code runs a smart benchmark inside the TUI. It discovers all models with tool support, tests their responsiveness (tok/s with a 60-second cold-start allowance), then runs a full benchmark on responsive models. Results are used to build a **model roster** -- the best model for each role: act (default coding), plan (best reasoning), chat (fastest conversational), code (best code gen + editing), and search (fastest for sub-agents). The roster is saved to `~/.veepee-code/benchmarks/roster.json` and drives all mode switching.
 
 - **Configurable Model Size Limits** -- Set `VEEPEE_CODE_MAX_MODEL_SIZE` and `VEEPEE_CODE_MIN_MODEL_SIZE` to control which models the agent considers. No arbitrary tier system -- the benchmark measures actual performance.
 
-- **Three Operating Modes** -- `/act` for execution (uses roster's act model), `/plan` for thinking-first architecture and design (uses roster's plan model), `/chat` for conversational web-connected Q&A (uses roster's chat model). Plan mode auto-activates when it detects planning intent in your message.
+- **Operating Modes** -- `/act` for execution (uses roster's act model), `/plan` for thinking-first architecture and design (uses roster's plan model), `/chat` for conversational web-connected Q&A (uses roster's chat model), `/moe` for Mixture of Experts (3 models in parallel with synthesize/debate/vote/fastest strategies), and `/ralph` for iterative Work→Review loops with worker and reviewer models. Plan mode auto-activates when it detects planning intent in your message.
 
 - **Session Management** -- Save conversations with `/save`, list them with `/sessions`, and resume with `/resume` or the `--resume` CLI flag. Sessions are stored as JSON at `~/.veepee-code/sessions/`.
 
@@ -56,7 +58,7 @@ VEEPEE Code (v0.3.0) is an AI coding assistant that runs entirely on your own ha
 
 - **Permission System** -- Safe tools (read-only operations) run automatically. Dangerous operations (destructive shell commands, social media posts, device control, email sending) prompt for explicit approval with y/a/n. Permissions can be granted per-session or persisted permanently at `~/.veepee-code/permissions.json`.
 
-- **OpenAI-Compatible API** -- An HTTP server on port 8484 exposes chat completions, model listing, tool execution, and status endpoints with streaming SSE support and `veepee_code` custom extensions. Other tools like Claude Code, Gemini CLI, or custom scripts can use VEEPEE Code as a backend.
+- **OpenAI-Compatible API** -- An HTTP server on port 8484 exposes chat completions (with standard `tool_calls` and legacy `veepee_code` extensions for backwards compatibility), model listing, tool execution, and status endpoints. Streaming SSE supported. When the client sends a `tools` array in the request, the agent is constrained to that intersection at the registry level — not just via prompting. Other tools like Claude Code, Gemini CLI, or custom scripts can use VEEPEE Code as a backend.
 
 - **Full-Screen TUI** -- Alternate-screen terminal UI with block-pixel "VEEPEE CODE" logo, user messages with highlighted background and blue border, markdown rendering via marked-terminal, command palette on `/`, turn tracker showing tool calls with live progress, bouncing progress indicator on row 1 while the agent works, type-ahead input queue (type while the model is running and your message auto-sends on completion), streaming output, thinking display, blinking cursor in the input box, status bar, `@file` mentions for referencing files inline, multi-line input via Shift+Enter, and Ctrl+C to interrupt generation.
 
@@ -68,7 +70,7 @@ VEEPEE Code (v0.3.0) is an AI coding assistant that runs entirely on your own ha
 
 ### vs. Claude Code
 
-Claude Code requires a paid Anthropic API subscription. VEEPEE Code runs on your own Ollama instances -- any model, any hardware, zero ongoing cost. Claude Code has more sophisticated context management and a larger model behind it, but VEEPEE Code compensates with benchmark-driven model roster selection and local infrastructure integration (Home Assistant, Mastodon, Spotify, etc.).
+Claude Code requires a paid Anthropic API subscription. VEEPEE Code runs on your own Ollama instances -- any model, any hardware, zero ongoing cost. Claude Code has more sophisticated context management and a larger model behind it, but VEEPEE Code compensates with benchmark-driven model roster selection and the remote agent bridge (which lets a separate agent like Llama Rider expose Home Assistant, Mastodon, Spotify, Google Workspace, and other integrations as native VEEPEE Code tools).
 
 ### vs. OpenCode
 
@@ -80,7 +82,7 @@ Gemini CLI is Google's free offering tied to the Gemini model family. VEEPEE Cod
 
 ### vs. GitHub Copilot CLI
 
-Copilot CLI focuses on shell command generation and explanation. VEEPEE Code is a full agent with file editing, multi-turn conversations, web search, session persistence, and 26 tool categories. Copilot CLI requires a GitHub subscription.
+Copilot CLI focuses on shell command generation and explanation. VEEPEE Code is a full agent with file editing, multi-turn conversations, web search, session persistence, 14 native tools, and unlimited additional tools via the remote agent bridge. Copilot CLI requires a GitHub subscription.
 
 ## Requirements
 
@@ -96,7 +98,7 @@ Copilot CLI focuses on shell command generation and explanation. VEEPEE Code is 
 │  (your Mac)  │     │  (fleet manager)  │     │  (DGX/AGX)  │
 │              │     │                   │────▶│  GPU Server  │
 │  TUI + Agent │     │  Load balancing   │     │  (Nano/etc) │
-│  26 tools    │     │  Model routing    │     └─────────────┘
+│  14 native   │     │  Model routing    │     └─────────────┘
 │  API :8484   │     │  Dashboard :3334  │
 └──────────────┘     └──────────────────┘
 ```

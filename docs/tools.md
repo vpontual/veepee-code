@@ -1,12 +1,14 @@
 ---
 title: "Tools Reference"
-description: "All 26 tools organized by category with descriptions, parameters, and usage examples."
+description: "Native tools (14, plus web_search when SearXNG is configured) organized by category with descriptions, parameters, and usage examples. Additional tools come from the remote agent bridge."
 weight: 5
 ---
 
 # Tools Reference
 
-VEEPEE Code includes 26 tools organized into eight categories. Core tools are always available. Optional tools activate when their required environment variables are configured.
+VEEPEE Code ships with **14 native tools** in three categories: coding (10), web (2), and devops (2). One additional web tool (`web_search`) activates when SearXNG is configured.
+
+**Additional tools** — Home Assistant, Mastodon, Spotify, Gmail, Calendar, Drive, Docs, Sheets, Tasks, news feeds, weather, timers, and any other capability — come from the **remote agent bridge** (see [Configuration](configuration.md#remote-agent-bridge)). When a remote agent is configured, VEEPEE Code fetches its tool catalog on startup and proxies execution via HTTP, surfacing each remote tool as if it were native.
 
 Run `/tools` to see which tools are active in your current session, or `/setup` to see the full integration status.
 
@@ -127,6 +129,33 @@ git args="add src/api.ts"
 git args="commit -m 'Fix auth bug'"
 ```
 
+### github
+
+Interact with GitHub via the `gh` CLI. Manage repos, pull requests, issues, and releases. Executes via `execFileSync` (no shell injection). Requires `gh` to be installed and authenticated.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | enum | Yes | One of: `repo_create`, `repo_list`, `pr_create`, `pr_list`, `pr_view`, `pr_merge`, `pr_comment`, `pr_diff`, `pr_checks`, `issue_create`, `issue_list`, `issue_view`, `issue_comment`, `release_create`, `release_list` |
+| `repo` | string | No | Repository in `owner/name` format. Omit to use the repo in cwd. |
+| `title` | string | No | Title for PR, issue, release, or new repo name |
+| `body` | string | No | Body/description for PR, issue, release, or comment text |
+| `branch` | string | No | Branch name for PR (head) or release tag |
+| `base` | string | No | Base branch for PR |
+| `number` | number | No | PR or issue number (for view/merge/comment actions) |
+| `labels` | string | No | Comma-separated labels |
+| `draft` | boolean | No | Create PR as draft |
+| `is_private` | boolean | No | Create repo as private (default true) |
+| `limit` | number | No | Max results for list actions (default 20) |
+| `cwd` | string | No | Git repository directory |
+
+```
+github action="pr_list"
+github action="pr_view" number=42
+github action="pr_create" title="Fix auth bug" body="Resolves #41" branch="auth-fix" base="main"
+github action="issue_create" title="Investigate slow query" labels="bug,performance"
+github action="release_create" branch="v0.4.0" title="v0.4.0" body="Release notes here..."
+```
+
 ### list_files
 
 List files and directories in a given path.
@@ -223,269 +252,50 @@ system_info query="processes"
 
 Cross-platform: macOS uses `sysctl`, `vm_stat`, `sw_vers`; Linux uses `free`, `lscpu`, `/etc/os-release`.
 
-## Home Tools
+## Tools Available via the Remote Agent Bridge
 
-### weather (Always Available)
+The following tool categories are **not** built into VEEPEE Code. They live in a separate remote agent (such as [Llama Rider](https://github.com/vpontual/llama_rider)) and are exposed to VEEPEE Code via the bridge described in the [Configuration](configuration.md#remote-agent-bridge) docs.
 
-Get current weather or forecast using Open-Meteo (free, no API key).
+When you point `vcode.config.json` at a remote agent, VEEPEE Code fetches its tool catalog from `${remote.url}/dashboard/api/tools` on startup, builds Zod schemas from the JSON Schema parameters, and registers each remote tool as if it were native (with a `[remote]` prefix in the description). Execution is proxied via HTTP. Tools that already exist locally take priority — the local version always wins.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | Yes | `current` or `forecast` |
-| `location` | string | Yes | City name or coordinates |
-| `days` | number | No | Forecast days (default 3, max 7) |
+Typical tools you'd surface this way:
 
-```
-weather action="current" location="San Francisco"
-weather action="forecast" location="New York" days=7
-weather action="current" location="37.7749,-122.4194"
-```
+- **Smart home** — `weather`, `home_assistant` (turn devices on/off, call services), `timer`
+- **Social** — `mastodon` (timeline, post, reply, boost, favorite, search), `spotify` (playback, queue, search)
+- **Google Workspace** — `email` (Gmail), `calendar`, `google_drive`, `google_docs`, `google_sheets`, `notes` (Google Tasks)
+- **News** — `news` (briefing, digest, search, trends, topics, story tracking)
 
-Temperature is returned in Fahrenheit, wind in mph.
+Each of these uses its own auth (HA token, OAuth2, Bearer tokens, etc.) configured in the **remote agent**, not in VEEPEE Code. VEEPEE Code only needs the remote agent's URL and Bearer token.
 
-### home_assistant (Requires HA_URL, HA_TOKEN)
+Refer to your remote agent's documentation for the exact list of tools and parameters it provides.
 
-Control smart home devices via Home Assistant.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | Yes | `get_states`, `get_state`, `turn_on`, `turn_off`, `toggle`, or `call_service` |
-| `entity_id` | string | No | Entity ID (e.g., `light.living_room`) |
-| `domain` | string | No | Service domain for call_service |
-| `service` | string | No | Service name for call_service |
-| `data` | string | No | Service data as JSON string |
-
-```
-home_assistant action="get_states"
-home_assistant action="toggle" entity_id="light.office"
-home_assistant action="call_service" domain="climate" service="set_temperature" data='{"temperature":72}'
-```
-
-> **Note:** Device control actions (`turn_on`, `turn_off`, `toggle`, `call_service`) always trigger the permission prompt.
-
-### timer (Requires HA_URL, HA_TOKEN)
-
-Set timers with optional TTS announcement via Home Assistant.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | Yes | `set`, `list`, or `cancel` |
-| `name` | string | No | Timer label |
-| `seconds` | number | No | Duration in seconds |
-| `message` | string | No | TTS message on completion |
-
-```
-timer action="set" name="Pomodoro" seconds=1500 message="Break time!"
-timer action="set" seconds=300
-```
-
-## Social Tools
-
-### mastodon (Requires MASTODON_URL, MASTODON_TOKEN)
-
-Interact with the Fediverse via Mastodon.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | Yes | `timeline`, `notifications`, `post`, `reply`, `boost`, `favorite`, or `search` |
-| `content` | string | No | Post/reply text |
-| `status_id` | string | No | Status ID for reply/boost/favorite |
-| `query` | string | No | Search query |
-| `limit` | number | No | Results limit (default 10) |
-
-```
-mastodon action="timeline"
-mastodon action="post" content="Hello from VEEPEE Code!"
-mastodon action="reply" content="Great point!" status_id="123456"
-mastodon action="search" query="rust programming"
-```
-
-> **Note:** Public actions (`post`, `reply`, `boost`) trigger the permission prompt.
-
-### spotify (Requires SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REFRESH_TOKEN)
-
-Control Spotify playback and search.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | Yes | `playing`, `play`, `pause`, `next`, `previous`, `volume`, `search`, `queue`, or `recent` |
-| `query` | string | No | Search query |
-| `uri` | string | No | Spotify URI for play/queue |
-| `volume` | number | No | Volume 0-100 |
-
-```
-spotify action="playing"
-spotify action="search" query="lo-fi beats"
-spotify action="play" uri="spotify:track:..."
-spotify action="volume" volume=50
-spotify action="next"
-```
-
-> **Note:** Playback control actions (`play`, `pause`, `next`, `previous`, `volume`) trigger the permission prompt.
-
-## Google Workspace Tools (Require GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN)
-
-### email
-
-Read and send Gmail emails.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | Yes | `inbox`, `read`, `send`, or `search` |
-| `message_id` | string | No | Message ID to read |
-| `to` | string | No | Recipient email |
-| `subject` | string | No | Email subject |
-| `body` | string | No | Email body |
-| `query` | string | No | Gmail search syntax query |
-| `max_results` | number | No | Max results (default 10) |
-
-```
-email action="inbox"
-email action="read" message_id="18e4a7b2c..."
-email action="send" to="user@example.com" subject="Meeting notes" body="..."
-email action="search" query="from:boss subject:urgent"
-```
-
-> **Note:** Sending email always triggers the permission prompt.
-
-### calendar
-
-Manage Google Calendar events.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | Yes | `today`, `upcoming`, or `create` |
-| `summary` | string | No | Event title |
-| `start` | string | No | Start time (ISO 8601) |
-| `end` | string | No | End time (ISO 8601) |
-| `description` | string | No | Event description |
-| `max_results` | number | No | Max events (default 10) |
-
-```
-calendar action="today"
-calendar action="upcoming" max_results=5
-calendar action="create" summary="Standup" start="2026-03-20T09:00:00-07:00" end="2026-03-20T09:30:00-07:00"
-```
-
-### google_drive
-
-Search and read Google Drive files.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | Yes | `list`, `search`, or `read` |
-| `query` | string | No | Search query or file ID |
-| `max_results` | number | No | Max results (default 10) |
-
-```
-google_drive action="list"
-google_drive action="search" query="project proposal"
-google_drive action="read" query="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
-```
-
-### google_docs
-
-Read and create Google Docs documents.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | Yes | `read` or `create` |
-| `document_id` | string | No | Document ID to read |
-| `title` | string | No | Title for new document |
-| `content` | string | No | Content for new document |
-
-```
-google_docs action="read" document_id="1BxiMVs..."
-google_docs action="create" title="Meeting Notes" content="# Summary\n..."
-```
-
-### google_sheets
-
-Read and write Google Sheets.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | Yes | `read`, `write`, or `create` |
-| `spreadsheet_id` | string | No | Spreadsheet ID |
-| `range` | string | No | Cell range (e.g., `Sheet1!A1:D10`) |
-| `values` | string | No | Values as JSON 2D array |
-| `title` | string | No | Title for new spreadsheet |
-
-```
-google_sheets action="read" spreadsheet_id="1abc..." range="Sheet1!A1:D10"
-google_sheets action="write" spreadsheet_id="1abc..." range="Sheet1!A1" values='[["Name","Score"],["Alice",95]]'
-google_sheets action="create" title="Q1 Budget"
-```
-
-### notes
-
-Manage Google Tasks (used as a notes/todo system).
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | Yes | `list`, `create`, or `complete` |
-| `title` | string | No | Task title |
-| `notes` | string | No | Task notes/description |
-| `task_id` | string | No | Task ID to complete |
-| `tasklist_id` | string | No | Task list ID (default: primary) |
-
-```
-notes action="list"
-notes action="create" title="Review PR #42" notes="Check the migration logic"
-notes action="complete" task_id="MTA2..."
-```
-
-## News Tools (Require NEWSFEED_URL)
-
-### news
-
-Access the AI-optimized newsfeed with multiple modes.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | Yes | `briefing`, `digest`, `search`, `trends`, `topic`, or `story` |
-| `query` | string | No | Search query or topic name |
-| `story_id` | string | No | Story ID for story tracking |
-| `hours` | number | No | Time window in hours |
-
-```
-news action="briefing"
-news action="digest" hours=24
-news action="search" query="artificial intelligence"
-news action="trends" hours=48
-news action="topic" query="climate change"
-news action="story" story_id="abc123"
-```
 
 ## Knowledge Tools (Always Available)
 
 ### update_memory
 
-Store facts, decisions, context, and preferences in the agent's knowledge state. This tool persists information across sessions, allowing the agent to remember project-specific context, user preferences, and prior decisions.
+Store facts, decisions, context, and preferences in the agent's knowledge state. This tool persists information across sessions, allowing the agent to remember project-specific context, user preferences, and prior decisions. Registered alongside the coding tools in `src/tools/coding.ts`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `content` | string | Yes | The fact, decision, or context to store |
-| `category` | string | No | Category for organization (e.g., `project`, `preference`, `decision`) |
+| `key` | string | Yes | Category: `fact`, `decision`, `question`, `project`, `current_task`, or any custom key |
+| `value` | string | Yes | The information to remember |
 
 ```
-update_memory content="This project uses pnpm, not npm" category="project"
-update_memory content="User prefers concise answers with no emojis" category="preference"
-update_memory content="Decided to use SQLite instead of PostgreSQL for this project" category="decision"
+update_memory key="fact" value="This project uses pnpm, not npm"
+update_memory key="decision" value="Using SQLite instead of PostgreSQL for this project"
+update_memory key="open_question" value="Should tokens expire after 24h or 7d?"
 ```
 
-> **Note:** Stored knowledge is saved to the knowledge state file and loaded automatically on subsequent sessions.
+> **Note:** Stored knowledge is saved to `~/.veepee-code/sessions/{sessionId}-state.md` and loaded automatically when you `/resume` the session. The agent intercepts `update_memory` calls before the registry — they update the in-memory `KnowledgeState` directly rather than going through tool execution.
 
-## Tool Count by Category
+## Native Tool Count by Category
 
 | Category | Always Available | Conditional | Total |
 |----------|-----------------|-------------|-------|
-| Coding | 8 | 0 | 8 |
-| Web | 2 | 1 | 3 |
+| Coding (incl. `update_memory`, `github`) | 10 | 0 | 10 |
+| Web | 2 | 1 (`web_search` if SearXNG configured) | 3 |
 | DevOps | 2 | 0 | 2 |
-| Home | 1 | 2 | 3 |
-| Social | 0 | 2 | 2 |
-| Google | 0 | 6 | 6 |
-| News | 0 | 1 | 1 |
-| Knowledge | 1 | 0 | 1 |
-| **Total** | **14** | **12** | **26** |
+| **Native total** | **14** | **1** | **15** |
+
+For additional capabilities (smart home, social, Google Workspace, news, etc.), configure a [remote agent bridge](configuration.md#remote-agent-bridge) — the number of available tools then depends entirely on what the remote agent exposes.

@@ -1,7 +1,7 @@
 {
   "name": "veepee-code",
   "version": "0.3.0",
-  "description": "AI coding assistant powered by your own Ollama fleet — Claude Code style CLI with 30+ tools",
+  "description": "AI coding assistant powered by your own Ollama fleet — Claude Code style CLI with native coding tools plus a remote agent bridge for extended capabilities",
   "type": "module",
   "bin": {
     "vcode": "./dist/index.js",

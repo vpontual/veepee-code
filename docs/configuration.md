@@ -6,186 +6,159 @@ weight: 3
 
 # Configuration
 
-VEEPEE Code uses environment variables for configuration, loaded from `.env` files. It also supports project-specific instruction files (VEEPEE.md) and stores persistent state in the `~/.veepee-code/` directory.
+VEEPEE Code stores its configuration in `~/.veepee-code/vcode.config.json`. (Earlier versions used `~/.veepee-code/.env`; on first launch, any existing `.env` is automatically migrated to JSON and renamed to `.env.backup`.) It also supports project-specific instruction files (VEEPEE.md) and stores persistent state in the `~/.veepee-code/` directory.
 
-## .env File Locations
+The setup wizard (`vcode --wizard`) is the easiest way to configure everything interactively. You can also edit the JSON file directly.
 
-VEEPEE Code checks for `.env` files in this order (first match wins):
+## Config File Location
 
-1. **Project-local** -- `.env` in the current working directory
-2. **Home directory** -- `~/.veepee-code/.env`
-3. **XDG config** -- `~/.config/veepee-code/.env`
-4. **Default dotenv** -- Standard dotenv file discovery
+```
+~/.veepee-code/vcode.config.json
+```
 
-> **Note:** Only one `.env` file is loaded. If you have a project-local `.env`, the global config is not merged in. Keep proxy settings in the global config and override only what you need locally.
+A starter file lives in the repo at `vcode.config.example.json`. Project-local overrides are not currently supported in the JSON-based config — settings live in one place per machine.
 
-## Environment Variables
+## Configuration Fields
+
+All fields below live in `~/.veepee-code/vcode.config.json`. Run `vcode --wizard` to set them interactively, or edit the file directly.
 
 ### Core (Required)
 
-| Variable | Default | Description |
+| Field | Default | Description |
 |----------|---------|-------------|
-| `VEEPEE_CODE_PROXY_URL` | `http://localhost:11434` | URL of your Ollama proxy or standalone Ollama instance. This is the only truly required setting. |
-| `VEEPEE_CODE_DASHBOARD_URL` | *(empty)* | URL of the Ollama Fleet Manager dashboard. Used for enhanced model discovery (loaded models, capabilities, server status). Optional -- VEEPEE Code works without it. |
+| `proxyUrl` | `http://localhost:11434` | URL of your Ollama proxy or standalone Ollama instance. The only truly required setting. |
+| `dashboardUrl` | `""` | URL of the Ollama Fleet Manager dashboard. Used for enhanced model discovery (loaded models, capabilities, server status). Optional. |
+| `fleet` | `[]` | Array of `{name, url}` objects pointing to individual Ollama servers. When non-empty, the benchmark hits each server directly instead of going through the proxy. Used by the `/benchmark` command and `scripts/benchmark.ts`. |
 
-### Model Preferences (Optional)
+### Model Preferences
 
-| Variable | Default | Description |
+| Field | Default | Description |
 |----------|---------|-------------|
-| `VEEPEE_CODE_MODEL` | *(auto-selected)* | Force a specific model as default (e.g., `qwen3.5:35b`). Overrides the automatic selection algorithm and the model roster. |
-| `VEEPEE_CODE_AUTO_SWITCH` | `true` | Enable automatic model switching based on task complexity. Set to `false` to lock to the selected model. |
-| `VEEPEE_CODE_MAX_MODEL_SIZE` | `40` | Maximum model parameter count in billions. Models larger than this are excluded from auto-selection and benchmark candidacy. |
-| `VEEPEE_CODE_MIN_MODEL_SIZE` | `6` | Minimum model parameter count in billions for act mode. Models smaller than this are skipped during auto-selection (prevents using tiny unreliable models for coding). |
-| `VEEPEE_CODE_MAX_TURNS` | `50` | Maximum number of agent loop iterations per user message. Each iteration can include LLM inference and tool execution. Prevents runaway loops. |
+| `model` | `null` | Force a specific model as default (e.g., `"qwen3.5:35b"`). Overrides the automatic selection algorithm and the model roster. |
+| `autoSwitch` | `true` | Enable automatic model switching based on task complexity in act mode. |
+| `maxModelSize` | `40` | Maximum model parameter count in billions. Models larger than this are excluded from auto-selection and benchmark candidacy. |
+| `minModelSize` | `12` | Minimum model parameter count in billions for act mode. Models smaller than this are skipped during auto-selection (prevents using tiny unreliable models for coding). |
+| `modelStick` | `false` | Lock the current model across mode switches and disable auto-switch. Toggleable at runtime via `/settings model_stick`. |
 
-### API Server (Optional)
+### API Server
 
-| Variable | Default | Description |
+| Field | Default | Description |
 |----------|---------|-------------|
-| `VEEPEE_CODE_API_PORT` | `8484` | Port for the OpenAI-compatible API server. If the port is in use, VEEPEE Code automatically tries the next port. |
-| `VEEPEE_CODE_API_HOST` | `127.0.0.1` | API bind address. Set to `0.0.0.0` to accept connections from other machines. |
-| `VEEPEE_CODE_API_TOKEN` | *(none)* | Bearer token for API authentication. When set, all API requests must include an `Authorization: Bearer <token>` header. Optional -- if unset, the API accepts unauthenticated requests (bind to localhost only for safety). |
-| `VEEPEE_CODE_API_EXECUTE` | `0` | Set to `1` to enable the `/api/execute` endpoint, which allows remote command execution via the API. Disabled by default for security. |
+| `apiPort` | `8484` | Port for the OpenAI-compatible API server. If the port is in use, VEEPEE Code automatically tries the next port. |
+| `apiHost` | `"127.0.0.1"` | API bind address. Set to `"0.0.0.0"` to accept connections from other machines. Automatically widened to `0.0.0.0` when Remote Connect is enabled (unless overridden via `--host`). |
+| `apiToken` | `null` | Bearer token for API authentication. When set, all API requests must include an `Authorization: Bearer <token>` header. **Required** when Remote Connect is enabled. |
+| `apiExecute` | `false` | Set to `true` to enable the `/api/execute` endpoint, which allows direct tool execution via the API (bypassing permissions). Disabled by default for safety. |
 
-### Home Assistant (Optional)
+### Web Search
 
-| Variable | Default | Description |
+| Field | Default | Description |
 |----------|---------|-------------|
-| `HA_URL` | *(none)* | Home Assistant base URL (e.g., `http://your-ha-server:8123`). |
-| `HA_TOKEN` | *(none)* | Long-lived access token from Home Assistant. Generate one at Settings > Security > Long-lived access tokens. |
+| `searxngUrl` | `null` | URL of your SearXNG instance (e.g., `"http://localhost:8888"`). SearXNG is a free, self-hosted metasearch engine. When set, enables the `web_search` tool. Without it, the agent can still use `web_fetch` and `http_request` for direct URL access. |
 
-Both `HA_URL` and `HA_TOKEN` must be set to enable the `home_assistant` and `timer` tools.
+### Remote Agent Bridge
 
-### Mastodon (Optional)
-
-| Variable | Default | Description |
+| Field | Default | Description |
 |----------|---------|-------------|
-| `MASTODON_URL` | *(none)* | Your Mastodon instance URL (e.g., `https://your-instance.social`). |
-| `MASTODON_TOKEN` | *(none)* | Mastodon access token with `read`, `write`, and `follow` scopes. Generate one at Preferences > Development > New application. |
+| `remote` | `null` | `{url, apiKey}` object pointing at a remote agent (e.g. [Llama Rider](https://github.com/vpontual/llama_rider)). On startup, VEEPEE Code fetches the remote agent's tool catalog from `${url}/dashboard/api/tools` (Bearer auth) and registers each tool as native. Local tools take priority — collisions are skipped. This is how integrations like Home Assistant, Mastodon, Spotify, Gmail, Calendar, Drive, Docs, Sheets, Tasks, news, weather, and timers are surfaced. |
 
-Both must be set to enable the `mastodon` tool.
+### Session Sync
 
-### Spotify (Optional)
-
-| Variable | Default | Description |
+| Field | Default | Description |
 |----------|---------|-------------|
-| `SPOTIFY_CLIENT_ID` | *(none)* | Spotify app client ID from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). |
-| `SPOTIFY_CLIENT_SECRET` | *(none)* | Spotify app client secret. |
-| `SPOTIFY_REFRESH_TOKEN` | *(none)* | OAuth2 refresh token. Obtain via the Authorization Code flow with `user-read-currently-playing`, `user-modify-playback-state`, `user-read-recently-played` scopes. |
+| `sync` | `null` | `{url, user, pass, auto}` object for WebDAV session sync (Nextcloud, ownCloud, etc.). When set, enables `/sync push|pull|auto|status` commands. `auto: true` pushes after `/save` and pulls before `/sessions`. Uses Node.js built-in `https`/`http` modules — no additional dependencies. |
 
-All three must be set to enable the `spotify` tool.
+### Remote Connect
 
-### Google Workspace (Optional)
-
-| Variable | Default | Description |
+| Field | Default | Description |
 |----------|---------|-------------|
-| `GOOGLE_CLIENT_ID` | *(none)* | Google OAuth2 client ID from the [Google Cloud Console](https://console.cloud.google.com/). |
-| `GOOGLE_CLIENT_SECRET` | *(none)* | Google OAuth2 client secret. |
-| `GOOGLE_REFRESH_TOKEN` | *(none)* | OAuth2 refresh token with Gmail, Calendar, Drive, Docs, Sheets, and Tasks scopes. |
+| `rc` | `null` | `{enabled: true}` enables the `/rc` web UI endpoints. When enabled, the API server binds to `0.0.0.0` instead of `127.0.0.1` so phones/LAN clients can reach it. **Requires `apiToken` to be set** for authentication. Access at `http://{your-ip}:{port}/rc`. |
 
-All three must be set to enable the `email`, `calendar`, `google_drive`, `google_docs`, `google_sheets`, and `notes` tools.
+### Observability
 
-Required OAuth scopes:
-- `https://www.googleapis.com/auth/gmail.modify`
-- `https://www.googleapis.com/auth/calendar`
-- `https://www.googleapis.com/auth/drive`
-- `https://www.googleapis.com/auth/documents`
-- `https://www.googleapis.com/auth/spreadsheets`
-- `https://www.googleapis.com/auth/tasks`
-
-### Web Search (Optional)
-
-| Variable | Default | Description |
+| Field | Default | Description |
 |----------|---------|-------------|
-| `SEARXNG_URL` | *(none)* | URL of your SearXNG instance (e.g., `http://localhost:8888`). SearXNG is a free, self-hosted metasearch engine. |
+| `langfuse` | `null` | `{secretKey, publicKey, host?}` to enable optional [Langfuse](https://langfuse.com) tracing. Each agent turn is logged as a trace + generation with model, mode, eval counts, tps, latency, and tool calls. Lazy-loaded — failures are silently swallowed and never affect the main loop. |
 
-Must be set to enable the `web_search` tool. Without it, the agent can still use `web_fetch` and `http_request` for direct URL access.
+### Misc
 
-### News (Optional)
-
-| Variable | Default | Description |
+| Field | Default | Description |
 |----------|---------|-------------|
-| `NEWSFEED_URL` | *(none)* | URL of the AI-optimized newsfeed API (e.g., `http://localhost:3333`). |
-
-Must be set to enable the `news` tool.
-
-### Session Sync (Optional)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VEEPEE_CODE_SYNC_URL` | *(none)* | WebDAV URL for session sync (e.g., `https://cloud.example.com/remote.php/dav/files/user/veepee-code/`). |
-| `VEEPEE_CODE_SYNC_USER` | *(none)* | WebDAV username. |
-| `VEEPEE_CODE_SYNC_PASS` | *(none)* | WebDAV password. |
-| `VEEPEE_CODE_SYNC_AUTO` | `false` | Enable auto-sync (push after `/save`, pull before `/sessions`). Set to `true` or `1`. |
-
-All three URL/user/pass must be set to enable the `/sync` commands. Uses Node.js built-in `https`/`http` modules — no additional dependencies.
-
-### Remote Connect (Optional)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VEEPEE_CODE_RC_ENABLED` | `0` | Set to `1` to enable the `/rc` web UI endpoints. When enabled, the API server binds to `0.0.0.0` instead of `127.0.0.1`. |
-
-Requires `VEEPEE_CODE_API_TOKEN` to be set for authentication. Access the web UI at `http://{your-ip}:{port}/rc`.
+| `progressBar` | `true` | Show the bouncing progress bar animation while the agent is working. Toggleable at runtime via `/settings progress-bar`. |
+| `shellHistoryContext` | `true` | Capture the last 20 unique commands from `~/.zsh_history` or `~/.bash_history` once on startup and inject them into the system prompt. Set to `false` to disable. |
 
 ## Example .env File
 
-The installer creates `~/.veepee-code/.env` with this template:
+The repo ships an example config at `vcode.config.example.json`:
 
-```bash
-# ─── Ollama Connection (required) ─────────────────────────────────────────────
-# Point to your Ollama server or Ollama Fleet Manager proxy
-VEEPEE_CODE_PROXY_URL=http://localhost:11434
-# VEEPEE_CODE_DASHBOARD_URL=  # Only if using Ollama Fleet Manager
-
-# ─── Model Preferences ────────────────────────────────────────────────────────
-VEEPEE_CODE_AUTO_SWITCH=true
-VEEPEE_CODE_MAX_MODEL_SIZE=40
-VEEPEE_CODE_MIN_MODEL_SIZE=6
-
-# ─── API Server ───────────────────────────────────────────────────────────────
-VEEPEE_CODE_API_PORT=8484
-# VEEPEE_CODE_API_HOST=127.0.0.1
-# VEEPEE_CODE_API_TOKEN=           # Bearer token for API auth (optional)
-# VEEPEE_CODE_API_EXECUTE=0        # Set to 1 to enable /api/execute
-
-# ─── Optional Integrations ────────────────────────────────────────────────────
-# Run /setup inside vcode to see which integrations are available.
-# Uncomment and fill in tokens for the ones you want.
-
-# Home Assistant
-# HA_URL=http://your-ha-server:8123
-# HA_TOKEN=
-
-# Mastodon
-# MASTODON_URL=https://your.mastodon.instance
-# MASTODON_TOKEN=
-
-# Spotify (https://developer.spotify.com/dashboard)
-# SPOTIFY_CLIENT_ID=
-# SPOTIFY_CLIENT_SECRET=
-# SPOTIFY_REFRESH_TOKEN=
-
-# Google Workspace (https://console.cloud.google.com)
-# GOOGLE_CLIENT_ID=
-# GOOGLE_CLIENT_SECRET=
-# GOOGLE_REFRESH_TOKEN=
-
-# SearXNG web search (https://docs.searxng.org)
-# SEARXNG_URL=http://localhost:8888
-
-# AI Newsfeed
-# NEWSFEED_URL=http://localhost:3333
-
-# ─── Session Sync (WebDAV) ──────────────────────────────────────────────────
-# VEEPEE_CODE_SYNC_URL=https://cloud.example.com/remote.php/dav/files/user/veepee-code/
-# VEEPEE_CODE_SYNC_USER=
-# VEEPEE_CODE_SYNC_PASS=
-# VEEPEE_CODE_SYNC_AUTO=false
-
-# ─── Remote Connect (Web UI) ────────────────────────────────────────────────
-# VEEPEE_CODE_RC_ENABLED=0     # Set to 1 to enable /rc web UI (binds to 0.0.0.0)
+```json
+{
+  "proxyUrl": "http://localhost:11434",
+  "dashboardUrl": "",
+  "autoSwitch": true,
+  "maxModelSize": 40,
+  "minModelSize": 12,
+  "apiPort": 8484,
+  "apiHost": "127.0.0.1",
+  "searxngUrl": null,
+  "fleet": [
+    { "name": "dgx-spark", "url": "http://10.0.154.246:11434" },
+    { "name": "orin-agx",  "url": "http://10.0.154.245:11434" },
+    { "name": "nano-1",    "url": "http://10.0.154.234:11434" }
+  ]
+}
 ```
+
+A fuller config with the optional fields might look like:
+
+```json
+{
+  "proxyUrl": "http://10.0.153.99:11434",
+  "dashboardUrl": "http://10.0.153.99:3334",
+  "model": null,
+  "autoSwitch": true,
+  "maxModelSize": 40,
+  "minModelSize": 12,
+  "apiPort": 8484,
+  "apiHost": "127.0.0.1",
+  "apiToken": "your-secret-token",
+  "apiExecute": false,
+  "searxngUrl": "http://localhost:8888",
+  "remote": {
+    "url": "http://10.0.153.99:8080",
+    "apiKey": "llama-rider-bearer-token"
+  },
+  "sync": {
+    "url": "https://cloud.example.com/remote.php/dav/files/user/veepee-code/",
+    "user": "vp",
+    "pass": "webdav-password",
+    "auto": true
+  },
+  "rc": { "enabled": true },
+  "langfuse": {
+    "secretKey": "sk-lf-...",
+    "publicKey": "pk-lf-...",
+    "host": "http://langfuse.example.com"
+  },
+  "progressBar": true,
+  "modelStick": false,
+  "shellHistoryContext": true,
+  "fleet": [
+    { "name": "dgx-spark", "url": "http://10.0.154.246:11434" },
+    { "name": "orin-agx",  "url": "http://10.0.154.245:11434" }
+  ]
+}
+```
+
+## Migration from .env
+
+Earlier VEEPEE Code versions used `~/.veepee-code/.env`. On first launch, `loadConfig()` calls `migrateEnvToJson()` which:
+
+1. Checks for `~/.veepee-code/.env`
+2. Parses the env vars (`VEEPEE_CODE_PROXY_URL`, `VEEPEE_CODE_DASHBOARD_URL`, `VEEPEE_CODE_MODEL`, `VEEPEE_CODE_AUTO_SWITCH`, `VEEPEE_CODE_MAX_MODEL_SIZE`, `VEEPEE_CODE_MIN_MODEL_SIZE`, `VEEPEE_CODE_API_PORT`, `VEEPEE_CODE_API_HOST`, `VEEPEE_CODE_API_TOKEN`, `VEEPEE_CODE_API_EXECUTE`, `SEARXNG_URL`, `VEEPEE_CODE_SYNC_*`, `VEEPEE_CODE_RC_ENABLED`, `VEEPEE_CODE_REMOTE_*`)
+3. Writes them to `vcode.config.json` in the new structured format
+4. Renames the old `.env` to `.env.backup`
+
+This is a one-time migration. New installs go straight to JSON.
 
 ## Directory Structure
 
@@ -195,43 +168,46 @@ The home directory stores persistent state:
 
 ```
 ~/.veepee-code/
-├── .env                    # Global config
-├── VEEPEE.md               # Global project instructions (loaded for all projects)
-├── permissions.json        # Persisted "always allow" tool permissions
+├── vcode.config.json       # Main configuration
+├── .env.backup             # (only if migrated from older versions)
+├── VEEPEE.md               # Optional global project instructions (loaded for all projects)
+├── .veepeignore            # Optional global ignore patterns
+├── permissions.json        # Persisted permissions: alwaysAllowed + projectAllowed
+├── capabilities.json       # Cached tool-calling probe results per model
+├── keybindings.json        # Optional user keybinding overrides
+├── output-styles/          # Optional output style/persona markdown files
+├── projects.json           # cwd → sessionId mapping for auto-resume
 ├── sessions/               # Saved conversation sessions
 │   ├── abc123-my-refactor.json
+│   ├── abc123-state.md     # Knowledge state for that session
 │   └── def456-auth-fix.json
-├── sandbox/                # Per-session scratch directories (auto-cleaned)
-│   └── {sessionId}/        # Temp files created by the AI
+├── sandbox/                # Per-session scratch directories (auto-cleaned after 24h)
+│   └── {sessionId}/
 └── benchmarks/
     ├── roster.json         # Model roster (best model per role)
     ├── latest.json         # Most recent benchmark results
     └── benchmark-2026-03-18T...json  # Timestamped benchmark history
 ```
 
-### ~/.config/veepee-code/
-
-XDG-compliant config location (alternative to `~/.veepee-code/.env`):
-
-```
-~/.config/veepee-code/
-└── .env                    # Global config (alternative location)
-```
-
 ### Project Directory
 
 ```
 your-project/
-├── .env                    # Project-local config (overrides global)
-└── VEEPEE.md               # Project-specific instructions
+├── VEEPEE.md               # Project-specific instructions (auto-added to .gitignore by /init)
+├── .veepeignore            # Optional project-specific ignore patterns
+├── .veepee/
+│   ├── plan.md             # Auto-saved implementation plan (survives compaction)
+│   └── ralph/              # Ralph engine state files
+└── .veepee-worktrees/      # Git worktrees created by /worktree (auto-added to .gitignore)
 ```
 
-## Config Precedence Summary
+## Precedence Summary
 
 | Setting | Precedence |
 |---------|------------|
-| `.env` file | Local `.env` > `~/.veepee-code/.env` > `~/.config/veepee-code/.env` > default dotenv |
-| `VEEPEE.md` | Workspace > Parent directories (up to 5 levels) > Global (`~/.veepee-code/VEEPEE.md`) |
-| Permissions | Persisted always-allow (`~/.veepee-code/permissions.json`) + session grants |
-| Benchmarks | Roster at `~/.veepee-code/benchmarks/roster.json`, results at `latest.json` |
-| Sessions | Stored at `~/.veepee-code/sessions/` as JSON files |
+| `vcode.config.json` | Single file at `~/.veepee-code/vcode.config.json`. CLI flags (`--host`, `--port`) override the corresponding fields at runtime. |
+| `VEEPEE.md` | Workspace > Parent directories (up to 5 levels) > Global (`~/.veepee-code/VEEPEE.md`) — all included with source annotations |
+| `.veepeignore` | Project `.veepeignore` is processed after global `~/.veepee-code/.veepeignore`. Default protected patterns (`.env`, `*.pem`, `*.key`, etc.) are always loaded first. Negation with `!pattern` re-allows. |
+| Permissions | Dangerous patterns (always prompt) → safe-tool allowlist (auto) → project-scoped (`tool:cwd`) → persisted always-allow → session grants → prompt |
+| Benchmarks | Roster at `~/.veepee-code/benchmarks/roster.json`, latest results at `latest.json`, full history as timestamped files |
+| Sessions | JSON files at `~/.veepee-code/sessions/` |

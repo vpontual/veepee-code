@@ -1,12 +1,16 @@
 ---
 title: "Terminal UI"
-description: "Full-screen TUI: layout, input handling, command palette, turn tracker, streaming, thinking display, and keyboard shortcuts."
+description: "Full-screen Ink-based TUI: layout, input handling, command palette, turn tracker, streaming, thinking display, and keyboard shortcuts."
 weight: 11
 ---
 
 # Terminal UI
 
-VEEPEE Code uses a full-screen alternate-buffer terminal interface inspired by Claude Code and OpenCode. The TUI manages the welcome screen, conversation view, input handling, command palette, streaming output, tool call visualization, and a live turn tracker.
+VEEPEE Code uses a full-screen alternate-buffer terminal interface inspired by Claude Code and OpenCode. The TUI is built on **[Ink](https://github.com/vadimdemedes/ink) (React for the terminal)** with a `useReducer`-based state store, backed by 16 React components in `src/tui/components/`. Raw stdin bypasses Ink's `useInput` for keystroke handling — the `TUI` class (`src/tui/index.ts`) is a thin imperative wrapper that dispatches reducer actions through a ref. This hybrid gives us the ergonomics of React components for layout and the low-level control of raw key events for the input box, command palette, and permission prompts.
+
+The TUI manages the welcome screen, conversation view, input handling, command palette, streaming output, tool call visualization, and a live turn tracker.
+
+> **Note:** The setup wizard (`vcode --wizard`) runs **before** Ink mounts, so it uses raw terminal escape codes directly via the `screen.ts` primitives. The main TUI does not.
 
 ## Screen Layout
 

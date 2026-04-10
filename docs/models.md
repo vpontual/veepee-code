@@ -61,12 +61,12 @@ Models are sorted by score descending. Before the first benchmark runs, the high
 
 ## Size Limits
 
-Two environment variables control which models are considered:
+Two fields in `vcode.config.json` control which models are considered:
 
-| Variable | Default | Description |
+| Field | Default | Description |
 |----------|---------|-------------|
-| `VEEPEE_CODE_MAX_MODEL_SIZE` | `40` | Maximum parameter count in billions. Models larger than this are excluded from auto-selection. |
-| `VEEPEE_CODE_MIN_MODEL_SIZE` | `6` | Minimum parameter count in billions. Models smaller than this are skipped for act mode (prevents using tiny unreliable models for coding). |
+| `maxModelSize` | `40` | Maximum parameter count in billions. Models larger than this are excluded from auto-selection. |
+| `minModelSize` | `12` | Minimum parameter count in billions. Models smaller than this are skipped for act mode (prevents using tiny unreliable models for coding). |
 
 These limits apply to both the initial model selection and benchmark candidacy. They do not prevent manual `/model <name>` switching.
 
@@ -129,7 +129,7 @@ Legend:
 
 ## Automatic Model Switching
 
-When `VEEPEE_CODE_AUTO_SWITCH=true` (the default), the agent monitors conversation signals and switches models when the task complexity changes. This only applies in act mode.
+When `autoSwitch: true` (the default in `vcode.config.json`), the agent monitors conversation signals and switches models when the task complexity changes. This only applies in act mode.
 
 ### Evaluation Timing
 
@@ -158,7 +158,7 @@ The context manager tracks these signals every turn:
 
 - **Minimum cooldown:** 3 turns between switches (prevents oscillation)
 - **Tool-calling required:** Only switches to models with tool-calling support
-- **Size limits respected:** Models outside `VEEPEE_CODE_MIN_MODEL_SIZE` / `VEEPEE_CODE_MAX_MODEL_SIZE` are excluded
+- **Size limits respected:** Models outside `minModelSize` / `maxModelSize` are excluded
 - **Fallback:** If no model in the target tier has tool support within size limits, stays on current model
 - **Plan/chat mode override:** Auto-switching is disabled in plan and chat modes (roster models are used instead)
 - **Manual override:** `/model <name>` disables auto-switching until `/model auto` re-enables it
