@@ -12,3 +12,13 @@ VEEPEE.md
 # Other AI agent harness working files
 .codex
 .veepee/
+
+# Runtime artifacts (sessions, benchmark runs, generated config)
+sessions/
+capabilities.json
+permissions.json
+vcode.config.json
+.env.backup
+benchmarks/benchmark-*.json
+benchmarks/latest.json
+benchmarks/roster.json
