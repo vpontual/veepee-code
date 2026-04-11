@@ -8,3 +8,7 @@ dist/
 # VEEPEE Code project instructions
 VEEPEE.md
 .vscode/
+
+# Other AI agent harness working files
+.codex
+.veepee/
