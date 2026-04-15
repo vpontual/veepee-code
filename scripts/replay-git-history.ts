@@ -141,7 +141,8 @@ function buildPrompt(commit: CommitRecord, fileContents: Record<string, string>)
     `# Current state of those files`,
     fileBlocks,
     ``,
-    `Produce the modified version of each file using the \`write_file\` tool.`,
+    `For each file that needs changes, call write_file with the FULL updated contents.`,
+    `Alternatively use edit_file for small targeted changes (unique substring replacement).`,
     `Do not invent new files. Do not modify files outside the list above.`,
     `The result must typecheck cleanly with \`tsc --noEmit\`.`,
     `Stop when finished — do not explain your changes, the diff is self-evident.`,
@@ -174,45 +175,85 @@ async function runCandidate(commit: CommitRecord, worktree: string, ollama: Olla
   const prompt = buildPrompt(commit, fileContents);
   const edited: string[] = [];
 
-  const response = await Promise.race([
-    ollama.chat({
-      model: CANDIDATE,
-      messages: [{ role: 'user', content: prompt }],
-      stream: false,
-      think: false as any,
-      options: { temperature: 0.1, num_predict: 4096, num_ctx: 16384 },
-      tools: [{
+  // Lessons from replay-one-untimed.ts (verified PASS on the same corpus):
+  //   - num_ctx:131072 so the model actually SEES the files in its prompt
+  //     — src/benchmark.ts alone is ~20k tokens; with a 16k cap the prompt
+  //     was silently truncated and the model hallucinated the edits.
+  //   - num_predict:-1 (unlimited) so the model can emit full rewrites of
+  //     large files when needed.
+  //   - Expose both write_file (full rewrite) and edit_file (unique
+  //     substring replace). Targeted edits are the right tool for a small
+  //     commit and take a fraction of the tokens of a full rewrite.
+  //   - No Promise.race timeout on the chat call. A 35B MoE at 25 tok/s
+  //     generating 4000 tokens is already 160s; with thinking preamble and
+  //     prompt eval on 20k+ tokens of context a single call can legitimately
+  //     take 4–6 minutes. The caller (or ollama keep_alive) will still
+  //     release resources if the process dies.
+  const response = await ollama.chat({
+    model: CANDIDATE,
+    messages: [{ role: 'user', content: prompt }],
+    stream: false,
+    think: false as any,
+    keep_alive: '30m',
+    options: { temperature: 0.1, num_predict: -1, num_ctx: 131072 },
+    tools: [
+      {
         type: 'function',
         function: {
           name: 'write_file',
-          description: 'Write the given content to a file in the repo',
+          description: 'Write the full updated contents of a file.',
+          parameters: {
+            type: 'object',
+            properties: { path: { type: 'string' }, content: { type: 'string' } },
+            required: ['path', 'content'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'edit_file',
+          description: 'Replace a unique substring in an existing file.',
           parameters: {
             type: 'object',
             properties: {
               path: { type: 'string' },
-              content: { type: 'string' },
+              old_string: { type: 'string' },
+              new_string: { type: 'string' },
             },
-            required: ['path', 'content'],
+            required: ['path', 'old_string', 'new_string'],
           },
         },
-      }],
-    }),
-    new Promise<never>((_, rej) => setTimeout(() => rej(new Error('candidate timeout')), TIMEOUT_MS)),
-  ]);
+      },
+    ],
+  });
 
   const toolCalls = (response as any).message?.tool_calls || [];
   for (const call of toolCalls) {
     const name = call.function?.name;
-    if (name !== 'write_file') continue;
-    const args = call.function.arguments;
-    const path = args?.path;
-    const content = args?.content;
-    if (!path || typeof content !== 'string') continue;
+    const args = call.function.arguments as Record<string, unknown>;
+    const path = String(args?.path || '');
+    if (!path) continue;
     // Refuse to write outside the allowed file set
     const rel = relative(worktree, join(worktree, path));
     if (rel.startsWith('..') || !commit.files_to_check.includes(path)) continue;
-    await writeFile(join(worktree, path), content, 'utf-8');
-    edited.push(path);
+    if (name === 'write_file') {
+      const content = args.content;
+      if (typeof content !== 'string') continue;
+      await writeFile(join(worktree, path), content, 'utf-8');
+      edited.push(path);
+    } else if (name === 'edit_file') {
+      const oldStr = String(args.old_string || '');
+      const newStr = String(args.new_string || '');
+      if (!oldStr) continue;
+      let before: string;
+      try { before = await readFile(join(worktree, path), 'utf-8'); }
+      catch { continue; }
+      const count = before.split(oldStr).length - 1;
+      if (count !== 1) continue;  // only accept unique-match edits
+      await writeFile(join(worktree, path), before.replace(oldStr, newStr), 'utf-8');
+      edited.push(path);
+    }
   }
   return { edited, errors: '' };
 }
