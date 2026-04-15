@@ -594,10 +594,17 @@ export class Benchmarker {
           messages: [{ role: 'user', content: test.prompt }],
           tools: test.tools as never,
           stream: true,
+          // think:false suppresses <think> scaffolding — thinking models would
+          // otherwise consume the num_predict budget before emitting content
+          // or tool_calls, producing empty responses that score 0 by accident.
+          // num_ctx:16384 caps KV preallocation so cross-model swaps between
+          // candidates don't stall for minutes on 131k/262k default contexts.
+          think: false as any,
           keep_alive: '30m',
           options: {
             num_predict: test.maxTokens ?? 512,
             temperature: 0.1, // low temp for reproducibility
+            num_ctx: 16384,
           },
         });
 
@@ -669,8 +676,11 @@ export class Benchmarker {
             messages: [{ role: 'user', content: rec.user_message }],
             tools: rec.tools as never,
             stream: false,
+            // Same think:false + num_ctx cap as main test loop — regression
+            // tests need to work on thinking-family models too.
+            think: false as any,
             keep_alive: '30m',
-            options: { num_predict: rec.maxTokens ?? 512, temperature: 0.1 },
+            options: { num_predict: rec.maxTokens ?? 512, temperature: 0.1, num_ctx: 16384 },
           });
           const responseText = resp.message.content || '';
           const toolCalls = (resp.message.tool_calls || []).map(tc => ({

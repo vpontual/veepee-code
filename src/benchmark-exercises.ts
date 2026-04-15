@@ -346,8 +346,14 @@ export async function runExercise(
         messages: messages as never,
         tools: EXERCISE_TOOLS as never,
         stream: false,
+        // think:false — without it, thinking models spend the 2048-token
+        // budget on <think> scaffolding and never emit the write_file tool
+        // calls the test expects. num_ctx:32768 accommodates 8 turns of
+        // accumulated history (user + assistant + tool results) without
+        // allocating the model's full native context on every load.
+        think: false as any,
         keep_alive: '30m',
-        options: { num_predict: 2048, temperature: 0.1 },
+        options: { num_predict: 2048, temperature: 0.1, num_ctx: 32768 },
       });
 
       const msg = resp.message;
@@ -529,8 +535,13 @@ export async function runMultiturnExercise(
           messages: messages as never,
           tools: EXERCISE_TOOLS as never,
           stream: false,
+          // Same think:false + 32k num_ctx as runExercise. Multi-turn
+          // sessions accumulate the most history in the whole benchmark —
+          // N outer turns × up to MAX_TURNS inner agent turns × (user +
+          // assistant + tool) messages. 32k is a practical ceiling.
+          think: false as any,
           keep_alive: '30m',
-          options: { num_predict: 2048, temperature: 0.1 },
+          options: { num_predict: 2048, temperature: 0.1, num_ctx: 32768 },
         });
         const msg = resp.message;
         messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls });
