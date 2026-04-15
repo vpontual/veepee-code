@@ -921,18 +921,37 @@ export class Benchmarker {
    * Returns 0 if the model fails to respond.
    */
   private async measureTps(modelName: string, ollamaOverride?: Ollama): Promise<number> {
+    // Two-stage: (1) preload the model into VRAM with a tiny throwaway call,
+    // (2) measure steady-state tok/s on a real prompt. Without the preload
+    // step the first call eats cold-load overhead that skews the measurement
+    // on initial model loads. Also passes `think: false` and gives 120 tokens
+    // of headroom — thinking-family models need room past their reasoning
+    // preamble before emitting actual content. This is the same pattern
+    // Llama Rider's warmup_model uses after extensive calibration.
     try {
       const client = ollamaOverride ?? this.ollama;
-      const start = Date.now();
+
+      // Stage 1 — preload. Discard output; we only want the model in VRAM.
+      await client.chat({
+        model: modelName,
+        messages: [{ role: 'user', content: 'Hi' }],
+        stream: false,
+        think: false as any,
+        keep_alive: '30m',
+        options: { num_predict: 1, temperature: 0 },
+      });
+
+      // Stage 2 — steady-state measurement. Model is resident; tok/s reflects
+      // real generation speed, not load+generate mixed together.
       let tokenCount = 0;
       let genStart = 0;
-
       const stream = await client.chat({
         model: modelName,
         messages: [{ role: 'user', content: 'Count from 1 to 60, one number per line.' }],
         stream: true,
+        think: false as any,
         keep_alive: '30m',
-        options: { num_predict: 60, temperature: 0 },
+        options: { num_predict: 120, temperature: 0 },
       });
 
       for await (const chunk of stream) {
