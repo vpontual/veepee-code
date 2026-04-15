@@ -4,11 +4,23 @@ Tracking issues discovered while running the benchmark that we deliberately defe
 
 ## Open
 
-### vcode's tool-support detector rejects models Llama Rider confirmed as tool-capable
+(none)
+
+## Resolved
+
+### ✅ vcode's tool-support detector rejects models Llama Rider confirmed as tool-capable
 
 **First observed:** 2026-04-15, during the first full DGX Spark benchmark run.
 
-**What happened:** `scripts/benchmark.ts --server dgx-spark --force` rejected `gemma4:26b` and `qwen3.5:122b` at the tool-support phase with `no tool support — skipping`. Both models score highly on tool calling in the sibling Llama Rider benchmark (gemma4:26b = 100/100 on tool calling there) hitting the same Ollama proxy, so this is a false negative specific to vcode's detector — not an actual model limitation.
+**What happened:** `scripts/benchmark.ts --server dgx-spark --force` rejected 12 of 26 DGX models at the tool-support phase with `no tool support — skipping`. Scope of the false-negative set:
+
+Rejected (tool-capable per Llama Rider's same-proxy check): `glm-4.7-flash`, `gemma4:26b`, `gemma4:31b`, `qwen3.5:122b`, **`qwen3.5:35b`** (Llama Rider's current production model), `qwen3.5:9b`, `qwen3-next:80b`, `qwen3:8b`, `nemotron-3-super:120b`.
+
+Rejected (genuinely no tool support or non-chat models): `deepseek-r1:32b`, `gemma3:4b`, `qwen2.5-coder:7b-instruct`.
+
+Passed: `command-r:35b`, `mistral-small3.2:24b`, `qwen2.5:32b`, `qwen2.5:14b`, `gpt-oss:20b`, `gpt-oss:120b`, `qwen3-coder-next:tools`, `qwen3-coder-next:latest`, `llama3.2:3b`, `llama4:latest`.
+
+The pattern: thinking-family models (`qwen3.5:*`, `qwen3:*`, `qwen3-next`, `gemma4:*`) are the systematic false-negatives. Their probe responses need more tokens before the tool call emerges, or the detector isn't tolerating the `<think>...</think>` scaffolding that precedes their tool output.
 
 **Why it matters:** These are two of the strongest candidates for the `code` / `act` roles on the DGX. Filtering them out before scoring means the benchmark silently excludes models that might rank at or near the top. Current vcode roster selection is biased toward whatever subset of the fleet passes this one check.
 
@@ -26,8 +38,4 @@ Tracking issues discovered while running the benchmark that we deliberately defe
 
 **Do not fix while a benchmark is running** — changing the detector invalidates any in-progress results and we'd have to rerun everything.
 
----
-
-## Resolved
-
-(nothing yet)
+**Fix shipped:** commit `5961fdb` (2026-04-15) — ported the Llama Rider detector shape directly. Verified on DGX against all three of qwen3.5:35b, gemma4:26b, qwen3-coder-next — all now return `tool_calls` on first try. A scratch probe script at `scripts/probe-tool-support.ts` (not committed) was used to verify before running the full benchmark.
