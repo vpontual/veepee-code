@@ -907,7 +907,12 @@ export class Benchmarker {
         }],
         think: false as any,  // suppress <think> scaffolding on thinking models
         keep_alive: '30m',
-        options: { num_predict: 512, temperature: 0 },
+        // Cap num_ctx at 8k for the probe. Ollama's default is the model's
+        // native max context (262k for gemma4, 131k for qwen3.5), which
+        // preallocates gigabytes of KV cache on load — that alone can take
+        // minutes to allocate when switching between candidates. A probe
+        // only needs room for a ~50-token prompt and a ~50-token tool call.
+        options: { num_predict: 512, temperature: 0, num_ctx: 8192 },
       });
       const response = await Promise.race([
         chatPromise,
@@ -936,13 +941,16 @@ export class Benchmarker {
       const client = ollamaOverride ?? this.ollama;
 
       // Stage 1 — preload. Discard output; we only want the model in VRAM.
+      // num_ctx:8192 keeps the KV cache preallocation small so loading a
+      // different candidate after another is resident doesn't take minutes
+      // of memory allocation for an unused 262k context window.
       await client.chat({
         model: modelName,
         messages: [{ role: 'user', content: 'Hi' }],
         stream: false,
         think: false as any,
         keep_alive: '30m',
-        options: { num_predict: 1, temperature: 0 },
+        options: { num_predict: 1, temperature: 0, num_ctx: 8192 },
       });
 
       // Stage 2 — steady-state measurement. Model is resident; tok/s reflects
@@ -955,7 +963,7 @@ export class Benchmarker {
         stream: true,
         think: false as any,
         keep_alive: '30m',
-        options: { num_predict: 120, temperature: 0 },
+        options: { num_predict: 120, temperature: 0, num_ctx: 8192 },
       });
 
       for await (const chunk of stream) {
