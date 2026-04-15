@@ -1,0 +1,9 @@
+{
+  "note": "Deliberately-weak models. If any of these rank in the top 3 of a benchmark run, the benchmark is not discriminating. See docs/benchmark-improvement-plan.md §P5.",
+  "models": [
+    "llama3.2:1b",
+    "qwen3:0.6b",
+    "smollm2:135m",
+    "smollm:135m"
+  ]
+}

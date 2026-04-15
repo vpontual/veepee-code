@@ -1,0 +1,5 @@
+{
+  "language": "typescript",
+  "timeout_ms": 180000,
+  "description": "Incremental feature addition. Models that ace single-turn often clobber earlier features on turn 2/3."
+}

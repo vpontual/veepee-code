@@ -77,13 +77,31 @@ describe('Benchmarker.buildRoster', () => {
     expect(roster.search).toBe('small-fast'); // speed * 8 + tool calling
   });
 
-  it('falls back to act model for all roles with single model', () => {
-    const results = [makeResult({ model: 'only-model', overall: 80 })];
+  it('falls back to act model for all roles with single fast-enough model', () => {
+    // P6: chat/search need ≥15 tok/s — give the single model 20 so it qualifies.
+    const results = [makeResult({
+      model: 'only-model',
+      overall: 80,
+      performance: { avgLatencyMs: 500, tokensPerSecond: 20, timeToFirstToken: 100 },
+    })];
     const roster = Benchmarker.buildRoster(results);
     expect(roster.act).toBe('only-model');
     expect(roster.plan).toBe('only-model');
     expect(roster.chat).toBe('only-model');
     expect(roster.code).toBe('only-model');
     expect(roster.search).toBe('only-model');
+  });
+
+  it('leaves chat/search null when no model clears the 15 tok/s floor (P6)', () => {
+    const results = [makeResult({
+      model: 'slow-only',
+      overall: 85,
+      performance: { avgLatencyMs: 2000, tokensPerSecond: 10, timeToFirstToken: 500 },
+    })];
+    const roster = Benchmarker.buildRoster(results);
+    expect(roster.act).toBe('slow-only');   // act floor is 10 — just clears
+    expect(roster.code).toBe('slow-only');  // code floor is 10 — just clears
+    expect(roster.chat).toBeNull();         // no model ≥15 tok/s
+    expect(roster.search).toBeNull();       // no model ≥15 tok/s
   });
 });

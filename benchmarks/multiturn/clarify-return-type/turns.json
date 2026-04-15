@@ -1,0 +1,7 @@
+{
+  "description": "Return-type clarification mid-stream — requires re-wrapping existing logic.",
+  "turns": [
+    "Create `solution.ts` exporting `parseInt10(s: string): number` that parses a base-10 integer. Throw `new Error('invalid')` on bad input. Use write_file.",
+    "Actually, change the return type to a Result type: `type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }`. Rework the function to return `Result<number, string>` instead of throwing. Export both `parseInt10` and the `Result` type."
+  ]
+}

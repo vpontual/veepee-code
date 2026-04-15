@@ -183,7 +183,9 @@ Any Ollama model with tool-calling support. The built-in benchmark automatically
 
 ### Benchmark results
 
-Results from a full fleet benchmark (2026-04-04). The benchmark runs 12 tests across 5 categories: tool calling (30%), code generation (25%), code editing (15%), instruction following (15%), reasoning (15%). Models below 8 tok/s or without tool support are filtered out automatically.
+> **Note (2026-04-14):** the benchmark was overhauled — code generation is now scored by **real vitest pass rate** on exercises in `benchmarks/exercises/`, code editing by **multi-turn edit sessions** in `benchmarks/multiturn/`, plus a hallucinated-tool gate, triple-weighted regression tests, a 15 tok/s floor for interactive roles, and a negative-control discrimination check. The table below is from the **old** keyword-based scorer and is retained only as a historical snapshot. See [`docs/benchmark.md`](docs/benchmark.md) for the new methodology and [`docs/benchmark-improvement-plan.md`](docs/benchmark-improvement-plan.md) for the rationale.
+
+Historical results from 2026-04-04. Weights: tool calling (30%), code generation (25%), code editing (15%), instruction following (15%), reasoning (15%). Models below 8 tok/s or without tool support are filtered out automatically.
 
 | Model | Server | Overall | Tools | CodeGen | Edit | Follow | Reason | tok/s |
 |---|---|---|---|---|---|---|---|---|

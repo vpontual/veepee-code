@@ -1,0 +1,7 @@
+{
+  "description": "Write a function, then refactor by extracting a helper without changing external behavior.",
+  "turns": [
+    "Create `solution.ts` that exports a function `formatUser(user: { firstName: string; lastName: string; email: string }): string` that returns a string like `'Jane Doe <jane@example.com>'`. Use write_file.",
+    "Refactor the code: extract a helper function `fullName(user: { firstName: string; lastName: string }): string` that returns `'Jane Doe'`. Have `formatUser` call it. Export both `fullName` and `formatUser` as named exports. Behavior of `formatUser` must not change."
+  ]
+}

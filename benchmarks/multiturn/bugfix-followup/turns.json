@@ -1,0 +1,7 @@
+{
+  "description": "Write a function, then fix a specific bug introduced by the first turn.",
+  "turns": [
+    "Create `solution.ts` that exports `sum(nums: number[]): number` which returns the sum of the array. Use a for-loop implementation. Use write_file.",
+    "There's a bug: `sum([])` should return 0, but your implementation may return NaN or throw. Also, `sum` should reject non-number items by skipping them (don't throw, just skip). Fix both issues. The public signature stays `sum(nums: number[]): number`."
+  ]
+}

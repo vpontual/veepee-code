@@ -1,0 +1,5 @@
+{
+  "language": "typescript",
+  "timeout_ms": 120000,
+  "description": "Classic pointer manipulation — O(n)/O(1) linked list reversal."
+}

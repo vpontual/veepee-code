@@ -1,0 +1,7 @@
+{
+  "description": "Cross-file edit: write a solution, then add a test file that imports from it.",
+  "turns": [
+    "Create `solution.ts` that exports `capitalize(s: string): string` — returns the string with the first character uppercased, rest unchanged. `capitalize('')` returns ''. Use write_file.",
+    "Now create a second file `lib.ts` that exports a function `titleCase(s: string): string` that splits the input on single spaces and applies `capitalize` from `./solution.js` to each word, then rejoins. Use the existing `capitalize` — do NOT reimplement it. Import using `import { capitalize } from './solution.js'`."
+  ]
+}

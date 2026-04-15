@@ -1,0 +1,5 @@
+{
+  "language": "typescript",
+  "timeout_ms": 120000,
+  "description": "Debounce with fake-timer behavior — tests async reasoning + closure state."
+}

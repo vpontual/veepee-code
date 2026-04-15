@@ -1,0 +1,1 @@
+{"language":"typescript","timeout_ms":180000,"description":"Clarification turn: switch from throws to Result<T,E>."}

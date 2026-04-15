@@ -1,0 +1,8 @@
+{
+  "description": "Three turns of incremental feature addition. Later turns must not break earlier features.",
+  "turns": [
+    "Create a file `solution.ts` that exports a class `Calculator` with methods `add(a: number, b: number): number` and `subtract(a: number, b: number): number`. Use the write_file tool.",
+    "Now add a `multiply(a: number, b: number): number` method to the Calculator class. Use edit_file to modify the existing file — do NOT overwrite it.",
+    "Make `add(a, b)` null-safe: if either argument is null or undefined, treat it as 0. The existing return type `number` should remain — adjust the parameter types as needed. Keep all other methods intact."
+  ]
+}

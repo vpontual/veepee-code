@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-04-14T23:03:05.510Z",
+  "generated_by": "scripts/generate-tool-registry.ts",
+  "note": "Built-in tool names scraped from src/tools/. Regenerate after adding/renaming tools.",
+  "tools": [
+    "bash",
+    "docker",
+    "edit_file",
+    "git",
+    "github",
+    "glob",
+    "grep",
+    "http_request",
+    "list_files",
+    "read_file",
+    "system_info",
+    "update_memory",
+    "web_fetch",
+    "web_search",
+    "write_file"
+  ],
+  "sources": {
+    "coding.ts": [
+      "read_file",
+      "write_file",
+      "edit_file",
+      "glob",
+      "grep",
+      "bash",
+      "git",
+      "github",
+      "list_files",
+      "update_memory"
+    ],
+    "devops.ts": [
+      "docker",
+      "system_info"
+    ],
+    "web.ts": [
+      "web_fetch",
+      "http_request",
+      "web_search"
+    ]
+  }
+}
