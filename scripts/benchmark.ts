@@ -90,6 +90,7 @@ async function main() {
     skipContextProbing: true,
     skipExisting: !force,
     minTps,
+    modelNames: specificModels ? new Set(specificModels) : undefined,
     onProgress: (model, test, mi, mt, ti, tt) => {
       process.stdout.write(`\r  [${mi}/${mt}] ${model} — ${test} (${ti}/${tt})                    `);
     },

@@ -133,22 +133,61 @@ npx tsx scripts/generate-tool-registry.ts
 
 Run after adding, renaming, or removing any tool in `src/tools/`.
 
-## Replay corpus (P2)
+## Real-world test sources
 
-The only thing that reliably predicts production. Use it before promoting a model.
+Three complementary ground-truth sources, in order of increasing repo-specificity. Run all three before promoting.
+
+### Source A — Aider polyglot-benchmark (industry-standard execution tests)
+
+One-time import of TypeScript problems from [Aider's polyglot-benchmark](https://github.com/Aider-AI/polyglot-benchmark) (Apache 2.0, ~225 problems with real vitest suites). After import, the exercises loader in `src/benchmark-exercises.ts` picks them up automatically alongside the hand-written seed set — Aider entries are name-prefixed `aider-*` to avoid collisions.
 
 ```sh
-# 1. Extract real sessions into benchmarks/corpus/latest.jsonl
+# One-time import (rerun to refresh)
+git clone https://github.com/Aider-AI/polyglot-benchmark /tmp/polyglot-benchmark
+npx tsx scripts/fetch-aider-polyglot.ts --limit 50
+# Imported problems now live in benchmarks/exercises-aider/ and run with every benchmark invocation.
+```
+
+### Source B — Session-replay corpus (P2)
+
+Real user sessions from `~/.veepee-code/sessions/`, judged by a strong local model on a 4-item binary rubric. Only reliable predictor of conversational quality regressions.
+
+```sh
+# Extract corpus from sessions
 npx tsx scripts/extract-corpus.ts --limit 50
 
-# 2. Replay against a candidate, judge with a strong local model, dump report
+# Replay against a candidate
 npx tsx scripts/replay-corpus.ts \
   --candidate qwen3-coder:30b \
   --judge gpt-oss:120b \
   --proxy http://10.0.153.99:11434
 ```
 
-The judge grades each sample on a 4-item binary rubric (usable / real_tools / addressed_intent / no_fabrication). The script exits non-zero if pass rate falls below 80%, making it usable as a promotion gate in CI.
+Rubric items (all binary pass/fail): usable output / real_tools / addressed_intent / no_fabrication. Exits non-zero if pass rate < 80%.
+
+### Source C — Git-history replay (repo-specific ground truth)
+
+Every accepted commit is ground truth. The commit message is the user intent that was in someone's head; the diff is what actually shipped. A model that can reproduce that transformation on your specific codebase is adapted to your style and conventions — not just generic benchmark problems.
+
+```sh
+# Extract commit corpus (filters to source-code commits of ≤4 files, not merges)
+npx tsx scripts/extract-git-history.ts --limit 40
+
+# Replay against candidate — worktree checkout + typecheck verdict per commit
+npx tsx scripts/replay-git-history.ts \
+  --candidate qwen3-coder:30b \
+  --proxy http://10.0.153.99:11434
+```
+
+Verdict per commit: `PASS` (typechecks after candidate edits) / `COMPILE` (edits don't typecheck) / `NOOP` (candidate didn't edit anything) / `ERROR` (timeout or crash). Exits non-zero if pass rate < 50%.
+
+### Running all gates in one shot
+
+```sh
+npx tsx scripts/run-all-gates.ts --candidate qwen3-coder:30b
+```
+
+Chains: main benchmark → Source B replay → Source C replay. Any gate failure kills the chain (unless `--continue-on-fail`). Combined verdict JSON lands in `benchmarks/gates/<model>-<date>.json`. Exit code is 0 only if every run gate passes. This is the single command to run before proposing any model switch.
 
 ## Predictions (P5)
 
@@ -181,10 +220,13 @@ Do NOT promote a model based on aggregate benchmark score alone. Required gates:
 
 1. Clears all per-role speed floors for the intended role
 2. No hallucinated-tool calls in the benchmark
-3. Passes ≥ 80% of the replay corpus (P2)
-4. Passes all seeded regressions (P4)
-5. Predictions-vs-actual miss rate ≤ 30%
-6. Does NOT tie at 100/100 with another candidate — if it does, add a harder test (P7) and re-run
+3. Passes ≥ 80% of the session-replay corpus (Source B)
+4. Passes ≥ 50% of git-history replay (Source C)
+5. Passes all seeded regressions (P4)
+6. Predictions-vs-actual miss rate ≤ 30%
+7. Does NOT tie at 100/100 with another candidate — if it does, add a harder test (P7) and re-run
+
+The single command that checks most of these: `npx tsx scripts/run-all-gates.ts --candidate <model>`.
 
 ## Success criteria for the whole benchmark
 

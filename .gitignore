@@ -22,3 +22,10 @@ vcode.config.json
 benchmarks/benchmark-*.json
 benchmarks/latest.json
 benchmarks/roster.json
+
+# Benchmark runtime artifacts
+benchmarks/scratch/
+benchmarks/exercises-aider/
+benchmarks/git-corpus/
+benchmarks/gates/
+benchmarks/corpus/

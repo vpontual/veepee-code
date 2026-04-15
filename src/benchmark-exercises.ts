@@ -40,6 +40,10 @@ function findRepoRoot(): string {
 }
 const REPO_ROOT = findRepoRoot();
 const EXERCISES_DIR = resolve(REPO_ROOT, 'benchmarks', 'exercises');
+/** Second exercise source populated by scripts/fetch-aider-polyglot.ts.
+ *  Optional — only used if the directory exists.  Names are prefixed so they
+ *  don't collide with seed exercises of the same slug. */
+const EXERCISES_AIDER_DIR = resolve(REPO_ROOT, 'benchmarks', 'exercises-aider');
 const MULTITURN_DIR = resolve(REPO_ROOT, 'benchmarks', 'multiturn');
 const SCRATCH_ROOT = resolve(REPO_ROOT, 'benchmarks', 'scratch');
 
@@ -73,36 +77,49 @@ export interface ExerciseSuiteResult {
   results: ExerciseResult[];
 }
 
-/** Load all exercises from benchmarks/exercises/ */
+/** Load all exercises. Reads benchmarks/exercises/ (hand-written seed set,
+ *  canonical) plus benchmarks/exercises-aider/ (imported from Aider's
+ *  polyglot-benchmark, populated by scripts/fetch-aider-polyglot.ts).
+ *  Aider-imported entries are prefixed with "aider-" to avoid name collisions. */
 export async function loadExercises(): Promise<Exercise[]> {
-  if (!existsSync(EXERCISES_DIR)) return [];
-  const entries = await readdir(EXERCISES_DIR, { withFileTypes: true });
   const out: Exercise[] = [];
-  for (const e of entries) {
-    if (!e.isDirectory()) continue;
-    const dir = resolve(EXERCISES_DIR, e.name);
-    const problemPath = resolve(dir, 'problem.md');
-    const testPath = resolve(dir, 'expected.test.ts');
-    const metaPath = resolve(dir, 'metadata.json');
-    const starterPath = resolve(dir, 'starter.ts');
-    if (!existsSync(problemPath) || !existsSync(testPath)) continue;
 
-    let timeoutMs = DEFAULT_TIMEOUT_MS;
-    if (existsSync(metaPath)) {
-      try {
-        const meta = JSON.parse(await readFile(metaPath, 'utf-8')) as { timeout_ms?: number };
-        if (typeof meta.timeout_ms === 'number') timeoutMs = meta.timeout_ms;
-      } catch { /* ignore */ }
+  const sources: Array<{ dir: string; prefix: string }> = [
+    { dir: EXERCISES_DIR, prefix: '' },
+    { dir: EXERCISES_AIDER_DIR, prefix: 'aider-' },
+  ];
+
+  for (const src of sources) {
+    if (!existsSync(src.dir)) continue;
+    const entries = await readdir(src.dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const dir = resolve(src.dir, e.name);
+      const problemPath = resolve(dir, 'problem.md');
+      const testPath = resolve(dir, 'expected.test.ts');
+      const metaPath = resolve(dir, 'metadata.json');
+      // Seed convention uses starter.ts; Aider import uses solution.ts. Accept either.
+      const starterCandidates = [resolve(dir, 'starter.ts'), resolve(dir, 'solution.ts')];
+      const starterPath = starterCandidates.find(p => existsSync(p)) ?? null;
+      if (!existsSync(problemPath) || !existsSync(testPath)) continue;
+
+      let timeoutMs = DEFAULT_TIMEOUT_MS;
+      if (existsSync(metaPath)) {
+        try {
+          const meta = JSON.parse(await readFile(metaPath, 'utf-8')) as { timeout_ms?: number };
+          if (typeof meta.timeout_ms === 'number') timeoutMs = meta.timeout_ms;
+        } catch { /* ignore */ }
+      }
+
+      out.push({
+        name: `${src.prefix}${e.name}`,
+        problem: await readFile(problemPath, 'utf-8'),
+        starterPath,
+        testPath,
+        dir,
+        timeoutMs,
+      });
     }
-
-    out.push({
-      name: e.name,
-      problem: await readFile(problemPath, 'utf-8'),
-      starterPath: existsSync(starterPath) ? starterPath : null,
-      testPath,
-      dir,
-      timeoutMs,
-    });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;

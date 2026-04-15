@@ -950,6 +950,8 @@ export class Benchmarker {
       skipExisting?: boolean;
       /** Minimum tok/s a model must sustain to proceed to full benchmark (default: 0 = no filter) */
       minTps?: number;
+      /** If set, only benchmark models whose name appears in this list (applies to BOTH proxy and fleet paths). */
+      modelNames?: Set<string>;
       onProgress?: (model: string, test: string, modelIdx: number, totalModels: number, testIdx: number, totalTests: number) => void;
       /** Called for phase-level status updates (tool-check, skip notices, etc.) */
       onStatusUpdate?: (message: string) => void;
@@ -1027,6 +1029,10 @@ export class Benchmarker {
         // Apply tier filter
         if (options.filter) {
           serverCandidates = serverCandidates.filter(m => m.tier === options.filter);
+        }
+        // Apply --models filter (must work in fleet path too)
+        if (options.modelNames && options.modelNames.size > 0) {
+          serverCandidates = serverCandidates.filter(m => options.modelNames!.has(m.name));
         }
 
         // Skip already-benchmarked on this server
