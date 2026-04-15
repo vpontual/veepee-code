@@ -878,11 +878,17 @@ export class Benchmarker {
    * More reliable than trusting ModelProfile.capabilities metadata.
    */
   private async checkToolSupport(modelName: string, ollamaOverride?: Ollama): Promise<boolean> {
+    // Probe with a 512-token budget and `think: false`. Thinking-family models
+    // (qwen3.5:*, qwen3-next, gemma4:*) need ~200-400 tokens of reasoning before
+    // emitting the actual tool call. The prior 64-token budget truncated them
+    // mid-thought and produced false negatives — see docs/benchmark-followups.md.
+    // 180s ceiling so a single slow/stuck probe can't wedge the whole benchmark.
     try {
       const client = ollamaOverride ?? this.ollama;
-      const response = await client.chat({
+      const PROBE_TIMEOUT_MS = 180_000;
+      const chatPromise = client.chat({
         model: modelName,
-        messages: [{ role: 'user', content: "What's the weather in Miami?" }],
+        messages: [{ role: 'user', content: "What's the weather in Paris?" }],
         tools: [{
           type: 'function',
           function: {
@@ -895,9 +901,14 @@ export class Benchmarker {
             },
           },
         }],
+        think: false as any,  // suppress <think> scaffolding on thinking models
         keep_alive: '30m',
-        options: { num_predict: 64, temperature: 0 },
+        options: { num_predict: 512, temperature: 0 },
       });
+      const response = await Promise.race([
+        chatPromise,
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('probe timeout')), PROBE_TIMEOUT_MS)),
+      ]);
       return !!(response.message.tool_calls && response.message.tool_calls.length > 0);
     } catch {
       return false;
