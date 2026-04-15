@@ -885,7 +885,11 @@ export class Benchmarker {
     // 180s ceiling so a single slow/stuck probe can't wedge the whole benchmark.
     try {
       const client = ollamaOverride ?? this.ollama;
-      const PROBE_TIMEOUT_MS = 180_000;
+      // 5 min gives room for model eviction + cold load when the server is
+      // switching between candidates. 35B MoEs can take 30-60s to load after
+      // another model is evicted; add probe generation time and 180s was too
+      // tight. Probe still caps a genuinely wedged call.
+      const PROBE_TIMEOUT_MS = 300_000;
       const chatPromise = client.chat({
         model: modelName,
         messages: [{ role: 'user', content: "What's the weather in Paris?" }],
