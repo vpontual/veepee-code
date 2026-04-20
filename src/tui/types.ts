@@ -103,6 +103,7 @@ export type AppAction =
   | { type: 'START_STREAM' }
   | { type: 'APPEND_STREAM'; text: string }
   | { type: 'END_STREAM' }
+  | { type: 'RESET_STREAM' }
   | { type: 'SET_PROGRESS_BAR_ACTIVE'; active: boolean }
   | { type: 'SET_TURN_TRACKER'; tracker: TurnTracker | null }
   | { type: 'UPDATE_TOOL_CALL'; name: string; status: 'running' | 'done' | 'error'; elapsed?: number; tokensEstimate?: number }

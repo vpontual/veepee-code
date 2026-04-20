@@ -214,3 +214,112 @@ describe('Agent exports', () => {
     expect(typeof mod.Agent).toBe('function');
   });
 });
+
+// --- <think> stream-processing logic ---
+// Reproduces the agent's per-chunk processing so we can verify the orphan
+// </think> path (Qwen3.6 via vLLM without a reasoning parser emits reasoning
+// as plain content and closes with a bare </think> before the answer). Keep
+// in sync with the real logic in src/agent.ts.
+
+type Event = { type: string; content?: string };
+
+function* processStream(chunks: string[]): Generator<Event> {
+  let inThinking = false;
+  let thinkingBuffer = '';
+  let fullContent = '';
+
+  for (const text of chunks) {
+    if (!text) continue;
+    fullContent += text;
+
+    if (!inThinking && text.includes('<think>')) {
+      inThinking = true;
+      const before = text.split('<think>')[0];
+      if (before) yield { type: 'text', content: before };
+      thinkingBuffer = text.split('<think>').slice(1).join('<think>');
+      yield { type: 'thinking', content: '...' };
+      continue;
+    }
+
+    if (!inThinking && text.includes('</think>')) {
+      const parts = text.split('</think>');
+      const beforeClose = parts[0];
+      const afterClose = parts.slice(1).join('</think>');
+      const streamedBefore = fullContent.slice(0, fullContent.length - text.length);
+      const reasoningText = (streamedBefore + beforeClose).trim();
+
+      yield { type: 'reset_stream' };
+      if (reasoningText) yield { type: 'thinking', content: reasoningText };
+      if (afterClose) yield { type: 'text', content: afterClose };
+      continue;
+    }
+
+    if (inThinking) {
+      if (text.includes('</think>')) {
+        const parts = text.split('</think>');
+        thinkingBuffer += parts[0];
+        inThinking = false;
+        yield { type: 'thinking', content: thinkingBuffer.trim() };
+        thinkingBuffer = '';
+        const after = parts.slice(1).join('</think>');
+        if (after) yield { type: 'text', content: after };
+      } else {
+        thinkingBuffer += text;
+      }
+      continue;
+    }
+
+    yield { type: 'text', content: text };
+  }
+}
+
+describe('Agent <think>-tag stream processing', () => {
+  it('plain text without any think tags streams through unchanged', () => {
+    const events = [...processStream(['Hello ', 'world!'])];
+    expect(events).toEqual([
+      { type: 'text', content: 'Hello ' },
+      { type: 'text', content: 'world!' },
+    ]);
+  });
+
+  it('paired <think>...</think> across chunks is captured as thinking and stripped from text', () => {
+    // Streaming: tags typically arrive separate from surrounding content.
+    const events = [...processStream(['<think>', 'reasoning goes here', '</think>Final answer.'])];
+    expect(events.some(e => e.type === 'thinking' && e.content === '...')).toBe(true);
+    expect(events.some(e => e.type === 'thinking' && e.content === 'reasoning goes here')).toBe(true);
+    expect(events.some(e => e.type === 'text' && e.content === 'Final answer.')).toBe(true);
+  });
+
+  it('orphan </think> reclassifies prior text as thinking and resets the stream', () => {
+    // Simulates Qwen3.6 output via vLLM without a reasoning parser: reasoning
+    // starts immediately with no opening tag, ends with </think>, then the
+    // real answer.
+    const chunks = [
+      "Here's a thinking process:\n1. Parse the user input\n",
+      "2. Compute 7 * 8 = 56\n",
+      "</think>\n\n56",
+    ];
+    const events = [...processStream(chunks)];
+    // First two chunks yield text events (user sees them live).
+    expect(events[0]).toEqual({ type: 'text', content: chunks[0] });
+    expect(events[1]).toEqual({ type: 'text', content: chunks[1] });
+    // Then the orphan </think> chunk triggers reset + thinking + answer.
+    expect(events.some(e => e.type === 'reset_stream')).toBe(true);
+    const thinking = events.find(e => e.type === 'thinking');
+    expect(thinking?.content).toContain('7 * 8 = 56');
+    // The reasoning buffer includes ALL streamed-so-far content, not just
+    // the current chunk's prefix up to </think>.
+    expect(thinking?.content).toContain('Parse the user input');
+    // And the answer arrives as a fresh text event after the reset.
+    const lastText = [...events].reverse().find(e => e.type === 'text');
+    expect(lastText?.content).toBe('\n\n56');
+  });
+
+  it('orphan </think> with no content after it still resets cleanly', () => {
+    const events = [...processStream(['reasoning without an answer</think>'])];
+    expect(events.some(e => e.type === 'reset_stream')).toBe(true);
+    expect(events.some(e => e.type === 'thinking' && (e.content ?? '').includes('reasoning without an answer'))).toBe(true);
+    const afterTexts = events.filter(e => e.type === 'text' && (e.content ?? '').length > 0);
+    expect(afterTexts).toEqual([]);
+  });
+});

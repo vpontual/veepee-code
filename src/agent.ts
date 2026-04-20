@@ -13,7 +13,7 @@ import { resolve, relative } from 'path';
 import { existsSync } from 'fs';
 
 export interface AgentEvent {
-  type: 'text' | 'tool_call' | 'tool_result' | 'model_switch' | 'thinking' | 'done' | 'error' | 'permission_denied';
+  type: 'text' | 'tool_call' | 'tool_result' | 'model_switch' | 'thinking' | 'done' | 'error' | 'permission_denied' | 'reset_stream';
   content?: string;
   name?: string;
   args?: Record<string, unknown>;
@@ -587,6 +587,26 @@ export class Agent {
               // Start thinking buffer
               thinkingBuffer = text.split('<think>').slice(1).join('<think>');
               yield { type: 'thinking', content: '...' }; // signal thinking started
+              continue;
+            }
+
+            // Orphan </think>: reasoning models like Qwen3.6 (served by vLLM
+            // without a reasoning parser) emit the thinking trace directly
+            // into content and close it with a bare </think> before the final
+            // answer. Reclassify everything streamed so far as thinking and
+            // reset the TUI's stream buffer so the user only sees the answer.
+            if (!inThinking && text.includes('</think>')) {
+              const parts = text.split('</think>');
+              const beforeClose = parts[0];
+              const afterClose = parts.slice(1).join('</think>');
+              // Everything streamed before this chunk, plus the portion of
+              // this chunk up to the orphan close, was reasoning.
+              const streamedBefore = fullContent.slice(0, fullContent.length - text.length);
+              const reasoningText = (streamedBefore + beforeClose).trim();
+
+              yield { type: 'reset_stream' };
+              if (reasoningText) yield { type: 'thinking', content: reasoningText };
+              if (afterClose) yield { type: 'text', content: afterClose };
               continue;
             }
 

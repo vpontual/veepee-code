@@ -182,6 +182,13 @@ async function main() {
       if (event.type === 'text' && event.content) {
         output += event.content;
         if (!jsonSchemaFile) process.stdout.write(event.content);
+      } else if (event.type === 'reset_stream') {
+        // Reasoning from orphan </think> was accidentally streamed; drop it.
+        if (!jsonSchemaFile && output) {
+          // Can't un-write to stdout; insert a clear line to signal reset.
+          process.stdout.write('\n');
+        }
+        output = '';
       } else if (event.type === 'error') {
         process.stderr.write(`Error: ${event.error}\n`);
       }
@@ -344,6 +351,12 @@ async function main() {
           case 'tool_result':
             tui.showToolResult(event.name!, event.success!, event.content || event.error || '');
             tui.startStream();
+            break;
+          case 'thinking':
+            tui.showThinking(event.content || '...');
+            break;
+          case 'reset_stream':
+            tui.resetStream();
             break;
           case 'error':
             tui.endStream();
@@ -680,6 +693,15 @@ async function main() {
 
         case 'thinking':
           tui.showThinking(event.content || '...');
+          break;
+
+        case 'reset_stream':
+          // Model emitted reasoning as plain content then closed with a bare
+          // </think>. Clear what's already been streamed; a 'thinking' event
+          // will follow with the reasoning, and 'text' events resume with the
+          // real answer.
+          tui.resetStream();
+          turnAssistantContent = '';
           break;
 
         case 'error':

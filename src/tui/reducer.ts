@@ -114,6 +114,13 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, streamBuffer: '', streamActive: false, progressBarActive: false, view: 'conversation', messages: newMsgs };
     }
 
+    case 'RESET_STREAM':
+      // Retroactively clear the live stream buffer. Used when orphan </think>
+      // in the response turns out to have been reasoning we should not have
+      // shown; the reasoning is then posted separately as a collapsed thinking
+      // message, and streaming continues with the actual answer.
+      return { ...state, streamBuffer: '' };
+
     case 'SET_PROGRESS_BAR_ACTIVE':
       return { ...state, progressBarActive: action.active };
 

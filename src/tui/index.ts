@@ -283,6 +283,16 @@ export class TUI {
     this.dispatch({ type: 'END_STREAM' });
   }
 
+  /**
+   * Clear what has been streamed so far without ending the stream. Used when
+   * the agent discovers that content it already flushed to the TUI was
+   * actually reasoning (orphan </think> pattern) and needs to redirect it
+   * into a collapsed thinking message.
+   */
+  resetStream(): void {
+    this.dispatch({ type: 'RESET_STREAM' });
+  }
+
   showToolCall(name: string, args: Record<string, unknown>): void {
     // Keep progress bar bouncing during tool execution
     this.dispatch({ type: 'SET_PROGRESS_BAR_ACTIVE', active: true });
