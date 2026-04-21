@@ -34,11 +34,12 @@ All fields below live in `~/.veepee-code/vcode.config.json`. Run `vcode --wizard
 
 | Field | Default | Description |
 |----------|---------|-------------|
-| `model` | `null` | Force a specific model as default (e.g., `"qwen3.5:35b"`). Overrides the automatic selection algorithm and the model roster. |
-| `autoSwitch` | `true` | Enable automatic model switching based on task complexity in act mode. |
+| `model` | `null` | Force a specific model as default (e.g., `"qwen3.5:35b"`). Overrides the automatic selection algorithm and the model roster. Still switchable at runtime with `/models`. |
+| `lockModel` | `null` | **Hard-lock** to one model. When set, VEEPEE Code skips `/api/tags`, skips the tool-support probe, skips the first-launch benchmark, and refuses `/model` and `/models` switches. Use this when your proxy fronts a single-model vLLM endpoint (or anywhere that scanning the full model list is wasteful or destabilizing). Re-run `vcode --wizard-step model` to change. |
+| `autoSwitch` | `true` | Enable automatic model switching based on task complexity in act mode. Forced `false` when `lockModel` is set. |
 | `maxModelSize` | `40` | Maximum model parameter count in billions. Models larger than this are excluded from auto-selection and benchmark candidacy. |
 | `minModelSize` | `12` | Minimum model parameter count in billions for act mode. Models smaller than this are skipped during auto-selection (prevents using tiny unreliable models for coding). |
-| `modelStick` | `false` | Lock the current model across mode switches and disable auto-switch. Toggleable at runtime via `/settings model_stick`. |
+| `modelStick` | `false` | Lock the current model across mode switches and disable auto-switch. Toggleable at runtime via `/settings model_stick`. Unlike `lockModel`, this is a soft runtime lock that still allows `/model <name>` to switch. |
 
 ### API Server
 
@@ -94,6 +95,7 @@ The repo ships an example config at `vcode.config.example.json`:
 {
   "proxyUrl": "http://localhost:11434",
   "dashboardUrl": "",
+  "lockModel": null,
   "autoSwitch": true,
   "maxModelSize": 40,
   "minModelSize": 12,
@@ -105,6 +107,15 @@ The repo ships an example config at `vcode.config.example.json`:
     { "name": "orin-agx",  "url": "http://10.0.154.245:11434" },
     { "name": "nano-1",    "url": "http://10.0.154.234:11434" }
   ]
+}
+```
+
+If your proxy fronts a single-model endpoint (e.g., a vLLM server running one model), set `lockModel` to that model name and VEEPEE Code will stop probing and benchmarking the rest of the fleet:
+
+```json
+{
+  "proxyUrl": "http://localhost:11434",
+  "lockModel": "your-model-name:tag"
 }
 ```
 

@@ -77,7 +77,7 @@ vcode
 
 On first launch, VEEPEE Code will:
 
-1. **Run the setup wizard** -- A guided onboarding walks you through all configuration step-by-step: Ollama proxy connection, Fleet Manager dashboard, model preferences, API server, SearXNG web search, and the remote agent bridge. Each step explains what it does, which tools it enables, and whether it's required or optional. Optional steps can be skipped by pressing Enter. Each step with a validator tests the connection inline before moving on.
+1. **Run the setup wizard** -- A guided onboarding walks you through all configuration step-by-step: Ollama proxy connection, a "Default Model" step that lets you **lock to one model**, pick a default, or skip and let VEEPEE Code auto-pick; Fleet Manager dashboard, model preferences, API server, SearXNG web search, and the remote agent bridge. Each step explains what it does, which tools it enables, and whether it's required or optional. Optional steps can be skipped by pressing Enter. Each step with a validator tests the connection inline before moving on. To re-configure just the model choice later: `vcode --wizard-step model`.
 2. **Connect to the proxy** -- It contacts the Ollama proxy URL from your config.
 3. **Discover models** -- It queries the proxy for available models and (if configured) the Fleet Manager dashboard for loaded model status and capabilities.
 5. **Select an initial model** -- The highest-scoring model with tool-calling support becomes the temporary default.

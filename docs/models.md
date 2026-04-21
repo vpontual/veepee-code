@@ -8,9 +8,23 @@ weight: 6
 
 VEEPEE Code discovers all models available on your Ollama fleet, scores them, assigns tiers, and uses benchmark-driven roster assignments to select the best model for each role. In act mode, it can dynamically switch between models based on task complexity.
 
+## Lock Mode
+
+When `lockModel` is set in `vcode.config.json`, VEEPEE Code treats that model as the one and only option for the whole session:
+
+- **No `/api/tags` call.** The model list is synthesized from `lockModel` alone.
+- **No capability probe.** The startup probe (which would otherwise fire a tool-call test at every new model) is skipped entirely.
+- **No first-launch benchmark.** The `Benchmarker` is never constructed; `benchmarks/roster.json` is neither read nor written.
+- **No auto-switch.** `autoSwitch` is forced to `false`.
+- **`/model <name>` and `/models` refuse to switch**, pointing users to `vcode --wizard-step model` or a manual edit of `~/.veepee-code/vcode.config.json`.
+
+This mode exists because a) many proxies now front single-model vLLM endpoints where the other "models" returned by `/api/tags` are not useful for the agent, and b) firing tool-call probes at unknown models with no `num_ctx` cap can allocate enormous KV caches and wedge shared GPU servers.
+
+Set it through the wizard (`vcode --wizard` or `vcode --wizard-step model`) or by adding `"lockModel": "<model-name>"` to your config.
+
 ## Discovery
 
-On startup, VEEPEE Code performs up to three parallel API calls:
+When `lockModel` is **not** set, VEEPEE Code performs up to three parallel API calls on startup:
 
 1. **`GET /api/tags`** (proxy) -- Retrieves the list of all models available across your fleet, including parameter size, family, quantization level, and disk size.
 
