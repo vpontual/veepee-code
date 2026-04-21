@@ -5,6 +5,7 @@ export interface Config {
   proxyUrl: string;
   dashboardUrl: string;
   model: string | null;
+  lockModel: string | null;
   autoSwitch: boolean;
   maxModelSize: number;  // max parameter count in billions (default 40)
   minModelSize: number;  // min for act mode — skip tiny models (default 12)
@@ -27,6 +28,7 @@ export interface ConfigFile {
   proxyUrl?: string;
   dashboardUrl?: string;
   model?: string | null;
+  lockModel?: string | null;
   autoSwitch?: boolean;
   maxModelSize?: number;
   minModelSize?: number;
@@ -49,6 +51,7 @@ const DEFAULTS: Config = {
   proxyUrl: 'http://localhost:11434',
   dashboardUrl: '',
   model: null,
+  lockModel: null,
   autoSwitch: true,
   maxModelSize: 40,
   minModelSize: 12,
@@ -156,6 +159,7 @@ export function loadConfig(configPath?: string): Config {
     proxyUrl: file.proxyUrl ?? DEFAULTS.proxyUrl,
     dashboardUrl: file.dashboardUrl ?? DEFAULTS.dashboardUrl,
     model: file.model ?? DEFAULTS.model,
+    lockModel: file.lockModel ?? DEFAULTS.lockModel,
     autoSwitch: file.autoSwitch ?? DEFAULTS.autoSwitch,
     maxModelSize: file.maxModelSize ?? DEFAULTS.maxModelSize,
     minModelSize: file.minModelSize ?? DEFAULTS.minModelSize,

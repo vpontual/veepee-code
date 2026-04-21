@@ -133,12 +133,38 @@ export class ModelManager {
   private turnsSinceSwitch = 0;
 
   constructor(private config: Config) {
-    this.autoSwitch = config.autoSwitch;
-    this.preferredModel = config.model;
+    // Lock mode: pin to one model, disable auto-switch, never discover others
+    if (config.lockModel) {
+      this.autoSwitch = false;
+      this.preferredModel = config.lockModel;
+    } else {
+      this.autoSwitch = config.autoSwitch;
+      this.preferredModel = config.model;
+    }
   }
 
   /** Discover all models from proxy + dashboard */
   async discover(): Promise<void> {
+    // Lock mode: synthesize a single profile, skip all network calls
+    if (this.config.lockModel) {
+      this.models = [{
+        name: this.config.lockModel,
+        parameterSize: 'locked',
+        parameterCount: 0,
+        family: 'locked',
+        families: [],
+        quantization: 'unknown',
+        contextLength: 0,
+        capabilities: ['tools', 'code', 'thinking'],
+        isLoaded: true,
+        serverName: null,
+        diskSize: 0,
+        tier: 'heavy',
+        score: 100,
+      }];
+      return;
+    }
+
     // Load probe cache before building profiles so inferCapabilities can use it
     this.loadProbeCache();
 
@@ -486,6 +512,9 @@ export class ModelManager {
    * Results are cached to capabilities.json so probing only happens once per new model.
    */
   async probeNewModels(): Promise<{ probed: number; updated: string[] }> {
+    // Lock mode: never probe; the locked model is trusted by config
+    if (this.config.lockModel) return { probed: 0, updated: [] };
+
     this.loadProbeCache();
     const toProbe = this.models.filter(m =>
       !this.probeCache.has(m.name) &&

@@ -1,6 +1,7 @@
 {
   "proxyUrl": "http://localhost:11434",
   "dashboardUrl": "",
+  "lockModel": null,
   "autoSwitch": true,
   "maxModelSize": 40,
   "minModelSize": 12,

@@ -386,10 +386,14 @@ async function main() {
   // Wire Ctrl+C abort
   tui.setAbortHandler(() => agent.abort());
 
-  // First-launch: smart benchmark all models, build roster
-  const benchmarker = new Benchmarker(config.proxyUrl, config.fleet);
-  const existingRoster = await benchmarker.loadRoster();
-  if (!existingRoster) {
+  // Lock mode: no benchmark, no roster — the locked model is the one and only.
+  // Skip the first-launch benchmark that would otherwise fire against every
+  // model on the proxy (wasteful; ranking is meaningless with one candidate).
+  const benchmarker = config.lockModel ? null : new Benchmarker(config.proxyUrl, config.fleet);
+  const existingRoster = benchmarker ? await benchmarker.loadRoster() : null;
+  if (config.lockModel) {
+    tui.showInfo(`${theme.accent('🔒 Locked to')} ${config.lockModel} ${theme.dim('— skipping benchmark')}`);
+  } else if (!existingRoster) {
     tui.showInfo(`${theme.accent('⚡ First launch')} — testing all your models to find the best for each role.`);
     tui.showInfo(theme.dim('Phase 1: Quick responsiveness check on all models'));
     tui.showInfo(theme.dim('Phase 2: Full benchmark on models fast enough for interactive use'));
@@ -397,7 +401,7 @@ async function main() {
     tui.showInfo('');
 
     try {
-      const { results, roster } = await benchmarker.smartBenchmark(allModels, (phase, detail) => {
+      const { results, roster } = await benchmarker!.smartBenchmark(allModels, (phase, detail) => {
         // Update progress in TUI — overwrite last line if same phase
         const msgs = tui['messages'] as Array<{ role: string; content: string }>;
         const lastIdx = msgs.length - 1;
@@ -451,7 +455,9 @@ async function main() {
   }
 
   // First-run onboarding: show what makes VEEPEE Code different
-  const isFirstRun = !existingRoster;
+  // Skip the benchmark-themed welcome for locked users — it would advertise
+  // features (multi-model roster, auto-switch) that don't apply when locked.
+  const isFirstRun = !existingRoster && !config.lockModel;
   if (isFirstRun) {
     tui.showInfo([
       '',
@@ -1053,6 +1059,15 @@ async function handleCommand(
     case '/model':
     case '/models': {
       const modelArg = parts[1];
+      // Lock mode: refuse all model changes (direct, auto, selector) with clear reason
+      if (config.lockModel) {
+        tui.showInfo(
+          `${theme.accent('🔒 Locked to')} ${config.lockModel}\n` +
+          theme.dim('  Remove lockModel from ~/.veepee-code/vcode.config.json, ') +
+          theme.dim('or run ') + theme.accent('vcode --wizard-step model') + theme.dim(' to change.'),
+        );
+        return false;
+      }
       if (modelArg === 'auto') {
         modelManager.setAutoSwitch(true);
         tui.showInfo('Auto model switching enabled.');

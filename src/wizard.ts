@@ -35,6 +35,13 @@ interface WizardStep {
   required: boolean;
   envVars: EnvVar[];
   validate?: (values: Record<string, string>) => Promise<{ ok: boolean; message: string }>;
+  /** Custom run replaces the default envVars-based flow. Returns 'next' or 'back'. */
+  customRun?: (
+    stepNum: number,
+    totalSteps: number,
+    values: Record<string, string>,
+    canGoBack: boolean,
+  ) => Promise<'next' | 'back'>;
 }
 
 // ─── Step Definitions ───────────────────────────────────────────────────────
@@ -62,6 +69,15 @@ const STEPS: WizardStep[] = [
         return { ok: false, message: `Cannot connect to ${url} — ${(err as Error).message}` };
       }
     },
+  },
+  {
+    id: 'model',
+    name: 'Default Model',
+    description: 'Pick how VEEPEE Code handles models. You can lock it to one model (safer with small servers and vLLM endpoints that serve only one), pick a default you can still switch with /models, or skip and let VEEPEE Code auto-pick based on size and benchmarks.',
+    tools: ['Default model routing'],
+    required: false,
+    envVars: [],
+    customRun: runModelStep,
   },
   {
     id: 'dashboard',
@@ -336,6 +352,133 @@ function waitForKey(): Promise<void> {
   });
 }
 
+/**
+ * Render a numbered list of options and read a selection.
+ * Accepts digits (1..items.length — supports multi-digit), Enter to confirm typed number,
+ * Esc to go back (if allowBack), q to cancel, Ctrl+C to abort.
+ * Returns the selected index (0-based) or null on cancel/back.
+ */
+function selectFromList(opts: {
+  row: number;
+  col: number;
+  items: string[];
+  allowBack?: boolean;
+  prompt?: string;
+}): Promise<{ index: number | null; action: 'submit' | 'back' | 'cancel' }> {
+  return new Promise((resolve) => {
+    const { items, row, col } = opts;
+    const promptLabel = opts.prompt || 'Select';
+    let typed = '';
+
+    const maxVisible = Math.max(5, getSize().rows - row - 6);
+    const truncated = items.length > maxVisible;
+    const shown = truncated ? items.slice(0, maxVisible) : items;
+
+    const render = () => {
+      // List
+      for (let i = 0; i < shown.length; i++) {
+        moveTo(row + i, col);
+        clearLine();
+        const num = String(i + 1).padStart(2, ' ');
+        process.stdout.write(theme.dim(`  ${num}. `) + theme.text(shown[i]));
+      }
+      if (truncated) {
+        moveTo(row + shown.length, col);
+        clearLine();
+        process.stdout.write(theme.dim(`  ... ${items.length - shown.length} more (type the number directly)`));
+      }
+
+      // Prompt
+      const promptRow = row + shown.length + (truncated ? 1 : 0) + 1;
+      moveTo(promptRow, col);
+      clearLine();
+      const hint = theme.dim(` [1-${items.length}, Enter to confirm, q to cancel${opts.allowBack ? ', Esc to go back' : ''}]`);
+      process.stdout.write(theme.accent(`${promptLabel}: `) + theme.text(typed) + hint);
+      showCursor();
+    };
+
+    render();
+
+    const handler = (data: Buffer) => {
+      const key = data.toString();
+
+      // Ctrl+C — abort
+      if (key === '\x03') {
+        hideCursor();
+        process.stdin.removeListener('data', handler);
+        exitAltScreen();
+        showCursor();
+        process.stdin.setRawMode?.(false);
+        process.exit(0);
+      }
+
+      // Esc — back
+      if (key === '\x1b' && data.length === 1 && opts.allowBack) {
+        hideCursor();
+        process.stdin.removeListener('data', handler);
+        resolve({ index: null, action: 'back' });
+        return;
+      }
+
+      // q or Q — cancel
+      if (key === 'q' || key === 'Q') {
+        hideCursor();
+        process.stdin.removeListener('data', handler);
+        resolve({ index: null, action: 'cancel' });
+        return;
+      }
+
+      // Enter — confirm typed number
+      if (key === '\r' || key === '\n') {
+        const n = parseInt(typed, 10);
+        if (!isNaN(n) && n >= 1 && n <= items.length) {
+          hideCursor();
+          process.stdin.removeListener('data', handler);
+          resolve({ index: n - 1, action: 'submit' });
+        }
+        return;
+      }
+
+      // Backspace
+      if (key === '\x7f' || key === '\b') {
+        if (typed.length > 0) {
+          typed = typed.slice(0, -1);
+          render();
+        }
+        return;
+      }
+
+      // Ignore other escape sequences (arrow keys, etc.)
+      if (key.startsWith('\x1b')) return;
+
+      // Digit
+      if (/^[0-9]$/.test(key)) {
+        const candidate = typed + key;
+        const n = parseInt(candidate, 10);
+        // Accept if it still could match something in range
+        if (n >= 1 && n <= items.length) {
+          typed = candidate;
+          // Auto-submit if no longer prefix could match a valid number
+          const maxPossible = parseInt(typed + '9', 10);
+          if (n * 10 > items.length || maxPossible > items.length * 10) {
+            // If doubling a digit would overflow, submit now
+            if (n * 10 > items.length) {
+              hideCursor();
+              process.stdin.removeListener('data', handler);
+              resolve({ index: n - 1, action: 'submit' });
+              return;
+            }
+          }
+          render();
+        }
+        return;
+      }
+    };
+
+    process.stdin.on('data', handler);
+  });
+}
+
 // ─── Rendering Helpers ──────────────────────────────────────────────────────
 
 function renderHeader(stepNum: number, totalSteps: number, stepName: string): number {
@@ -570,6 +713,7 @@ function loadExistingConfig(): Record<string, string> {
     if (config.proxyUrl) values['VEEPEE_CODE_PROXY_URL'] = config.proxyUrl;
     if (config.dashboardUrl) values['VEEPEE_CODE_DASHBOARD_URL'] = config.dashboardUrl;
     if (config.model) values['VEEPEE_CODE_MODEL'] = config.model;
+    if (config.lockModel) values['VEEPEE_CODE_LOCK_MODEL'] = config.lockModel;
     if (config.autoSwitch !== undefined) values['VEEPEE_CODE_AUTO_SWITCH'] = String(config.autoSwitch);
     if (config.maxModelSize !== undefined) values['VEEPEE_CODE_MAX_MODEL_SIZE'] = String(config.maxModelSize);
     if (config.minModelSize !== undefined) values['VEEPEE_CODE_MIN_MODEL_SIZE'] = String(config.minModelSize);
@@ -608,8 +752,14 @@ function saveConfig(values: Record<string, string>): void {
     searxngUrl: values['SEARXNG_URL'] || null,
   };
 
-  if (values['VEEPEE_CODE_MODEL']) {
-    config.model = values['VEEPEE_CODE_MODEL'];
+  // Lock takes precedence over default. Writing both keys explicitly (including
+  // null) so re-running the wizard can clear a previous lock or default.
+  if (values['VEEPEE_CODE_LOCK_MODEL']) {
+    config.lockModel = values['VEEPEE_CODE_LOCK_MODEL'];
+    config.model = null;
+  } else {
+    config.lockModel = null;
+    config.model = values['VEEPEE_CODE_MODEL'] || null;
   }
 
   if (values['VEEPEE_CODE_REMOTE_URL'] && values['VEEPEE_CODE_REMOTE_API_KEY']) {
@@ -632,6 +782,11 @@ async function runStep(
   values: Record<string, string>,
   canGoBack: boolean,
 ): Promise<'next' | 'back'> {
+  // Custom step: delegates entirely to the step's own handler
+  if (step.customRun) {
+    return step.customRun(stepNum, totalSteps, values, canGoBack);
+  }
+
   let row = renderHeader(stepNum, totalSteps, step.name);
   row = renderDescription(row, step.description, step.tools, step.required);
   renderProgressBar(stepNum, totalSteps);
@@ -707,6 +862,178 @@ async function runStep(
     await new Promise(r => setTimeout(r, 400));
   }
 
+  return 'next';
+}
+
+// ─── Model Step (lock / default / skip) ────────────────────────────────────
+
+interface TagsModel {
+  name: string;
+  size?: number;
+  details?: { parameter_size?: string; family?: string };
+}
+
+async function fetchProxyModels(proxyUrl: string): Promise<TagsModel[]> {
+  const res = await fetch(`${proxyUrl}/api/tags`, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json() as { models?: TagsModel[] };
+  return (data.models || []).filter(m => m && m.name);
+}
+
+function formatModelRow(m: TagsModel): string {
+  const size = m.details?.parameter_size ? ` (${m.details.parameter_size})` : '';
+  const family = m.details?.family ? theme.dim(` — ${m.details.family}`) : '';
+  return `${m.name}${theme.dim(size)}${family}`;
+}
+
+async function runModelStep(
+  stepNum: number,
+  totalSteps: number,
+  values: Record<string, string>,
+  canGoBack: boolean,
+): Promise<'next' | 'back'> {
+  const step = STEPS.find(s => s.id === 'model')!;
+  let row = renderHeader(stepNum, totalSteps, step.name);
+  row = renderDescription(row, step.description, step.tools, step.required);
+  renderProgressBar(stepNum, totalSteps);
+  renderFooter(canGoBack);
+
+  const proxyUrl = values['VEEPEE_CODE_PROXY_URL'] || 'http://localhost:11434';
+  const currentLock = values['VEEPEE_CODE_LOCK_MODEL'] || '';
+  const currentDefault = values['VEEPEE_CODE_MODEL'] || '';
+
+  // Show current state
+  moveTo(row, 5);
+  if (currentLock) {
+    process.stdout.write(theme.accent(`${icons.dot} Currently locked to: `) + theme.text(currentLock));
+  } else if (currentDefault) {
+    process.stdout.write(theme.accent(`${icons.dot} Current default: `) + theme.text(currentDefault) + theme.dim(' (switchable)'));
+  } else {
+    process.stdout.write(theme.dim(`${icons.circle} No model pinned — auto-pick is active`));
+  }
+  row += 2;
+
+  // Three-way choice
+  moveTo(row, 5);
+  process.stdout.write(theme.accent('Choose:'));
+  row += 1;
+  moveTo(row, 7);
+  process.stdout.write(theme.text('[1] ') + theme.accent('Lock') + theme.dim('    — one model forever, /models cannot switch'));
+  row += 1;
+  moveTo(row, 7);
+  process.stdout.write(theme.text('[2] ') + theme.accent('Default') + theme.dim(' — pick now, but /models can still switch'));
+  row += 1;
+  moveTo(row, 7);
+  process.stdout.write(theme.text('[3] ') + theme.accent('Skip') + theme.dim('    — let VEEPEE Code auto-pick'));
+  row += 2;
+
+  const choice = await readLine({
+    row,
+    col: 5,
+    maxWidth: getSize().cols - 10,
+    label: 'Choice',
+    default: currentLock ? '1' : currentDefault ? '2' : '3',
+    allowBack: canGoBack,
+  });
+
+  if (choice.action === 'back') return 'back';
+
+  const c = choice.value.trim();
+  if (c === '3' || c === '') {
+    // Skip — clear both
+    values['VEEPEE_CODE_LOCK_MODEL'] = '';
+    values['VEEPEE_CODE_MODEL'] = '';
+    row += 2;
+    moveTo(row, 5);
+    process.stdout.write(theme.dim(`${icons.circle} Auto-pick — no model pinned`));
+    await new Promise(r => setTimeout(r, 600));
+    return 'next';
+  }
+
+  if (c !== '1' && c !== '2') {
+    moveTo(row + 2, 5);
+    process.stdout.write(theme.error(`${icons.cross} Invalid choice — skipping`));
+    await new Promise(r => setTimeout(r, 1200));
+    return 'next';
+  }
+
+  // Fetch models
+  row += 2;
+  moveTo(row, 5);
+  process.stdout.write(theme.muted('Fetching model list from proxy...'));
+  let models: TagsModel[] = [];
+  try {
+    models = await fetchProxyModels(proxyUrl);
+  } catch (err) {
+    moveTo(row, 5);
+    clearLine();
+    process.stdout.write(theme.error(`${icons.cross} Could not fetch models: ${(err as Error).message}`));
+    await new Promise(r => setTimeout(r, 2000));
+    return 'next';
+  }
+
+  moveTo(row, 5);
+  clearLine();
+  if (models.length === 0) {
+    process.stdout.write(theme.warning(`${icons.warn} Proxy returned no models — skipping`));
+    await new Promise(r => setTimeout(r, 1500));
+    return 'next';
+  }
+
+  if (models.length === 1) {
+    const only = models[0].name;
+    if (c === '1') {
+      values['VEEPEE_CODE_LOCK_MODEL'] = only;
+      values['VEEPEE_CODE_MODEL'] = '';
+    } else {
+      values['VEEPEE_CODE_MODEL'] = only;
+      values['VEEPEE_CODE_LOCK_MODEL'] = '';
+    }
+    process.stdout.write(theme.success(`${icons.check} Only one model available — selected ${theme.accent(only)}`));
+    await new Promise(r => setTimeout(r, 1200));
+    return 'next';
+  }
+
+  // Show list and pick
+  row += 1;
+  moveTo(row, 5);
+  const title = c === '1' ? 'Lock to which model?' : 'Default to which model?';
+  process.stdout.write(theme.textBold(title));
+  row += 2;
+
+  const items = models.map(formatModelRow);
+  const result = await selectFromList({
+    row,
+    col: 5,
+    items,
+    allowBack: true,
+    prompt: 'Model number',
+  });
+
+  if (result.action === 'back') return 'back';
+  if (result.action === 'cancel' || result.index === null) {
+    // User cancelled mid-selection — keep existing values
+    moveTo(row + items.length + 2, 5);
+    process.stdout.write(theme.dim(`${icons.circle} Cancelled — keeping current settings`));
+    await new Promise(r => setTimeout(r, 800));
+    return 'next';
+  }
+
+  const picked = models[result.index].name;
+  if (c === '1') {
+    values['VEEPEE_CODE_LOCK_MODEL'] = picked;
+    values['VEEPEE_CODE_MODEL'] = '';
+  } else {
+    values['VEEPEE_CODE_MODEL'] = picked;
+    values['VEEPEE_CODE_LOCK_MODEL'] = '';
+  }
+
+  const confirmRow = row + items.length + 2;
+  moveTo(confirmRow, 5);
+  clearLine();
+  const label = c === '1' ? 'Locked to' : 'Default set to';
+  process.stdout.write(theme.success(`${icons.check} ${label} ${theme.accent(picked)}`));
+  await new Promise(r => setTimeout(r, 900));
   return 'next';
 }
 
