@@ -305,6 +305,15 @@ async function main() {
     0,
   );
 
+  // Poll the API server's live connection count so the status bar can hide
+  // the API :port segment when nothing external is actually connected.
+  // 2s cadence is plenty — this is a visual hint, not a signal the agent uses.
+  const apiPoll = setInterval(() => {
+    tui.setApiConnected(api.connectionCount > 0);
+  }, 2000);
+  tui.setApiConnected(api.connectionCount > 0);
+  process.on('beforeExit', () => clearInterval(apiPoll));
+
   // Check for updates in background (non-blocking)
   setTimeout(() => {
     const update = checkForUpdate();
@@ -392,7 +401,7 @@ async function main() {
   const benchmarker = config.lockModel ? null : new Benchmarker(config.proxyUrl, config.fleet);
   const existingRoster = benchmarker ? await benchmarker.loadRoster() : null;
   if (config.lockModel) {
-    tui.showInfo(`${theme.accent('🔒 Locked to')} ${config.lockModel} ${theme.dim('— skipping benchmark')}`);
+    // Locked — skip benchmark silently. Status bar already shows "locked".
   } else if (!existingRoster) {
     tui.showInfo(`${theme.accent('⚡ First launch')} — testing all your models to find the best for each role.`);
     tui.showInfo(theme.dim('Phase 1: Quick responsiveness check on all models'));

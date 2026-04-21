@@ -74,6 +74,7 @@ export function WelcomeScreen({ state, rows, cols, hasResolveInput }: WelcomeScr
         tokenPercent={state.tokenPercent}
         messageCount={state.messageCount}
         apiPort={state.apiPort}
+        apiConnected={state.apiConnected}
         version={state.version}
       />
     </Box>

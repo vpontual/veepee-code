@@ -7,13 +7,15 @@ interface StatusBarProps {
   tokenPercent: number;
   messageCount: number;
   apiPort: number;
+  apiConnected: boolean;
   version: string;
 }
 
-export function StatusBar({ tokenCount, tokenPercent, messageCount, apiPort, version }: StatusBarProps): React.ReactElement {
+export function StatusBar({ tokenCount, tokenPercent, apiPort, apiConnected, version }: StatusBarProps): React.ReactElement {
   const cwd = process.cwd().replace(process.env.HOME || '', '~');
 
   const contextInfo = `${tokenCount.toLocaleString()} tok ${tokenPercent}%  `;
+  const apiSegment = apiConnected ? `${icons.dot} API :${apiPort}  ` : '';
 
   return (
     <Box width="100%">
@@ -21,7 +23,7 @@ export function StatusBar({ tokenCount, tokenPercent, messageCount, apiPort, ver
         <Text dimColor> {cwd}</Text>
       </Box>
       <Box>
-        <Text dimColor>{contextInfo}{icons.dot} API :{apiPort}  v{version} {icons.llama} </Text>
+        <Text dimColor>{contextInfo}{apiSegment}v{version} {icons.llama} </Text>
       </Box>
     </Box>
   );

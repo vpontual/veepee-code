@@ -98,7 +98,7 @@ export function InputBox({
   }
 
   // Model info line
-  const modelInfo = `${theme.accent(modelRole)}  ${theme.text(modelName)} ${theme.muted(modelSize)} ${theme.muted('(default)')} ${theme.dim(providerName)}`;
+  const modelInfo = `${theme.accent(modelRole)}  ${theme.text(modelName)} ${theme.muted(modelSize)} ${theme.dim(providerName)}`;
   const modelInfoClean = stripAnsi(modelInfo);
   const modelPadded = modelInfoClean.length < contentWidth
     ? modelInfo + ' '.repeat(contentWidth - modelInfoClean.length)
@@ -117,7 +117,7 @@ export function InputBox({
       <Text>{theme.borderFocused(box.v)} {displayLine} {theme.borderFocused(box.v)}</Text>
       <Text>{theme.borderFocused(box.v)} {modelPadded} {theme.borderFocused(box.v)}</Text>
       <Text>{bottomBorder}</Text>
-      <Box justifyContent="center" paddingLeft={2}>
+      <Box justifyContent="flex-end" paddingRight={2}>
         <Text>{hints}</Text>
       </Box>
     </Box>

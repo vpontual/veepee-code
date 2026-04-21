@@ -61,6 +61,7 @@ export interface AppState {
   elapsed: number;
   version: string;
   apiPort: number;
+  apiConnected: boolean;
   streamBuffer: string;
   streamActive: boolean;
   progressBarActive: boolean;
@@ -122,4 +123,5 @@ export type AppAction =
   | { type: 'POP_MESSAGE' }
   | { type: 'SET_START_INFO'; model: string; modelSize: string; toolCount: number; modelCount: number; version: string; apiPort: number }
   | { type: 'FORCE_RENDER' }
-  | { type: 'SET_INPUT_ACTIVE'; active: boolean };
+  | { type: 'SET_INPUT_ACTIVE'; active: boolean }
+  | { type: 'SET_API_CONNECTED'; connected: boolean };

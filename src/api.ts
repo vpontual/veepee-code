@@ -26,7 +26,7 @@ interface ApiConfig {
  *   GET  /api/status           — Session status
  *   POST /api/execute          — Execute a specific tool directly
  */
-export function startApiServer(config: ApiConfig): { port: number; close: () => void } {
+export function startApiServer(config: ApiConfig): { port: number; connectionCount: number; close: () => void } {
   const { agent, modelManager, registry } = config;
 
   const apiToken = config.apiToken || null;
@@ -324,6 +324,15 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
     }
   });
 
+  // Track live external connections so the TUI can hide the API indicator when
+  // nothing is actually connected. HTTP keep-alive and RC streams hold sockets
+  // open, so a non-zero count maps to "an external client is using us".
+  let connectionCount = 0;
+  server.on('connection', (socket) => {
+    connectionCount++;
+    socket.once('close', () => { connectionCount--; });
+  });
+
   const bindHost = config.rcEnabled ? '0.0.0.0' : (config.host || '127.0.0.1');
   server.listen(config.port, bindHost);
 
@@ -331,6 +340,9 @@ export function startApiServer(config: ApiConfig): { port: number; close: () => 
     get port() {
       const address = server.address();
       return typeof address === 'object' && address ? address.port : config.port;
+    },
+    get connectionCount() {
+      return connectionCount;
     },
     close: () => server.close(),
   };

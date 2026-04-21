@@ -17,6 +17,7 @@ export const initialState: AppState = {
   elapsed: 0,
   version: '0.1.0',
   apiPort: 8484,
+  apiConnected: false,
   streamBuffer: '',
   streamActive: false,
   progressBarActive: false,
@@ -217,6 +218,10 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case 'SET_INPUT_ACTIVE':
       return { ...state, inputActive: action.active };
+
+    case 'SET_API_CONNECTED':
+      if (state.apiConnected === action.connected) return state;
+      return { ...state, apiConnected: action.connected };
 
     default:
       return state;

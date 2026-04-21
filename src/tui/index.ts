@@ -172,6 +172,10 @@ export class TUI {
     this.dispatch({ type: 'SET_UPDATE_AVAILABLE', behind });
   }
 
+  setApiConnected(connected: boolean): void {
+    this.dispatch({ type: 'SET_API_CONNECTED', connected });
+  }
+
   getInput(_placeholder?: string): Promise<string> {
     const state = this.getState();
 
