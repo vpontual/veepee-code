@@ -2,6 +2,7 @@
   "proxyUrl": "http://localhost:11434",
   "dashboardUrl": "",
   "lockModel": null,
+  "reviewModel": null,
   "autoSwitch": true,
   "maxModelSize": 40,
   "minModelSize": 12,

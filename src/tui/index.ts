@@ -17,6 +17,7 @@ export { theme, box, icons } from './theme.js';
 const COMMANDS: CommandDef[] = [
   { name: '/models', args: '[name]', description: 'Browse and select models interactively' },
   { name: '/models auto', args: '', description: 'Re-enable auto model switching' },
+  { name: '/review', args: '<prompt>', description: 'Run one turn through reviewModel (different-family second opinion)' },
   { name: '/tools', args: '', description: 'List all available tools' },
   { name: '/plan', args: '', description: 'Plan mode — thinking ON, heavy model' },
   { name: '/act', args: '', description: 'Act/Code mode — all tools, coding-ready (default)' },

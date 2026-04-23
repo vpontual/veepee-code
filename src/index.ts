@@ -647,11 +647,110 @@ async function main() {
       continue;
     }
 
+    // Agent turn — used for both normal input and for commands like /review
+    // that want to run a one-off turn under a different model.
+    const runTurn = async (text: string): Promise<void> => {
+      tui.addUserMessage(text);
+      const turnStart = Date.now();
+      const refreshStats = () => tui.updateStats(
+        agent.getContext().estimateTokens(),
+        Math.round((agent.getContext().estimateTokens() / agent.getContext().getContextLimit()) * 100),
+        agent.getContext().messageCount(),
+        Date.now() - sessionStart,
+      );
+
+      tui.startStream();
+
+      let turnAssistantContent = '';
+      const turnToolCalls: Array<{ name: string; success: boolean }> = [];
+
+      for await (const event of agent.run(text)) {
+        switch (event.type) {
+          case 'text':
+            if (event.content) {
+              tui.appendStream(event.content);
+              turnAssistantContent += event.content;
+            }
+            break;
+
+          case 'tool_call':
+            tui.endStream();
+            tui.showToolCall(event.name!, event.args || {});
+            break;
+
+          case 'tool_result':
+            tui.showToolResult(event.name!, event.success!, event.content || event.error || '');
+            turnToolCalls.push({ name: event.name!, success: event.success! });
+            refreshStats();
+            tui.startStream();
+            break;
+
+          case 'permission_denied':
+            tui.showPermissionDenied(event.name!);
+            break;
+
+          case 'model_switch':
+            tui.showModelSwitch(event.from!, event.to!);
+            tui.updateModel(event.to!);
+            break;
+
+          case 'thinking':
+            tui.showThinking(event.content || '...');
+            break;
+
+          case 'reset_stream':
+            // Model emitted reasoning as plain content then closed with a bare
+            // </think>. Clear what's already been streamed; a 'thinking' event
+            // will follow with the reasoning, and 'text' events resume with the
+            // real answer.
+            tui.resetStream();
+            turnAssistantContent = '';
+            break;
+
+          case 'error':
+            tui.endStream();
+            tui.showError(event.error || 'Unknown error');
+            break;
+
+          case 'done':
+            tui.endStream();
+            refreshStats();
+            tui.showCompletionBadge(modelManager.getCurrentModel(), Date.now() - turnStart, {
+              evalCount: event.evalCount,
+              promptEvalCount: event.promptEvalCount,
+              tokensPerSecond: event.tokensPerSecond,
+            });
+            if (observability.isEnabled()) {
+              observability.logTurn({
+                sessionId: currentSessionId || sessionId,
+                model: modelManager.getCurrentModel(),
+                mode: agent.getMode(),
+                userMessage: text,
+                assistantMessage: turnAssistantContent,
+                evalCount: event.evalCount || 0,
+                promptEvalCount: event.promptEvalCount || 0,
+                tokensPerSecond: event.tokensPerSecond || 0,
+                latencyMs: Date.now() - turnStart,
+                toolCalls: turnToolCalls,
+              }).catch(() => {});
+            }
+            break;
+        }
+      }
+
+      tui.updateStats(
+        agent.getContext().estimateTokens(),
+        Math.round((agent.getContext().estimateTokens() / agent.getContext().getContextLimit()) * 100),
+        agent.getContext().messageCount(),
+        Date.now() - sessionStart,
+      );
+    };
+
     // Handle commands
     if (trimmed.startsWith('/')) {
       // Show the command in the chat (but don't start the turn tracker — commands don't go to the LLM)
       tui.addCommandMessage(trimmed);
-      const result = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId, sandbox, preview, syncManager);
+      const result = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId, sandbox, preview, syncManager, runTurn);
       if (result === true) break; // quit
       if (typeof result === 'string' && result.startsWith('session:')) {
         currentSessionId = result.slice(8) || null;
@@ -660,104 +759,7 @@ async function main() {
     }
 
     // Run agent
-    tui.addUserMessage(trimmed);
-    const turnStart = Date.now();
-    const refreshStats = () => tui.updateStats(
-      agent.getContext().estimateTokens(),
-      Math.round((agent.getContext().estimateTokens() / agent.getContext().getContextLimit()) * 100),
-      agent.getContext().messageCount(),
-      Date.now() - sessionStart,
-    );
-
-    tui.startStream();
-
-    // Accumulate turn data for observability
-    let turnAssistantContent = '';
-    const turnToolCalls: Array<{ name: string; success: boolean }> = [];
-
-    for await (const event of agent.run(trimmed)) {
-      switch (event.type) {
-        case 'text':
-          if (event.content) {
-            tui.appendStream(event.content);
-            turnAssistantContent += event.content;
-          }
-          break;
-
-        case 'tool_call':
-          // End any in-progress stream before showing tool call
-          tui.endStream();
-          tui.showToolCall(event.name!, event.args || {});
-          break;
-
-        case 'tool_result':
-          tui.showToolResult(event.name!, event.success!, event.content || event.error || '');
-          turnToolCalls.push({ name: event.name!, success: event.success! });
-          refreshStats();
-          tui.startStream(); // resume streaming for next assistant text
-          break;
-
-        case 'permission_denied':
-          tui.showPermissionDenied(event.name!);
-          break;
-
-        case 'model_switch':
-          tui.showModelSwitch(event.from!, event.to!);
-          tui.updateModel(event.to!);
-          break;
-
-        case 'thinking':
-          tui.showThinking(event.content || '...');
-          break;
-
-        case 'reset_stream':
-          // Model emitted reasoning as plain content then closed with a bare
-          // </think>. Clear what's already been streamed; a 'thinking' event
-          // will follow with the reasoning, and 'text' events resume with the
-          // real answer.
-          tui.resetStream();
-          turnAssistantContent = '';
-          break;
-
-        case 'error':
-          tui.endStream();
-          tui.showError(event.error || 'Unknown error');
-          break;
-
-        case 'done':
-          tui.endStream();
-          refreshStats();
-          tui.showCompletionBadge(modelManager.getCurrentModel(), Date.now() - turnStart, {
-            evalCount: event.evalCount,
-            promptEvalCount: event.promptEvalCount,
-            tokensPerSecond: event.tokensPerSecond,
-          });
-          // Log to Langfuse if enabled
-          if (observability.isEnabled()) {
-            observability.logTurn({
-              sessionId: currentSessionId || sessionId,
-              model: modelManager.getCurrentModel(),
-              mode: agent.getMode(),
-              userMessage: trimmed,
-              assistantMessage: turnAssistantContent,
-              evalCount: event.evalCount || 0,
-              promptEvalCount: event.promptEvalCount || 0,
-              tokensPerSecond: event.tokensPerSecond || 0,
-              latencyMs: Date.now() - turnStart,
-              toolCalls: turnToolCalls,
-            }).catch(() => {});
-          }
-          break;
-      }
-    }
-
-    // Update stats after each turn
-    tui.updateStats(
-      agent.getContext().estimateTokens(),
-      Math.round((agent.getContext().estimateTokens() / agent.getContext().getContextLimit()) * 100),
-      agent.getContext().messageCount(),
-      Date.now() - sessionStart,
-    );
+    await runTurn(trimmed);
   }
 
   // Cleanup
@@ -888,6 +890,7 @@ async function handleCommand(
   sandbox: SandboxManager,
   preview: PreviewManager,
   syncManager: SyncManager | null,
+  runTurn: (text: string) => Promise<void>,
 ): Promise<boolean | string | void> {
   // Returns: true = quit, 'session:<id>' = set session ID, void = continue
   const parts = input.split(/\s+/);
@@ -905,6 +908,7 @@ async function handleCommand(
         `${theme.textBold('Commands:')}`,
         `  ${theme.accent('/model <name>')}     Switch model       ${theme.accent('/models')}     List all models`,
         `  ${theme.accent('/model auto')}       Auto-switch on     ${theme.accent('/tools')}      List all tools`,
+        `  ${theme.accent('/review <prompt>')}  Run one turn through reviewModel (different-family second opinion)`,
         `  ${theme.accent('/clear')}            Clear history      ${theme.accent('/compact')}    Free context space`,
         `  ${theme.accent('/status')}           Session info       ${theme.accent('/quit')}       Exit`,
         `  ${theme.accent('/init')}             Create VEEPEE.md    ${theme.accent('/setup')}       Validate tools`,
@@ -1119,6 +1123,40 @@ async function handleCommand(
           tui.updateModel(result.name, profile?.parameterSize);
           tui.showInfo(`Using ${theme.accent(result.name)} for this session`);
         }
+      }
+      return false;
+    }
+
+    case '/review': {
+      // Route one turn through config.reviewModel for a cross-family second
+      // opinion (e.g. DGX Qwen generates, AGX Gemma reviews). Restores the
+      // previous model after the turn completes, even on error.
+      if (!config.reviewModel) {
+        tui.showInfo([
+          `${theme.warning('reviewModel not set.')}`,
+          `  Add ${theme.accent('"reviewModel": "gemma4:26b-a4b"')} to ${theme.dim('~/.veepee-code/vcode.config.json')}`,
+          `  Any model name the proxy advertises will work — pick one from a different family than your primary for best second-opinion value.`,
+        ].join('\n'));
+        return false;
+      }
+      const text = input.slice('/review'.length).trim();
+      if (!text) {
+        tui.showInfo([
+          `${theme.textBold('Usage:')} ${theme.accent('/review <your prompt>')}`,
+          `  Routes the next turn through ${theme.accent(config.reviewModel)} instead of the primary model.`,
+          `  Example: ${theme.dim('/review Critique this diff: <paste>')}`,
+        ].join('\n'));
+        return false;
+      }
+      const previousModel = modelManager.getCurrentModel();
+      tui.showInfo(`${theme.dim('↪ Reviewing with')} ${theme.accent(config.reviewModel)}`);
+      agent.setModel(config.reviewModel);
+      tui.updateModel(config.reviewModel);
+      try {
+        await runTurn(text);
+      } finally {
+        agent.setModel(previousModel);
+        tui.updateModel(previousModel);
       }
       return false;
     }

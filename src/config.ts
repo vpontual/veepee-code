@@ -6,6 +6,7 @@ export interface Config {
   dashboardUrl: string;
   model: string | null;
   lockModel: string | null;
+  reviewModel: string | null;
   autoSwitch: boolean;
   maxModelSize: number;  // max parameter count in billions (default 40)
   minModelSize: number;  // min for act mode — skip tiny models (default 12)
@@ -29,6 +30,7 @@ export interface ConfigFile {
   dashboardUrl?: string;
   model?: string | null;
   lockModel?: string | null;
+  reviewModel?: string | null;
   autoSwitch?: boolean;
   maxModelSize?: number;
   minModelSize?: number;
@@ -52,6 +54,7 @@ const DEFAULTS: Config = {
   dashboardUrl: '',
   model: null,
   lockModel: null,
+  reviewModel: null,
   autoSwitch: true,
   maxModelSize: 40,
   minModelSize: 12,
@@ -160,6 +163,7 @@ export function loadConfig(configPath?: string): Config {
     dashboardUrl: file.dashboardUrl ?? DEFAULTS.dashboardUrl,
     model: file.model ?? DEFAULTS.model,
     lockModel: file.lockModel ?? DEFAULTS.lockModel,
+    reviewModel: file.reviewModel ?? DEFAULTS.reviewModel,
     autoSwitch: file.autoSwitch ?? DEFAULTS.autoSwitch,
     maxModelSize: file.maxModelSize ?? DEFAULTS.maxModelSize,
     minModelSize: file.minModelSize ?? DEFAULTS.minModelSize,
