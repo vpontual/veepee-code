@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "prebuild": "node scripts/check-types-folders.mjs",
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/index.js",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
