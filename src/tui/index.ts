@@ -866,11 +866,25 @@ export class TUI {
       return;
     }
 
-    // Paste detection
-    if (key.length > 1 && key.includes('\n') && !key.startsWith('\x1b')) {
-      const cleanPaste = key.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    // Paste detection — any multi-character chunk that doesn't start with ESC
+    // (so we don't swallow arrow-key sequences, function keys, etc.) and has
+    // no embedded ESC (filters out chunked escape sequences arriving in one
+    // read). Covers BOTH multi-line pastes (contain \n) AND single-line
+    // pastes from clipboards (no \n) — previously only the \n form worked,
+    // so single-line paste was silently dropped at the "key.length === 1"
+    // gate at the bottom of this handler.
+    if (key.length > 1 && !key.startsWith('\x1b') && !key.includes('\x1b')) {
+      // Strip any control bytes except \n; CR → \n for cross-platform clipboards.
+      const cleanPaste = key
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '');
+      if (cleanPaste.length === 0) return;
       const newText = state.input.text.slice(0, state.input.cursor) + cleanPaste + state.input.text.slice(state.input.cursor);
       this.dispatch({ type: 'SET_INPUT', input: { text: newText, cursor: state.input.cursor + cleanPaste.length } });
+      // Keep command-menu filter in sync so paste of "/models foo" still triggers menu logic.
+      this.updateCommandFilter(newText);
       return;
     }
 
