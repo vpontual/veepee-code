@@ -581,9 +581,17 @@ export class Agent {
 
         // Mode-specific settings:
         // plan: thinking ON, mutating tools FILTERED OUT, exit_plan_mode required
-        // act:  thinking OFF, all tools, auto-switch model
-        // chat: thinking OFF, web/search tools only, standard model
-        const useThinking = this.mode === 'plan';
+        // act:  thinking ON (Qwen3.6 needs CoT for reliable tool use — without
+        //        it, the model produces "I can't SSH from this environment"
+        //        fluff and skips bash calls entirely), all tools, auto-switch
+        // chat: thinking OFF (proxy translates to enable_thinking=false on
+        //        Qwen3 vLLM since 2026-05-04), web/search tools only
+        // The act-mode flip from OFF to ON corrects a regression introduced
+        // when the proxy started actually honoring `think:false`. Previously
+        // act sent think:false but the proxy silently dropped it, so the
+        // model thought anyway. Once the proxy began translating it, act
+        // mode genuinely went to instruct mode and tool-use quality cratered.
+        const useThinking = this.mode !== 'chat';
         let tools = this.mode === 'chat'
           ? this.registry.toOllamaTools().filter(t => {
               const name = t.function?.name || '';
