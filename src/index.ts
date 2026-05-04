@@ -277,7 +277,14 @@ async function main() {
         }
         output = '';
       } else if (event.type === 'error') {
-        process.stderr.write(`Error: ${event.error}\n`);
+        // Defense: event.error should be a string but TS can't enforce at
+        // runtime. Coerce non-strings so we never write "[object Object]".
+        const e: unknown = event.error;
+        const errStr = typeof e === 'string' ? e
+          : e instanceof Error ? (e.message || e.toString())
+          : e && typeof e === 'object' ? (() => { try { return JSON.stringify(e); } catch { return String(e); } })()
+          : String(e ?? 'Unknown error');
+        process.stderr.write(`Error: ${errStr}\n`);
       }
     }
 

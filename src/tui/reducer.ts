@@ -56,6 +56,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       }
       return { ...state, messages };
     }
+    case 'APPEND_STREAM':
+      return { ...state, streamBuffer: state.streamBuffer + action.text };
 
     case 'REPLACE_LAST_THINKING': {
       const msgs = [...state.messages];
@@ -118,9 +120,6 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case 'START_STREAM':
       return { ...state, streamBuffer: '', streamActive: true, progressBarActive: true };
-
-    case 'APPEND_STREAM':
-      return { ...state, streamBuffer: state.streamBuffer + action.text };
 
     case 'END_STREAM': {
       const newMsgs = [...state.messages];

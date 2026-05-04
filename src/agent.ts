@@ -759,7 +759,31 @@ export class Agent {
           yield { type: 'error', error: 'Response timed out or interrupted' };
           return;
         }
-        const msg = err instanceof Error ? err.message : String(err);
+        // Defense: Ollama SDK and undici sometimes throw plain objects (e.g.
+        // `{status:500, body:...}`) instead of Error instances. Bare String(obj)
+        // returns useless "[object Object]"; JSON-serialize to surface the
+        // actual shape so users can debug what went wrong.
+        let msg: string;
+        if (err instanceof Error) {
+          msg = err.message || err.toString();
+        } else if (typeof err === 'string') {
+          msg = err;
+        } else if (err && typeof err === 'object') {
+          try {
+            const seen = new WeakSet();
+            msg = JSON.stringify(err, (_k, v) => {
+              if (typeof v === 'object' && v !== null) {
+                if (seen.has(v)) return '[circular]';
+                seen.add(v);
+              }
+              return v;
+            }) || String(err);
+          } catch {
+            msg = String(err);
+          }
+        } else {
+          msg = String(err);
+        }
         yield { type: 'error', error: msg };
         this.context.addAssistant(`Error communicating with model: ${msg}`);
         return;
