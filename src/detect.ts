@@ -52,14 +52,27 @@ export function detectProject(cwd: string): ProjectInfo {
 
   // ─── Framework ────────────────────────────────────────────────────
 
-  const pkg = readJson('package.json') as { dependencies?: Record<string, string>; devDependencies?: Record<string, string>; scripts?: Record<string, string> } | null;
+  const pkg = readJson('package.json') as { dependencies?: Record<string, string>; devDependencies?: Record<string, string>; scripts?: Record<string, string>; bin?: unknown } | null;
   const allDeps = { ...pkg?.dependencies, ...pkg?.devDependencies };
+
+  // Node CLI detection — keep this BEFORE the React/Vue branches because
+  // CLI tools commonly depend on `react` (via Ink) or `vue` without being
+  // web apps. Heuristics: package.json `bin` field, or terminal/arg-parsing
+  // libraries that are exclusive to CLI tools.
+  const hasBin = pkg !== null && pkg.bin !== undefined;
+  const hasInk = !!allDeps['ink'];
+  const hasTermUi = !!(allDeps['blessed'] || allDeps['neo-blessed'] || allDeps['terminal-kit']);
+  const hasArgParser = !!(allDeps['commander'] || allDeps['yargs'] ||
+    allDeps['cac'] || allDeps['clipanion'] || allDeps['meow'] ||
+    allDeps['@oclif/core']);
+  const isNodeCli = hasBin || hasInk || hasTermUi || hasArgParser;
 
   if (allDeps) {
     if (allDeps['next']) info.framework = `Next.js ${allDeps['next'].replace('^', '')}`;
     else if (allDeps['astro']) info.framework = `Astro ${allDeps['astro'].replace('^', '')}`;
     else if (allDeps['nuxt']) info.framework = `Nuxt ${allDeps['nuxt'].replace('^', '')}`;
     else if (allDeps['svelte']) info.framework = 'SvelteKit';
+    else if (isNodeCli) info.framework = hasInk ? 'Ink (Node CLI)' : 'Node CLI';
     else if (allDeps['vite'] && !info.framework) info.framework = 'Vite';
     else if (allDeps['react'] && !info.framework) info.framework = 'React';
     else if (allDeps['vue'] && !info.framework) info.framework = 'Vue';
@@ -161,6 +174,14 @@ export function getCodingGuidance(info: ProjectInfo): string {
   }
   if (info.framework === 'Rails') {
     lines.push('- Follow Rails conventions. Use generators when appropriate. Run `bin/rails test` after changes.');
+  }
+  if (info.framework === 'Ink (Node CLI)') {
+    lines.push('- This is a terminal UI built with Ink (React for CLIs). UI lives in TSX components rendered to the terminal — no DOM, no browser.');
+    lines.push('- TUI updates re-render via Ink reconciler; avoid expensive synchronous work in render functions.');
+    lines.push('- Raw stdin handling is typically done outside Ink (parallel to `useInput`) to support escape sequences Ink doesn\'t parse.');
+  }
+  if (info.framework === 'Node CLI') {
+    lines.push('- This is a Node.js command-line tool, not a web app. Entry points are usually under `bin/` or via `package.json` `bin` field.');
   }
 
   // Package manager

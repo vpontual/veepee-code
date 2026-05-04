@@ -36,9 +36,16 @@ export function enterAltScreen(): void {
   process.stdout.write('\x1b[?25l');   // hide cursor
   process.stdout.write('\x1b[2J');     // clear
   process.stdout.write('\x1b[H');      // home
+  // Enable alternate-scroll mode (DECARSM) so wheel events become arrow keys.
+  // We deliberately do NOT enable mouse-tracking (1000h/1002h/1003h) — that
+  // would steal click-drag away from the terminal's native text selection.
+  // Disambiguation between real arrow keys and wheel arrows is done by burst
+  // timing in tui/index.ts.
+  process.stdout.write('\x1b[?1007h');
 }
 
 export function exitAltScreen(): void {
+  process.stdout.write('\x1b[?1007l'); // disable alternate-scroll mode
   process.stdout.write('\x1b[?25h');   // show cursor
   process.stdout.write('\x1b[?1049l'); // restore main buffer
 }

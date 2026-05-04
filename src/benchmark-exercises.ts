@@ -207,30 +207,47 @@ async function execTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<string> {
+  // Validate path arg up-front so a missing `path` doesn't get coerced to the
+  // literal string "undefined" (which then writes a file literally named
+  // `undefined` and silently corrupts the scratch dir). Return a clear error
+  // back to the model so it can self-correct.
+  const requirePath = (): { ok: true; path: string } | { ok: false; err: string } => {
+    if (typeof args.path !== 'string' || args.path.length === 0) {
+      return { ok: false, err: `error: ${name} requires a non-empty 'path' argument (got ${typeof args.path})` };
+    }
+    return { ok: true, path: args.path };
+  };
+
   try {
     switch (name) {
       case 'write_file': {
-        const p = scopedPath(scratch, String(args.path));
+        const r = requirePath();
+        if (!r.ok) return r.err;
+        const p = scopedPath(scratch, r.path);
         await mkdir(dirname(p), { recursive: true });
         await writeFile(p, String(args.content ?? ''));
-        return `wrote ${args.path}`;
+        return `wrote ${r.path}`;
       }
       case 'read_file': {
-        const p = scopedPath(scratch, String(args.path));
-        if (!existsSync(p)) return `error: ${args.path} does not exist`;
+        const r = requirePath();
+        if (!r.ok) return r.err;
+        const p = scopedPath(scratch, r.path);
+        if (!existsSync(p)) return `error: ${r.path} does not exist`;
         return await readFile(p, 'utf-8');
       }
       case 'edit_file': {
-        const p = scopedPath(scratch, String(args.path));
-        if (!existsSync(p)) return `error: ${args.path} does not exist`;
+        const r = requirePath();
+        if (!r.ok) return r.err;
+        const p = scopedPath(scratch, r.path);
+        if (!existsSync(p)) return `error: ${r.path} does not exist`;
         const before = await readFile(p, 'utf-8');
         const oldStr = String(args.old_string);
         const newStr = String(args.new_string);
         const count = before.split(oldStr).length - 1;
-        if (count === 0) return `error: old_string not found in ${args.path}`;
-        if (count > 1) return `error: old_string not unique in ${args.path} (${count} occurrences)`;
+        if (count === 0) return `error: old_string not found in ${r.path}`;
+        if (count > 1) return `error: old_string not unique in ${r.path} (${count} occurrences)`;
         await writeFile(p, before.replace(oldStr, newStr));
-        return `edited ${args.path}`;
+        return `edited ${r.path}`;
       }
       case 'list_files': {
         const files = await readdir(scratch);
