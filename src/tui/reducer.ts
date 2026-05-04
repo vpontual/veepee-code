@@ -80,8 +80,24 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case 'SCROLL_UP':
       return { ...state, scrollOffset: state.scrollOffset + action.amount };
 
-    case 'SCROLL_DOWN':
-      return { ...state, scrollOffset: Math.max(0, state.scrollOffset - action.amount) };
+    case 'SCROLL_DOWN': {
+      // SCROLL_TOP saturates scrollOffset to a sentinel; if the user then
+      // scrolls down, estimate a starting point near maxScroll using message
+      // count rather than decrementing the sentinel (would no-op visibly).
+      // The renderer re-clamps to the true maxScroll on the next render.
+      const SATURATION_THRESHOLD = Number.MAX_SAFE_INTEGER / 2;
+      const current = state.scrollOffset > SATURATION_THRESHOLD
+        ? state.messages.length * 30
+        : state.scrollOffset;
+      return { ...state, scrollOffset: Math.max(0, current - action.amount) };
+    }
+
+    case 'SCROLL_TOP':
+      // Saturate; renderer clamps to actual maxScroll. SCROLL_DOWN unwraps it.
+      return { ...state, scrollOffset: Number.MAX_SAFE_INTEGER };
+
+    case 'SCROLL_BOTTOM':
+      return { ...state, scrollOffset: 0 };
 
     case 'SET_MODEL':
       return {

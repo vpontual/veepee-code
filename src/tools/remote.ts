@@ -22,6 +22,7 @@ interface RemoteToolDef {
 interface RemoteConfig {
   url: string;     // e.g. http://host:8080
   apiKey: string;
+  allow?: string[]; // optional allowlist of tool names; if set, only these register
 }
 
 /**
@@ -47,9 +48,13 @@ export async function discoverRemoteTools(
     return [];
   }
 
+  const allow = remote.allow && remote.allow.length > 0 ? new Set(remote.allow) : null;
+
   for (const def of remoteDefs) {
     // Skip tools that exist locally — local version takes priority
     if (localToolNames.has(def.name)) continue;
+    // Skip tools not in allowlist when one is configured
+    if (allow && !allow.has(def.name)) continue;
 
     const schema = buildZodSchema(def.parameters);
     tools.push({
@@ -57,6 +62,8 @@ export async function discoverRemoteTools(
       description: `[remote] ${def.description}`,
       schema,
       execute: createRemoteExecutor(remote, def.name),
+      source: 'remote',
+      sourceName: 'llama-rider',
     });
   }
 

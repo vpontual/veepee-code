@@ -8,7 +8,7 @@ dns.setDefaultResultOrder('ipv4first');
 import { resolve } from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
-import { loadConfig } from './config.js';
+import { loadConfig, getConfigPath } from './config.js';
 import { ModelManager } from './models.js';
 import { ToolRegistry } from './tools/registry.js';
 import { Agent } from './agent.js';
@@ -39,6 +39,11 @@ import { registerCodingTools } from './tools/coding.js';
 import { registerWebTools } from './tools/web.js';
 import { registerDevOpsTools } from './tools/devops.js';
 import { discoverRemoteTools } from './tools/remote.js';
+import { connectAndDiscover as connectMcpServers, closeAll as closeMcpClients, type McpClient } from './mcp.js';
+import { buildSkillInvokeTool } from './skills.js';
+import { createTaskTool } from './tools/task.js';
+import { createExitPlanModeTool } from './tools/plan-gate.js';
+import { createNotebookEditTool } from './tools/notebook.js';
 
 const VERSION = '0.3.0';
 
@@ -139,11 +144,93 @@ async function main() {
     }
   }
 
+  // Connect to configured MCP servers and register their tools. Failures
+  // log but don't abort startup — vcode still works without MCP.
+  let mcpClients: McpClient[] = [];
+  if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
+    try {
+      const { clients, tools: mcpTools } = await connectMcpServers(config.mcpServers);
+      mcpClients = clients;
+      const result = registry.registerBatch(mcpTools);
+      if (result.registered.length > 0) {
+        console.error(chalk.dim(`  ${result.registered.length} MCP tools loaded across ${clients.length} server${clients.length === 1 ? '' : 's'}`));
+      }
+      if (result.skipped.length > 0) {
+        console.error(chalk.dim(`  (${result.skipped.length} MCP tools skipped due to name collision)`));
+      }
+    } catch (err) {
+      console.error(chalk.red('  MCP setup failed:'), err instanceof Error ? err.message : String(err));
+    }
+  }
+  // Clean up child processes on shutdown.
+  process.on('beforeExit', () => { void closeMcpClients(mcpClients); });
+
+  // Skills — register the skill_invoke meta-tool ONLY when at least one
+  // skill is on disk. Skill bodies stay on disk; only the index is in the
+  // tool description. See src/skills.ts for the lazy-load rationale.
+  const skillTool = buildSkillInvokeTool();
+  if (skillTool) {
+    registry.register(skillTool);
+    // Count is not exposed by buildSkillInvokeTool — peek via the loader.
+    const { loadSkills } = await import('./skills.js');
+    const skillCount = loadSkills().length;
+    console.error(chalk.dim(`  ${skillCount} skill${skillCount === 1 ? '' : 's'} indexed (lazy-loaded via skill_invoke)`));
+  }
+
   // Initialize permissions with TUI-based prompting
   const permissions = new PermissionManager();
 
   // Create agent
   const agent = new Agent(config, registry, modelManager, permissions);
+  // Register the `task` tool now that subagent manager is available. The
+  // tool is intentionally local (not Claude-Code's namespaced "Task" — keep
+  // it discoverable via tab-complete and consistent with other vcode tools).
+  registry.register(createTaskTool(agent.getSubAgents()));
+  // Plan-mode gate. Always registered, but the tool itself enforces that
+  // it can only run while agent.getMode() === 'plan'. The model sees it in
+  // every mode; tool-pick guidance in the description steers it to plan
+  // mode only.
+  registry.register(createExitPlanModeTool(agent, permissions));
+  // Notebook editing — round-trips cleanly through nbformat instead of
+  // letting the model edit raw JSON via edit_file.
+  registry.register(createNotebookEditTool());
+
+  // Background-completion notifications. Fires for every subagent
+  // transition to a terminal state — foreground completions are already
+  // visible inline in the parent's tool result, but Notification hooks
+  // may want every event. Background completions get an inline TUI
+  // notice so the user doesn't have to manually `/agents output` to find
+  // out something finished.
+  agent.getSubAgents().setOnTransition((tracked) => {
+    const dur = tracked.completedAt && tracked.startedAt
+      ? `${tracked.completedAt - tracked.startedAt}ms`
+      : '?';
+    const statusGlyph =
+      tracked.status === 'completed' ? theme.success('✓')
+      : tracked.status === 'aborted' ? theme.dim('⊘')
+      : theme.error('✗');
+
+    // Inline TUI notification ONLY for background tasks. Foreground tasks
+    // already deliver their result via tool_result; printing a duplicate
+    // "completed" line would be noise. The `background` flag is set in
+    // runTask when run_in_background=true.
+    if (tracked.background) {
+      tui.showInfo(`${statusGlyph} subagent ${theme.accent(tracked.id)} ${tracked.status} ${theme.dim(`on ${tracked.model}, ${dur}`)} — ${tracked.description}`);
+    }
+
+    // Notification hook fires for ALL transitions — foreground and
+    // background. Users may want desktop/Telegram alerts on every agent
+    // completion regardless of where the result was delivered.
+    void (async () => {
+      try {
+        const { runHooks } = await import('./hooks.js');
+        await runHooks('Notification', {
+          kind: 'info',
+          message: `subagent ${tracked.id} ${tracked.status}: ${tracked.description}`,
+        });
+      } catch { /* hook subsystem optional; never crash on notify */ }
+    })();
+  });
   agent.getContext().setRegisteredTools(registry.names());
   agent.getContext().setSystemPrompt(defaultModel);
   if (config.modelStick) agent.setModelStick(true);
@@ -295,6 +382,8 @@ async function main() {
     modelCount: allModels.length,
     version: VERSION,
     apiPort: actualApiPort,
+    configPath: getConfigPath(),
+    proxyUrl: config.proxyUrl,
   });
 
   // Show initial context stats (system prompt size before any messages)
@@ -334,8 +423,8 @@ async function main() {
   tui.setModelList(allModels);
 
   // Override permission prompting to use TUI
-  permissions.setPromptHandler(async (toolName, args, reason) => {
-    return tui.promptPermission(toolName, args, reason);
+  permissions.setPromptHandler(async (toolName, args, reason, preview) => {
+    return tui.promptPermission(toolName, args, reason, preview);
   });
 
   // Install RC permission handler (wraps TUI handler, routes to web when RC clients are connected)
@@ -361,6 +450,17 @@ async function main() {
             tui.showToolResult(event.name!, event.success!, event.content || event.error || '');
             tui.startStream();
             break;
+          case 'hook_output': {
+            tui.endStream();
+            const layer = event.hookLayer || 'global';
+            const ev = event.hookEvent || 'hook';
+            const prefix = event.hookBlocked
+              ? theme.error(`✗ ${ev} blocked [${layer}]`)
+              : theme.dim(`◆ ${ev} [${layer}]`);
+            tui.showInfo(`${prefix}\n${event.content || ''}`);
+            tui.startStream();
+            break;
+          }
           case 'thinking':
             tui.showThinking(event.content || '...');
             break;
@@ -506,6 +606,24 @@ async function main() {
     tui.showInfo('');
   }
 
+  // Hook trust prompt — shows on every launch (not just first run) when the
+  // project has hooks but we haven't decided yet. Quick warning, never blocks.
+  {
+    const { projectHasHooks, getProjectTrustState } = await import('./hooks.js');
+    const trust = getProjectTrustState(process.cwd());
+    if (trust === 'unknown' && projectHasHooks(process.cwd())) {
+      tui.showInfo([
+        '',
+        `${theme.warning('⚠ This project defines hooks')} (.veepee/settings.json)`,
+        `  Hooks run shell commands at lifecycle events (PreToolUse, PostToolUse, etc.).`,
+        `  They will ${theme.error('not run')} until you trust this project.`,
+        `  ${theme.accent('/hooks')}        — review what's configured`,
+        `  ${theme.accent('/hooks trust')}  — allow them`,
+        `  ${theme.accent('/hooks deny')}   — block them (silences this prompt)`,
+        '',
+      ].join('\n'));
+    }
+  }
   // Handle --resume / -c CLI arguments
   let currentSessionId: string | null = null;
   const continueFlag = process.argv.includes('-c') || process.argv.includes('--continue');
@@ -688,6 +806,21 @@ async function main() {
           case 'permission_denied':
             tui.showPermissionDenied(event.name!);
             break;
+
+          case 'hook_output': {
+            // Render hook output as a system message. Blocked hooks (PreToolUse
+            // returning non-zero) get a more prominent treatment so users
+            // notice the abort. Layer is shown to make trust attribution clear.
+            tui.endStream();
+            const layer = event.hookLayer || 'global';
+            const ev = event.hookEvent || 'hook';
+            const prefix = event.hookBlocked
+              ? theme.error(`✗ ${ev} blocked [${layer}]`)
+              : theme.dim(`◆ ${ev} [${layer}]`);
+            tui.showInfo(`${prefix}\n${event.content || ''}`);
+            tui.startStream();
+            break;
+          }
 
           case 'model_switch':
             tui.showModelSwitch(event.from!, event.to!);
@@ -896,6 +1029,22 @@ async function handleCommand(
   const parts = input.split(/\s+/);
   const cmd = parts[0].toLowerCase();
 
+  // User-defined slash commands (markdown files in ~/.veepee-code/commands/
+  // or .veepee/commands/) take precedence over the hardcoded ones below
+  // when there's a name conflict — lets users override defaults locally.
+  if (cmd.length > 1) {
+    const userCmdName = cmd.slice(1); // strip leading '/'
+    const { findUserCommand, expandCommand } = await import('./user-commands.js');
+    const userCmd = findUserCommand(userCmdName);
+    if (userCmd) {
+      const argString = input.slice(parts[0].length).trim();
+      const expanded = expandCommand(userCmd, argString);
+      tui.showInfo(theme.dim(`◆ /${userCmd.name} [${userCmd.source}]`));
+      await runTurn(expanded);
+      return false;
+    }
+  }
+
   switch (cmd) {
     case '/quit':
     case '/exit':
@@ -919,8 +1068,45 @@ async function handleCommand(
         `  ${theme.accent('/ralph <task>')}      Work→Review loop    ${theme.dim('/ralph --max <n> <task>')}`,
         `  ${theme.accent('/effort low|med|hi')} Set response depth  ${theme.accent('/settings')}    View/toggle settings`,
         '',
+        `${theme.textBold('Output styles:')}`,
+        `  ${theme.accent('/output-style')}      List available styles (default / explanatory / learning + custom)`,
+        `  ${theme.accent('/output-style <name>')} Activate a style — overlays the system prompt`,
+        `  ${theme.dim('  Drop ~/.veepee-code/output-styles/<name>.md or .veepee/output-styles/<name>.md to add custom.')}`,
+        '',
+        `${theme.textBold('Statusline customization:')}`,
+        `  ${theme.dim('  Drop ~/.veepee-code/statusline.sh (executable). Receives state JSON on stdin, output replaces the right-aligned status.')}`,
+        `  ${theme.dim('  State: { model, mode, tokens, tokenPercent, cwd, apiPort, apiConnected, version }. Cached 30s.')}`,
+        '',
+        `${theme.textBold('@file mentions:')}`,
+        `  ${theme.dim('  Type @<partial> in input + Tab to complete file paths.')}`,
+        `  ${theme.dim('  Submit with @path/to/file.ts to attach file content.')}`,
+        `  ${theme.dim('  Image extensions (png/jpg/etc.) auto-attach as base64 to vision-capable models.')}`,
+        '',
+        `${theme.textBold('User commands (drop markdown files to add slash commands):')}`,
+        `  ${theme.dim('  Global:  ~/.veepee-code/commands/<name>.md')}`,
+        `  ${theme.dim('  Project: .veepee/commands/<name>.md  (overrides global by name)')}`,
+        `  ${theme.dim('  Frontmatter: description, argument-hint. Body is the prompt template.')}`,
+        `  ${theme.dim('  Substitutions: $1, $2, ... $9 for positional args; $ARGUMENTS / $@ for the full string.')}`,
+        '',
+        `${theme.textBold('Skills (lazy-loaded knowledge, fetched on demand by the model):')}`,
+        `  ${theme.accent('/skills')}            List indexed skills`,
+        `  ${theme.dim('  Drop markdown in ~/.veepee-code/skills/ (global) or .veepee/skills/ (project).')}`,
+        `  ${theme.dim('  Frontmatter: name, description, tags?, allowed-tools?, model?. Body is the skill content.')}`,
+        `  ${theme.dim('  Skills are NOT in the system prompt — only the index. Model calls skill_invoke to fetch.')}`,
+        '',
+        `${theme.textBold('MCP servers (Model Context Protocol):')}`,
+        `  ${theme.accent('/mcp')}               List configured servers and tool counts`,
+        `  ${theme.dim('  Configure in settings.json mcpServers: { name: { command, args } } or { url }.')}`,
+        `  ${theme.dim('  Tools registered as mcp__<server>__<tool>; per-server allow list supported.')}`,
+        '',
+        `${theme.textBold('Hooks (run shell commands at lifecycle events):')}`,
+        `  ${theme.accent('/hooks')}            Show configured hooks   ${theme.accent('/hooks trust')}  Trust this project`,
+        `  ${theme.accent('/hooks deny')}        Block project hooks`,
+        `  ${theme.dim('  Configure in ~/.veepee-code/settings.json (global) or .veepee/settings.json (project, requires trust).')}`,
+        `  ${theme.dim('  Events: PreToolUse, PostToolUse, UserPromptSubmit, Stop, Notification.')}`,
+        '',
         `${theme.textBold('Modes:')}`,
-        `  ${theme.accent('/plan')}   Plan mode — thinking ON, heavy model, clarifying questions first`,
+        `  ${theme.accent('/plan')}   Plan mode — thinking ON, mutating tools BLOCKED until exit_plan_mode approved`,
         `  ${theme.accent('/act')}    Act mode  — thinking OFF, all tools, auto-switch (default)`,
         `  ${theme.accent('/chat')}   Chat mode — fast model, web search only, no file access`,
         `  ${theme.accent('/moe')}    Mixture of Experts — 3 models discuss your question`,
@@ -946,7 +1132,14 @@ async function handleCommand(
         '',
         `${theme.textBold('Keys:')}`,
         `  ${theme.dim('Enter')} submit  ${theme.dim('Shift+Enter')} newline  ${theme.dim('Tab')} tools  ${theme.dim('Ctrl+P')} commands  ${theme.dim('Ctrl+C')} interrupt`,
-        `  ${theme.dim('Ctrl+L')} clear  ${theme.dim('Ctrl+D')} quit  ${theme.dim('Up/Down')} history  ${theme.dim('Scroll/PgUp/PgDn')} scroll`,
+        `  ${theme.dim('Ctrl+L')} clear  ${theme.dim('Ctrl+D')} quit  ${theme.dim('Up/Down')} prompt history  ${theme.dim('Ctrl+Y')} copy last response`,
+        '',
+        `${theme.textBold('Scroll the chat:')}`,
+        `  ${theme.dim('Trackpad / mouse wheel')}     Scroll by 3 lines per tick`,
+        `  ${theme.dim('Shift+Up / Shift+Down')}      Scroll by 3 lines (also Ctrl+Up/Down)`,
+        `  ${theme.dim('PgUp / PgDn')}                Scroll by 10 lines`,
+        `  ${theme.dim('Ctrl+Home / Ctrl+End')}       Jump to top / bottom`,
+        `  ${theme.dim('Click+drag')}                 Native text selection (terminal handles it)`,
       ].join('\n'));
       return false;
 
@@ -977,40 +1170,6 @@ async function handleCommand(
 
     case '/copy': {
       tui.copyLastResponse();
-      return false;
-    }
-
-    case '/style': {
-      const { listOutputStyles, getOutputStyle, initOutputStyles } = await import('./styles.js');
-      const styleName = parts[1]?.toLowerCase();
-
-      if (!styleName || styleName === 'list') {
-        const styles = listOutputStyles();
-        if (styles.length === 0) {
-          const dir = initOutputStyles();
-          tui.showInfo(`Created styles directory with example: ${theme.accent(dir)}\nAdd .md files there, then use ${theme.accent('/style <name>')}`);
-        } else {
-          const current = agent.getContext().getOutputStyleName();
-          const list = styles.map(s => {
-            const marker = s.toLowerCase() === current?.toLowerCase() ? theme.success(' (active)') : '';
-            return `  ${theme.accent(s)}${marker}`;
-          }).join('\n');
-          tui.showInfo(`${theme.textBold('Output Styles:')}\n${list}\n\n  ${theme.dim('/style <name>')} to activate, ${theme.dim('/style off')} to deactivate`);
-        }
-        return false;
-      }
-
-      if (styleName === 'off' || styleName === 'none') {
-        agent.getContext().setOutputStyle(null);
-        tui.showInfo('Output style cleared.');
-        return false;
-      }
-
-      if (agent.getContext().setOutputStyle(styleName)) {
-        tui.showInfo(`Style set to: ${theme.accent(styleName)}`);
-      } else {
-        tui.showInfo(`Style ${theme.error(styleName)} not found. Use ${theme.accent('/style list')} to see available styles.`);
-      }
       return false;
     }
 
@@ -1076,7 +1235,7 @@ async function handleCommand(
       if (config.lockModel) {
         tui.showInfo(
           `${theme.accent('🔒 Locked to')} ${config.lockModel}\n` +
-          theme.dim('  Remove lockModel from ~/.veepee-code/vcode.config.json, ') +
+          theme.dim('  Remove lockModel from ~/.veepee-code/settings.json, ') +
           theme.dim('or run ') + theme.accent('vcode --wizard-step model') + theme.dim(' to change.'),
         );
         return false;
@@ -1134,7 +1293,7 @@ async function handleCommand(
       if (!config.reviewModel) {
         tui.showInfo([
           `${theme.warning('reviewModel not set.')}`,
-          `  Add ${theme.accent('"reviewModel": "gemma4:26b-a4b"')} to ${theme.dim('~/.veepee-code/vcode.config.json')}`,
+          `  Add ${theme.accent('"reviewModel": "gemma4:26b-a4b"')} to ${theme.dim('~/.veepee-code/settings.json')}`,
           `  Any model name the proxy advertises will work — pick one from a different family than your primary for best second-opinion value.`,
         ].join('\n'));
         return false;
@@ -1178,11 +1337,25 @@ async function handleCommand(
     }
 
     case '/tools': {
-      const tools = registry.list().sort((a, b) => a.name.localeCompare(b.name));
-      const lines = tools.map(t =>
-        `  ${theme.accent(t.name.padEnd(20))} ${theme.muted(t.description.slice(0, 60))}`
-      );
-      tui.showInfo(`${theme.textBold(`${tools.length} tools:`)}\n${lines.join('\n')}`);
+      // Group by source so users can see which tools came from where —
+      // makes provenance auditable when a tool misbehaves and tells users
+      // what their setup is actually exposing.
+      const groups = registry.bySource();
+      const total = registry.count();
+      const lines: string[] = [`${theme.textBold(`${total} tools:`)}`];
+      for (const group of groups) {
+        const sourceLabel = group.sourceName
+          ? `${group.source}:${group.sourceName}`
+          : group.source;
+        lines.push('');
+        lines.push(`${theme.accent(sourceLabel)} ${theme.dim(`(${group.tools.length})`)}`);
+        const sortedTools = [...group.tools].sort((a, b) => a.name.localeCompare(b.name));
+        for (const t of sortedTools) {
+          const desc = t.description.replace(/^\[(remote|mcp|skill)[^\]]*\]\s*/, ''); // strip prefix; group label conveys source
+          lines.push(`  ${theme.accent(t.name.padEnd(20))} ${theme.muted(desc.slice(0, 70))}`);
+        }
+      }
+      tui.showInfo(lines.join('\n'));
       return false;
     }
 
@@ -1321,6 +1494,182 @@ async function handleCommand(
       } else {
         tui.showInfo(`${toolName} was not in the always-allowed list`);
       }
+      return false;
+    }
+
+    case '/output-style':
+    case '/style': {
+      const sub = parts[1];
+      const { loadOutputStyles } = await import('./output-styles.js');
+      const styles = loadOutputStyles();
+      if (!sub || sub === 'list') {
+        const lines: string[] = [`${theme.textBold('Output styles')}`];
+        const active = agent.getContext().getOutputStyleName() ?? 'default';
+        for (const s of styles) {
+          const marker = s.name === active ? theme.success('●') : theme.dim(' ');
+          const tag = s.source === 'builtin' ? theme.dim('[built-in]') : theme.dim(`[${s.source}]`);
+          lines.push(`  ${marker} ${theme.accent(s.name.padEnd(16))} ${tag} ${theme.muted(s.description)}`);
+        }
+        lines.push('');
+        lines.push(theme.dim('  /output-style <name>   activate'));
+        lines.push(theme.dim('  Drop ~/.veepee-code/output-styles/<name>.md (frontmatter: description) to add custom.'));
+        tui.showInfo(lines.join('\n'));
+        return false;
+      }
+      const ok = agent.getContext().setOutputStyle(sub);
+      if (!ok) {
+        tui.showInfo(`${theme.error('Unknown output style:')} ${sub}\nAvailable: ${styles.map((s) => s.name).join(', ')}`);
+        return false;
+      }
+      tui.showInfo(`${theme.success('Output style:')} ${theme.accent(sub)}`);
+      return false;
+    }
+
+    case '/agents': {
+      const sub = parts[1];
+      const mgr = agent.getSubAgents();
+      const agents = mgr.listAgents();
+
+      if (sub === 'output') {
+        const id = parts[2];
+        if (!id) { tui.showInfo('Usage: /agents output <id>'); return false; }
+        tui.showInfo(theme.dim(`Awaiting ${id}...`));
+        const result = await mgr.waitFor(id);
+        if (!result) { tui.showInfo(theme.warning(`No subagent ${id}.`)); return false; }
+        const meta = `[${id} on ${result.model}, ${result.elapsed}ms, ${result.toolCalls.length} tool calls]`;
+        if (result.success) {
+          tui.showInfo(`${theme.success(meta)}\n\n${result.content}`);
+        } else {
+          tui.showInfo(`${theme.error(meta)}\n${result.error || '(no error message)'}`);
+        }
+        return false;
+      }
+
+      if (sub === 'stop') {
+        const id = parts[2];
+        if (!id) { tui.showInfo('Usage: /agents stop <id>'); return false; }
+        const ok = mgr.abort(id);
+        tui.showInfo(ok ? `${theme.warning(`Abort signaled for ${id}`)} (stops at next turn boundary)` : theme.error(`No running subagent ${id}.`));
+        return false;
+      }
+
+      // Default: list
+      const stats = mgr.stats();
+      const allowed = mgr.getAllowedModels();
+      const lines: string[] = [
+        `${theme.textBold('Subagents')} ${theme.dim(`(${stats.running}/${stats.max} running, ${stats.total} tracked total)`)}`,
+      ];
+      if (allowed) {
+        lines.push(theme.dim(`  Allowed models: ${allowed.join(', ')}`));
+      }
+      if (agents.length === 0) {
+        lines.push(theme.dim('  (none — model can spawn via the `task` tool)'));
+      } else {
+        for (const a of agents.slice(0, 20)) {
+          const status =
+            a.status === 'running' ? theme.warning('● running')
+            : a.status === 'completed' ? theme.success('✓ done')
+            : a.status === 'aborted' ? theme.dim('⊘ aborted')
+            : theme.error('✗ failed');
+          const dur = a.completedAt
+            ? `${a.completedAt - a.startedAt}ms`
+            : `${Date.now() - a.startedAt}ms+`;
+          lines.push(`  ${theme.accent(a.id.padEnd(8))} ${status.padEnd(20)} ${theme.dim(a.model.padEnd(30))} ${theme.dim(dur.padStart(8))}  ${a.description}`);
+        }
+        if (agents.length > 20) lines.push(theme.dim(`  ... and ${agents.length - 20} more`));
+      }
+      lines.push('');
+      lines.push(theme.dim('  /agents output <id>  — fetch result (blocks until done)'));
+      lines.push(theme.dim('  /agents stop <id>    — request abort'));
+      tui.showInfo(lines.join('\n'));
+      return false;
+    }
+
+    case '/skills': {
+      const { loadSkills } = await import('./skills.js');
+      const skills = loadSkills();
+      const lines: string[] = [`${theme.textBold('Skills')} ${theme.dim('(lazy-loaded — model calls skill_invoke to fetch)')}`];
+      if (skills.length === 0) {
+        lines.push(theme.dim('  (none) — drop markdown files in ~/.veepee-code/skills/ or .veepee/skills/'));
+      } else {
+        for (const s of skills) {
+          const tags = s.tags && s.tags.length > 0 ? theme.dim(` [${s.tags.join(', ')}]`) : '';
+          lines.push(`  ${theme.accent(s.name.padEnd(24))} ${theme.muted(s.description)}${tags} ${theme.dim('— ' + s.source)}`);
+        }
+      }
+      tui.showInfo(lines.join('\n'));
+      return false;
+    }
+
+    case '/mcp': {
+      const servers = config.mcpServers || {};
+      const names = Object.keys(servers);
+      const lines: string[] = [`${theme.textBold('MCP servers')}`];
+      if (names.length === 0) {
+        lines.push(theme.dim('  (none configured)'));
+        lines.push(theme.dim('  Add to settings.json under `mcpServers`. Stdio: { command, args }; SSE: { url }.'));
+      } else {
+        for (const name of names) {
+          const cfg = servers[name];
+          const transport = 'command' in cfg ? `stdio (${cfg.command})` : `sse (${cfg.url})`;
+          const allow = cfg.allow && cfg.allow.length > 0 ? ` allow=${cfg.allow.length}` : '';
+          const disabled = cfg.disabled ? theme.dim(' [disabled]') : '';
+          lines.push(`  ${theme.accent(name)} ${theme.dim(transport + allow)}${disabled}`);
+        }
+        const groups = registry.bySource().filter((g) => g.source === 'mcp');
+        const totalTools = groups.reduce((n, g) => n + g.tools.length, 0);
+        lines.push('');
+        lines.push(theme.dim(`  ${totalTools} MCP tool${totalTools === 1 ? '' : 's'} registered across ${groups.length} server${groups.length === 1 ? '' : 's'}.`));
+      }
+      tui.showInfo(lines.join('\n'));
+      return false;
+    }
+
+    case '/hooks': {
+      const sub = parts[1];
+      const hooksMod = await import('./hooks.js');
+      const cwd = process.cwd();
+
+      if (sub === 'trust') {
+        hooksMod.setProjectTrust(cwd, 'trust');
+        tui.showInfo([
+          `${theme.success('✓ Project trusted')} — hooks from .veepee/settings.json and .veepee/settings.local.json will run.`,
+          theme.dim(`  Revert with: /hooks deny`),
+        ].join('\n'));
+        return false;
+      }
+      if (sub === 'deny') {
+        hooksMod.setProjectTrust(cwd, 'deny');
+        tui.showInfo(`${theme.warning('Project denied')} — project/local hooks will not run.`);
+        return false;
+      }
+
+      // Default: show
+      const trust = hooksMod.getProjectTrustState(cwd);
+      const lines: string[] = [`${theme.textBold('Hooks status')}`];
+      lines.push(`  Trust state for ${cwd}: ${
+        trust === 'trusted' ? theme.success('trusted') :
+        trust === 'denied' ? theme.error('denied') :
+        theme.warning('unknown')
+      }`);
+      lines.push('');
+      for (const eventName of hooksMod.HOOK_EVENTS) {
+        const collected = hooksMod.collectHooks(eventName, cwd);
+        if (collected.length === 0) continue;
+        lines.push(`  ${theme.accent(eventName)} (${collected.length})`);
+        for (const { hook, layer } of collected) {
+          const willFire = layer === 'global' || trust === 'trusted';
+          const marker = willFire ? theme.dim('✓') : theme.error('✗');
+          const matcher = hook.matcher ? theme.dim(` /${hook.matcher}/`) : '';
+          const desc = hook.description ? theme.dim(` — ${hook.description}`) : '';
+          lines.push(`    ${marker} [${layer}]${matcher} ${theme.dim('$')} ${hook.command}${desc}`);
+        }
+      }
+      if (lines.length === 2) lines.push(theme.dim('  No hooks configured.'));
+      lines.push('');
+      lines.push(theme.dim('  Configure in ~/.veepee-code/settings.json (global), .veepee/settings.json (project), or .veepee/settings.local.json (local).'));
+      lines.push(theme.dim('  Subcommands: /hooks trust | /hooks deny | /hooks (this listing)'));
+      tui.showInfo(lines.join('\n'));
       return false;
     }
 
@@ -2076,7 +2425,7 @@ ${gathered.join('\n\n')}`;
       if (!syncManager) {
         tui.showInfo([
           theme.error('Sync not configured.'),
-          theme.dim('  Run /setup wizard sync, or add to ~/.veepee-code/vcode.config.json:'),
+          theme.dim('  Run /setup wizard sync, or add to ~/.veepee-code/settings.json:'),
           theme.dim('  "sync": { "url": "https://cloud.example.com/dav/...", "user": "...", "pass": "...", "auto": false }'),
         ].join('\n'));
         return;
@@ -2235,6 +2584,18 @@ function getLocalIp(): string {
 // Handle signals gracefully
 process.on('SIGINT', () => { /* handled in TUI */ });
 process.on('SIGTERM', () => process.exit(0));
+
+// Crash handlers — log and exit cleanly so the terminal isn't left in alt-screen
+process.on('uncaughtException', (err) => {
+  process.stdout.write('\x1b[?25h\x1b[?1049l');
+  console.error(chalk.red('Uncaught exception:'), err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  process.stdout.write('\x1b[?25h\x1b[?1049l');
+  console.error(chalk.red('Unhandled rejection:'), reason);
+  process.exit(1);
+});
 
 
 main().catch((err) => {

@@ -8,12 +8,15 @@ import { ContextManager, CHAT_TOOLS } from './context.js';
 import { ModelManager } from './models.js';
 import type { ModelRoster } from './benchmark.js';
 import { SubAgentManager } from './subagent.js';
+import { runHooks, shouldBlock, type HookExecResult } from './hooks.js';
+import { previewEdit, previewWrite } from './diff.js';
+import { PLAN_DISABLED_TOOLS } from './tools/plan-gate.js';
 import { readFile, readFile as readFileAsync, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, relative } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 
 export interface AgentEvent {
-  type: 'text' | 'tool_call' | 'tool_result' | 'model_switch' | 'thinking' | 'done' | 'error' | 'permission_denied' | 'reset_stream';
+  type: 'text' | 'tool_call' | 'tool_result' | 'model_switch' | 'thinking' | 'done' | 'error' | 'permission_denied' | 'reset_stream' | 'hook_output';
   content?: string;
   name?: string;
   args?: Record<string, unknown>;
@@ -25,6 +28,11 @@ export interface AgentEvent {
   evalCount?: number;      // tokens generated
   promptEvalCount?: number; // prompt tokens processed
   tokensPerSecond?: number; // actual generation speed
+  // Hook metadata (available on 'hook_output' events)
+  hookEvent?: 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'Stop' | 'Notification';
+  hookLayer?: 'global' | 'project' | 'local';
+  hookExitCode?: number;
+  hookBlocked?: boolean;
 }
 
 // Planning intent detection patterns
@@ -53,7 +61,7 @@ export class Agent {
   private mode: AgentMode = 'act';
   private previousModel: string | null = null;
   private roster: ModelRoster | null = null;
-  private subAgents: SubAgentManager | null = null;
+  private subAgents: SubAgentManager;
   private config: Config;
   private abortController: AbortController | null = null;
   private effort: EffortLevel = 'medium';
@@ -66,6 +74,12 @@ export class Agent {
     this.registry = registry;
     this.permissions = permissions;
     this.config = config;
+    // Subagent manager is always available — initialized with null roster
+    // so the `task` tool can use it before benchmark roster loads. Roster
+    // will replace it once available (see loadRoster). Importantly, the
+    // SAME instance persists, so registered tools holding a reference
+    // continue to work after roster swap.
+    this.subAgents = new SubAgentManager(this.config, this.registry, null);
 
     this.loadBenchmarkContextSizes();
     this.loadRoster();
@@ -78,7 +92,10 @@ export class Agent {
     try {
       const data = await readFile(rosterPath, 'utf-8');
       this.roster = JSON.parse(data) as ModelRoster;
-      // Initialize sub-agent manager with roster
+      // Re-instantiate subAgents with the freshly loaded roster. Anything
+      // already holding a reference to the old instance will keep working
+      // (it's still functional with null roster), but new spawns get
+      // benchmark-informed model picks.
       this.subAgents = new SubAgentManager(this.config, this.registry, this.roster);
     } catch { /* ignore */ }
   }
@@ -185,21 +202,35 @@ export class Agent {
     return { model: this.modelManager.getCurrentModel() };
   }
 
-  /** Detect image paths in user messages and return base64 data for vision models */
+  /** Detect image paths in user messages and return base64 data for vision models.
+   *  Supports three forms:
+   *    1. Absolute / explicit-relative paths (`/tmp/x.png`, `./x.png`, `~/x.png`).
+   *    2. `@<path>` mention syntax that survived expandFileMentions
+   *       (which now skips images so extractImages handles them).
+   *    3. Bare filenames in cwd (`x.png`) when they exist on disk.
+   */
   private async extractImages(message: string): Promise<string[]> {
-    const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
-    const pathPattern = /(?:^|\s)((?:\/|\.\/|~\/|[A-Za-z]:\\)[\w./-]+\.(?:png|jpg|jpeg|gif|webp|bmp))/gi;
+    const ext = '(?:png|jpg|jpeg|gif|webp|bmp)';
+    // Either a path with explicit prefix, an @-mention, or a bare filename.
+    const pathPattern = new RegExp(
+      `(?:^|\\s)(@?(?:(?:/|\\./|~/|[A-Za-z]:\\\\)[\\w./-]+\\.${ext}|[\\w./-]+\\.${ext}))`,
+      'gi',
+    );
     const matches = [...message.matchAll(pathPattern)];
     if (matches.length === 0) return [];
 
     const images: string[] = [];
+    const seen = new Set<string>(); // dedupe paths mentioned multiple times
     for (const match of matches) {
       let filePath = match[1].trim();
+      if (filePath.startsWith('@')) filePath = filePath.slice(1);
       if (filePath.startsWith('~/')) {
         filePath = resolve(process.env.HOME || '~', filePath.slice(2));
       } else {
         filePath = resolve(process.cwd(), filePath);
       }
+      if (seen.has(filePath)) continue;
+      seen.add(filePath);
       if (existsSync(filePath)) {
         try {
           const data = await readFileAsync(filePath);
@@ -220,17 +251,22 @@ export class Agent {
   }
 
   /** Expand @file mentions in user messages — reads the file and appends content */
-  /** Expand @file mentions — searches cwd + additional dirs */
+  /** Expand @file mentions — searches cwd + additional dirs.
+   *  Image extensions are deliberately skipped here; extractImages handles
+   *  them downstream as base64 attachments. Inlining a binary file as text
+   *  would corrupt the message. */
   private async expandFileMentions(message: string): Promise<string> {
     const mentionPattern = /@([\w./-]+(?:\.\w+))/g;
+    const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']);
     const mentions = [...message.matchAll(mentionPattern)];
     if (mentions.length === 0) return message;
 
     const searchDirs = this.context.getSearchDirs();
     const fileContents: string[] = [];
     for (const match of mentions) {
+      const ext = match[1].split('.').pop()?.toLowerCase() ?? '';
+      if (imageExts.has(ext)) continue; // hand off to extractImages
       // Try each search directory until we find the file
-      let found = false;
       for (const dir of searchDirs) {
         const filePath = resolve(dir, match[1]);
         if (existsSync(filePath)) {
@@ -241,7 +277,6 @@ export class Agent {
               ? lines.slice(0, 200).join('\n') + `\n... (${lines.length - 200} more lines)`
               : content;
             fileContents.push(`\n<file path="${relative(process.cwd(), filePath)}">\n${preview}\n</file>`);
-            found = true;
             break;
           } catch { /* skip unreadable */ }
         }
@@ -335,7 +370,7 @@ export class Agent {
     return this.permissions;
   }
 
-  getSubAgents(): SubAgentManager | null {
+  getSubAgents(): SubAgentManager {
     return this.subAgents;
   }
 
@@ -379,6 +414,12 @@ export class Agent {
     const permissionMode = options?.permissionMode || 'interactive';
     const allowedTools = options?.allowedTools ? new Set(options.allowedTools) : null;
     this.abortController = new AbortController();
+
+    // UserPromptSubmit hook — fires on raw user input, before any expansion
+    // or model interaction. Hook stdout is shown to the user; non-zero exit
+    // does NOT block the run (advisory only). Lets users automate things
+    // like "log every prompt" or "warn if prompt mentions production".
+    yield* this._fireHooks('UserPromptSubmit', { prompt: userMessage, cwd: process.cwd() });
 
     // Expand @file mentions — read files and append content
     const expandedMessage = await this.expandFileMentions(userMessage);
@@ -506,7 +547,7 @@ export class Agent {
         const numCtx = this.getOptimalContext(currentModel);
 
         // Mode-specific settings:
-        // plan: thinking ON, all tools, heavy model
+        // plan: thinking ON, mutating tools FILTERED OUT, exit_plan_mode required
         // act:  thinking OFF, all tools, auto-switch model
         // chat: thinking OFF, web/search tools only, standard model
         const useThinking = this.mode === 'plan';
@@ -514,6 +555,12 @@ export class Agent {
           ? this.registry.toOllamaTools().filter(t => {
               const name = t.function?.name || '';
               return CHAT_TOOLS.includes(name);
+            })
+          : this.mode === 'plan'
+          ? this.registry.toOllamaTools().filter(t => {
+              const name = t.function?.name || '';
+              // Block mutations until exit_plan_mode is approved. Hard gate.
+              return !PLAN_DISABLED_TOOLS.has(name);
             })
           : this.registry.toOllamaTools();
 
@@ -709,6 +756,8 @@ export class Agent {
       const READ_ONLY_TOOLS = new Set(['read_file', 'glob', 'grep', 'list_files', 'system_info', 'web_search', 'web_fetch']);
 
       // Check if all calls are independent read-only (safe to parallelize)
+      // Note: hook plumbing for PreToolUse/PostToolUse is below in both the
+      // parallel and sequential paths. See _fireHooks helper at end of class.
       const allReadOnly = toolCalls.length > 1 && toolCalls.every(c => READ_ONLY_TOOLS.has(c.function.name));
 
       if (allReadOnly) {
@@ -733,13 +782,24 @@ export class Agent {
             earlyResults.push({ name, args, result: { success: false, output: '', error: 'Permission denied' } });
             continue;
           }
+          // PreToolUse hook — non-zero exit blocks the tool call.
+          const preBlock = yield* this._fireHooks('PreToolUse', { tool: name, args, cwd: process.cwd() });
+          if (preBlock.blocked) {
+            earlyResults.push({ name, args, result: { success: false, output: '', error: preBlock.reason || 'Blocked by hook' } });
+            continue;
+          }
           executableCalls.push({ name, args });
         }
-        const executed = await Promise.all(executableCalls.map(async ({ name, args }) => ({
-          name,
-          args,
-          result: await this.registry.execute(name, args),
-        })));
+        const executed = await Promise.all(executableCalls.map(async ({ name, args }) => {
+          const startedAt = Date.now();
+          const result = await this.registry.execute(name, args);
+          return { name, args, result, durationMs: Date.now() - startedAt };
+        }));
+        // Fire PostToolUse for each executed call, in order. Output is purely
+        // informational here; PostToolUse cannot abort what already happened.
+        for (const { name, args, result, durationMs } of executed) {
+          yield* this._fireHooks('PostToolUse', { tool: name, args, cwd: process.cwd(), result, durationMs });
+        }
         const results = [...earlyResults, ...executed];
         for (const { name, args, result } of results) {
           yield {
@@ -774,16 +834,40 @@ export class Agent {
 
           yield { type: 'tool_call', name: toolName, args: toolArgs };
 
+          const preview = this._previewToolCall(toolName, toolArgs);
           const decision = permissionMode === 'auto_allow'
             ? 'allow'
-            : await this.permissions.check(toolName, toolArgs);
+            : await this.permissions.check(toolName, toolArgs, preview);
           if (decision === 'deny') {
             yield { type: 'permission_denied', name: toolName };
             this.context.addToolResult(toolName, `Permission denied: user rejected ${toolName}`);
             continue;
           }
 
+          // PreToolUse hook — non-zero exit blocks the tool call.
+          const preBlock = yield* this._fireHooks('PreToolUse', {
+            tool: toolName, args: toolArgs, cwd: process.cwd(),
+          });
+          if (preBlock.blocked) {
+            yield {
+              type: 'tool_result',
+              name: toolName,
+              success: false,
+              content: preBlock.reason || 'Blocked by hook',
+              error: preBlock.reason || 'Blocked by hook',
+            };
+            this.context.addToolResult(toolName, preBlock.reason || 'Blocked by hook', (toolArgs.path as string) || undefined);
+            continue;
+          }
+
+          const startedAt = Date.now();
           const result = await this.registry.execute(toolName, toolArgs);
+          const durationMs = Date.now() - startedAt;
+
+          // PostToolUse hook — informational; cannot abort.
+          yield* this._fireHooks('PostToolUse', {
+            tool: toolName, args: toolArgs, cwd: process.cwd(), result, durationMs,
+          });
 
           yield {
             type: 'tool_result',
@@ -842,6 +926,83 @@ export class Agent {
         }
       }
     }
+
+    // Stop hook — fires when the assistant finishes a turn cleanly. Early
+    // returns from error paths above bypass this (intentional — Stop should
+    // imply a successful turn boundary, not an aborted one).
+    yield* this._fireHooks('Stop', { cwd: process.cwd(), messageCount: this.context.messageCount() });
+  }
+
+  /** Compute a preview string for a tool call that mutates files. Returns
+   *  undefined for tools we don't preview, or when the preview can't be
+   *  computed (e.g. file doesn't exist for an edit). The preview is shown
+   *  in the permission prompt so the user can approve with full context.
+   */
+  private _previewToolCall(toolName: string, args: Record<string, unknown>): string | undefined {
+    try {
+      const path = typeof args.path === 'string' ? resolve(args.path) : null;
+      if (!path) return undefined;
+
+      if (toolName === 'edit_file') {
+        if (!existsSync(path)) return undefined;
+        const oldContent = readFileSync(path, 'utf-8');
+        const oldStr = String(args.old_string ?? '');
+        const newStr = String(args.new_string ?? '');
+        const replaceAll = args.replace_all === true;
+        if (!oldContent.includes(oldStr)) return undefined;
+        const newContent = replaceAll
+          ? oldContent.split(oldStr).join(newStr)
+          : oldContent.replace(oldStr, newStr);
+        return previewEdit(oldContent, newContent, relative(process.cwd(), path));
+      }
+
+      if (toolName === 'write_file') {
+        const newContent = typeof args.content === 'string' ? args.content : '';
+        const existing = existsSync(path) ? readFileSync(path, 'utf-8') : null;
+        return previewWrite(existing, newContent, relative(process.cwd(), path));
+      }
+
+      return undefined;
+    } catch {
+      return undefined; // never block on preview failure
+    }
+  }
+
+  /** Fire all matching hooks for a lifecycle event. Yields a `hook_output`
+   *  event for each hook whose stdout, stderr, or non-zero exit is worth
+   *  surfacing to the user. Returns the block decision so callers can abort
+   *  the action (PreToolUse semantics). For events that never block
+   *  (PostToolUse, Stop, Notification, UserPromptSubmit), the return value
+   *  is harmlessly ignored.
+   *
+   *  Use `yield* this._fireHooks(event, payload)` from the calling generator.
+   */
+  private async *_fireHooks(
+    event: 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'Stop' | 'Notification',
+    payload: Record<string, unknown>,
+  ): AsyncGenerator<AgentEvent, { blocked: boolean; reason?: string }> {
+    const results: HookExecResult[] = await runHooks(event, payload as never);
+    for (const r of results) {
+      const text = r.stdout || r.stderr;
+      const blockedHere = event === 'PreToolUse' && r.exitCode !== 0;
+      // Surface output only when there's something to show, the hook timed
+      // out, or the hook is going to block — don't pollute the chat with
+      // silent successful hooks.
+      if (text || r.timedOut || blockedHere) {
+        const content = r.timedOut
+          ? `[hook ${event}] timed out: ${r.hook.command}`
+          : (text || `[hook ${event}] exited ${r.exitCode}`);
+        yield {
+          type: 'hook_output',
+          content,
+          hookEvent: event,
+          hookLayer: r.layer,
+          hookExitCode: r.exitCode,
+          hookBlocked: blockedHere,
+        };
+      }
+    }
+    return shouldBlock(results);
   }
 
   /** Non-streaming version for API use (no permission prompts — auto-allows) */

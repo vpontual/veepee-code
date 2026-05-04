@@ -8,7 +8,23 @@
   "minModelSize": 12,
   "apiPort": 8484,
   "apiHost": "127.0.0.1",
+  "apiToken": null,
+  "apiExecute": false,
   "searxngUrl": null,
+  "shellHistoryContext": false,
+  "subagent": null,
+  "_subagent_example": {
+    "_comment": "Optional: constrain the `task` tool. allowedModels prevents typos triggering Ollama loads on fleets with pinned-per-server models. maxConcurrent overrides the default cap of 4. Both fields optional.",
+    "allowedModels": ["Qwen/Qwen3.6-35B-A3B-FP8", "gemma4:26b-a4b", "qwen3:8b"],
+    "maxConcurrent": 4
+  },
+  "remote": null,
+  "_remote_example": {
+    "_comment": "Optional: bridge to a remote agent (e.g., Llama Rider) to discover and use its tools. Set `remote` to an object like below — `allow` curates which remote tools register to keep the system-prompt tool catalog small.",
+    "url": "http://your-llama-rider-host:8080",
+    "apiKey": "sk-llama-rider-...",
+    "allow": ["read_pdf", "vision", "browser", "download", "spawn_agent", "agentlens", "semantic_memory"]
+  },
   "fleet": [
     { "name": "dgx-spark", "url": "http://10.0.154.246:11434" },
     { "name": "orin-agx",  "url": "http://10.0.154.245:11434" },

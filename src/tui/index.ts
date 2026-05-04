@@ -3,6 +3,9 @@ import { render, type Instance } from 'ink';
 import { execSync } from 'child_process';
 import { App, type AppHandle } from './App.js';
 import { theme, icons } from './theme.js';
+import { enterAltScreen, exitAltScreen } from './screen.js';
+import { loadUserCommands } from '../user-commands.js';
+import { completeFileMention } from './file-complete.js';
 import type { Message, TurnTracker, CommandDef, ModelItem, PermissionOption } from './types.js';
 
 function stripAnsi(str: string): string {
@@ -69,6 +72,23 @@ const COMMANDS: CommandDef[] = [
   { name: '/exit', args: '', description: 'Exit VEEPEE Code' },
 ];
 
+/** Re-read user commands from disk and concatenate with the hardcoded set.
+ *  Cheap enough to call on every Ctrl+P / tab — discovers new files without
+ *  a restart, which is the table-stakes UX for "drop a markdown file" flow. */
+function getAllCommands(): CommandDef[] {
+  try {
+    const userCmds = loadUserCommands();
+    const userDefs: CommandDef[] = userCmds.map((c) => ({
+      name: '/' + c.name,
+      args: c.argumentHint || '',
+      description: `[${c.source}] ${c.description}`,
+    }));
+    return [...COMMANDS, ...userDefs];
+  } catch {
+    return COMMANDS;
+  }
+}
+
 // ─── TUI Class ───────────────────────────────────────────────────────────────
 
 export class TUI {
@@ -85,6 +105,14 @@ export class TUI {
   private stdinHandler: ((data: Buffer) => void) | null = null;
   private pendingDispatches: import('./types.js').AppAction[] = [];
 
+  // Arrow-key burst disambiguation (wheel-as-arrows vs real keypress).
+  // When 1+ arrows arrive within ARROW_BURST_MS, treat the burst as a wheel
+  // scroll and route to chat. A lone arrow after the timeout is a real
+  // keystroke and routes to input history (existing behavior).
+  private arrowBuffer: Array<{ key: string }> = [];
+  private arrowFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly ARROW_BURST_MS = 25;
+
   onTabTools: (() => void) | null = null;
   private toolsShown = false;
 
@@ -95,15 +123,28 @@ export class TUI {
   start(info: {
     model: string; modelSize: string; toolCount: number;
     modelCount: number; version: string; apiPort: number;
+    configPath?: string; proxyUrl?: string;
   }): void {
-    // Enter alternate screen buffer (like the old code)
-    process.stdout.write('\x1b[?1049h'); // switch to alternate buffer
-    process.stdout.write('\x1b[?25l');   // hide cursor
-    process.stdout.write('\x1b[2J');     // clear
-    process.stdout.write('\x1b[H');      // home
+    // Startup banner — printed BEFORE entering alt-screen so it lands in the
+    // user's regular terminal scrollback. Visible after exit, useful for
+    // post-mortem debugging (PID, version, config path, model, proxy).
+    const bannerParts = [
+      `[VEEPEE Code v${info.version}]`,
+      `pid=${process.pid}`,
+      `model=${info.model || 'auto'}`,
+    ];
+    if (info.proxyUrl) bannerParts.push(`proxy=${info.proxyUrl}`);
+    if (info.configPath) bannerParts.push(`config=${info.configPath}`);
+    process.stderr.write(bannerParts.join(' ') + '\n');
 
-    // No mouse tracking — let the terminal handle scroll and text selection natively.
-    // Scroll in the TUI via keyboard: arrow keys, Page Up/Down, j/k.
+    // Enter alternate screen + alt-scroll mode for trackpad-as-arrows.
+    enterAltScreen();
+
+    // No mouse-tracking (1000h/1006h) is intentionally NOT enabled — leaving
+    // mouse events with the terminal preserves native click-drag selection
+    // for copy/paste. Trackpad scroll is delivered as arrow-key sequences via
+    // alt-scroll mode (1007h, set by enterAltScreen) and disambiguated from
+    // real keypresses by the burst detector in handleKey.
 
     // Set up raw stdin for keystroke handling (bypass Ink's useInput)
     process.stdin.setRawMode?.(true);
@@ -146,11 +187,9 @@ export class TUI {
       this.stdinHandler = null;
     }
     process.stdin.setRawMode?.(false);
-    // No mouse tracking to disable (we don't enable it)
     this.inkInstance?.unmount();
-    // Restore terminal: show cursor + exit alternate screen
-    process.stdout.write('\x1b[?25h');   // show cursor
-    process.stdout.write('\x1b[?1049l'); // restore main buffer
+    // Restore terminal — exits alt-screen, alt-scroll mode, and shows cursor.
+    exitAltScreen();
   }
 
   // ─── Dispatch helper ──────────────────────────────────────────────
@@ -200,7 +239,7 @@ export class TUI {
     });
   }
 
-  async promptPermission(toolName: string, args: Record<string, unknown>, reason?: string): Promise<string> {
+  async promptPermission(toolName: string, args: Record<string, unknown>, reason?: string, preview?: string): Promise<string> {
     const argsSummary = Object.entries(args)
       .map(([k, v]) => {
         const val = typeof v === 'string'
@@ -209,6 +248,16 @@ export class TUI {
         return `${theme.muted(k)}: ${val}`;
       })
       .join('  ');
+
+    // Show the preview (e.g. unified diff for edit/write) ABOVE the prompt
+    // header so the user sees what's about to change before scanning the
+    // y/n options. Skip when there's no preview (shell, http, etc.).
+    if (preview) {
+      this.dispatch({
+        type: 'ADD_MESSAGE',
+        message: { role: 'system', content: preview },
+      });
+    }
 
     this.dispatch({
       type: 'ADD_MESSAGE',
@@ -813,7 +862,31 @@ export class TUI {
         const newText = `/models ${selected.name}`;
         this.dispatch({ type: 'SET_INPUT', input: { text: newText, cursor: newText.length } });
         this.dispatch({ type: 'SET_MODEL_COMPLETION', visible: false });
-      } else if (this.toolsShown) {
+        return;
+      }
+      // @file tab-complete — fires when the cursor is inside an `@<partial>`
+      // token. Single match: replace inline. Multiple matches: render a
+      // dim system message with candidates so the user can disambiguate.
+      const completion = completeFileMention(state.input.text, state.input.cursor);
+      if (completion) {
+        if (completion.text !== undefined && completion.cursor !== undefined) {
+          this.dispatch({ type: 'SET_INPUT', input: { text: completion.text, cursor: completion.cursor } });
+          return;
+        }
+        if (completion.candidates.length > 0) {
+          const head = completion.candidates.slice(0, 12);
+          const more = completion.candidates.length - head.length;
+          const lines = [theme.dim(`@${completion.partial} matches (${completion.candidates.length}):`)];
+          for (const c of head) lines.push(theme.dim('  ' + c));
+          if (more > 0) lines.push(theme.dim(`  ... and ${more} more`));
+          this.dispatch({ type: 'ADD_MESSAGE', message: { role: 'system', content: lines.join('\n') } });
+          return;
+        }
+        // No matches — show empty hint, keep input unchanged.
+        this.dispatch({ type: 'ADD_MESSAGE', message: { role: 'system', content: theme.dim(`No files match @${completion.partial} in cwd`) } });
+        return;
+      }
+      if (this.toolsShown) {
         this.dispatch({ type: 'POP_MESSAGE' });
         this.toolsShown = false;
       } else if (this.onTabTools) {
@@ -826,7 +899,7 @@ export class TUI {
     // Ctrl+P — command menu
     if (key === '\x10') {
       this.dispatch({ type: 'SET_INPUT', input: { text: '/', cursor: 1 } });
-      this.dispatch({ type: 'SET_COMMAND_MENU', visible: true, selection: 0, filtered: [...COMMANDS] });
+      this.dispatch({ type: 'SET_COMMAND_MENU', visible: true, selection: 0, filtered: getAllCommands() });
       return;
     }
 
@@ -836,45 +909,48 @@ export class TUI {
       return;
     }
 
-    // Scroll: Shift+Up/Down, Page Up/Down
-    if (key === '\x1b[1;2A' || key === '\x1b[5~') {
+    // Scroll: Shift+Up/Down, Ctrl+Up/Down, Page Up/Down, Home/End.
+    // Ctrl variants kept in sync with keybindings.ts DEFAULT_BINDINGS so
+    // user-customization (when wired in Phase 1) won't surprise users.
+    if (key === '\x1b[1;2A' || key === '\x1b[1;5A' || key === '\x1b[5~') {
       const amount = key === '\x1b[5~' ? 10 : 3;
       this.dispatch({ type: 'SCROLL_UP', amount });
       return;
     }
-    if (key === '\x1b[1;2B' || key === '\x1b[6~') {
+    if (key === '\x1b[1;2B' || key === '\x1b[1;5B' || key === '\x1b[6~') {
       const amount = key === '\x1b[6~' ? 10 : 3;
       this.dispatch({ type: 'SCROLL_DOWN', amount });
       return;
     }
+    // Ctrl+Home / Ctrl+End — jump to top / bottom of chat. Plain Home/End
+    // remain for input cursor movement (handled later in this method).
+    if (key === '\x1b[1;5H') {
+      this.dispatch({ type: 'SCROLL_TOP' });
+      return;
+    }
+    if (key === '\x1b[1;5F') {
+      this.dispatch({ type: 'SCROLL_BOTTOM' });
+      return;
+    }
 
-    // Arrow Up
+    // Arrow Up — model-completion menu navigates immediately; otherwise
+    // buffer for burst-disambiguation (single = history, burst = wheel scroll).
     if (key === '\x1b[A') {
       if (state.modelCompletionVisible) {
         this.dispatch({ type: 'SET_MODEL_COMPLETION', visible: true, selection: Math.max(0, state.modelCompletionSelection - 1) });
         return;
       }
-      if (state.input.history.length > 0) {
-        const newIdx = Math.min(state.input.historyIdx + 1, state.input.history.length - 1);
-        const histText = state.input.history[newIdx];
-        this.dispatch({ type: 'SET_INPUT', input: { text: histText, cursor: histText.length, historyIdx: newIdx } });
-      }
+      this.bufferArrowKey(key);
       return;
     }
 
-    // Arrow Down
+    // Arrow Down — same disambiguation pattern as Up.
     if (key === '\x1b[B') {
       if (state.modelCompletionVisible) {
         this.dispatch({ type: 'SET_MODEL_COMPLETION', visible: true, selection: Math.min(state.modelCompletionItems.length - 1, state.modelCompletionSelection + 1) });
         return;
       }
-      if (state.input.historyIdx > 0) {
-        const newIdx = state.input.historyIdx - 1;
-        const histText = state.input.history[newIdx];
-        this.dispatch({ type: 'SET_INPUT', input: { text: histText, cursor: histText.length, historyIdx: newIdx } });
-      } else {
-        this.dispatch({ type: 'SET_INPUT', input: { text: '', cursor: 0, historyIdx: -1 } });
-      }
+      this.bufferArrowKey(key);
       return;
     }
 
@@ -908,9 +984,61 @@ export class TUI {
       this.dispatch({ type: 'SET_INPUT', input: { text: newText, cursor: state.input.cursor + 1 } });
 
       if (key === '/' && newText === '/') {
-        this.dispatch({ type: 'SET_COMMAND_MENU', visible: true, selection: 0, filtered: [...COMMANDS] });
+        this.dispatch({ type: 'SET_COMMAND_MENU', visible: true, selection: 0, filtered: getAllCommands() });
       } else {
         this.updateCommandFilter(newText);
+      }
+    }
+  }
+
+  // Buffer an arrow key and start/restart the flush timer. If another arrow
+  // arrives before ARROW_BURST_MS elapses (i.e. trackpad wheel), the buffer
+  // grows and we'll route to chat scroll. A lone arrow flushes after the
+  // timeout and routes to input-history navigation.
+  private bufferArrowKey(key: string): void {
+    this.arrowBuffer.push({ key });
+    if (this.arrowFlushTimer) clearTimeout(this.arrowFlushTimer);
+    this.arrowFlushTimer = setTimeout(() => this.flushArrowBuffer(), TUI.ARROW_BURST_MS);
+  }
+
+  private flushArrowBuffer(): void {
+    const events = this.arrowBuffer;
+    this.arrowBuffer = [];
+    this.arrowFlushTimer = null;
+    if (events.length === 0) return;
+
+    if (events.length === 1) {
+      this.applyArrowAsHistory(events[0].key);
+      return;
+    }
+
+    // Burst → wheel scroll. Net direction wins; amount scales with tick count.
+    let upCount = 0, downCount = 0;
+    for (const e of events) {
+      if (e.key === '\x1b[A') upCount++;
+      else if (e.key === '\x1b[B') downCount++;
+    }
+    const net = upCount - downCount;
+    if (net > 0) this.dispatch({ type: 'SCROLL_UP', amount: net * 3 });
+    else if (net < 0) this.dispatch({ type: 'SCROLL_DOWN', amount: -net * 3 });
+  }
+
+  private applyArrowAsHistory(key: string): void {
+    const state = this.getState();
+    if (!state) return;
+    if (key === '\x1b[A') {
+      if (state.input.history.length > 0) {
+        const newIdx = Math.min(state.input.historyIdx + 1, state.input.history.length - 1);
+        const histText = state.input.history[newIdx];
+        this.dispatch({ type: 'SET_INPUT', input: { text: histText, cursor: histText.length, historyIdx: newIdx } });
+      }
+    } else if (key === '\x1b[B') {
+      if (state.input.historyIdx > 0) {
+        const newIdx = state.input.historyIdx - 1;
+        const histText = state.input.history[newIdx];
+        this.dispatch({ type: 'SET_INPUT', input: { text: histText, cursor: histText.length, historyIdx: newIdx } });
+      } else {
+        this.dispatch({ type: 'SET_INPUT', input: { text: '', cursor: 0, historyIdx: -1 } });
       }
     }
   }
@@ -1002,7 +1130,7 @@ export class TUI {
     }
 
     this.dispatch({ type: 'SET_MODEL_COMPLETION', visible: false });
-    const filtered = COMMANDS.filter(c => c.name.toLowerCase().startsWith(query));
+    const filtered = getAllCommands().filter(c => c.name.toLowerCase().startsWith(query));
     this.dispatch({
       type: 'SET_COMMAND_MENU',
       visible: state.commandMenuVisible,

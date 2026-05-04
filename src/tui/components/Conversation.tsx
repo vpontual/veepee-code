@@ -107,6 +107,8 @@ export function Conversation({ state, rows, cols, hasResolveInput }: Conversatio
         apiPort={state.apiPort}
         apiConnected={state.apiConnected}
         version={state.version}
+        model={state.modelName}
+        mode={state.modelRole === 'Plan' ? 'plan' : state.modelRole === 'Chat' ? 'chat' : 'act'}
       />
     </Box>
   );

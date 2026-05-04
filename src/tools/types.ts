@@ -7,11 +7,22 @@ export interface ToolResult {
   error?: string;
 }
 
+/** Where a tool came from. Drives `/tools` grouping, lint coverage, and
+ *  diagnostic surface (e.g. "[mcp:filesystem]" prefix on errors). */
+export type ToolSource = 'local' | 'remote' | 'mcp' | 'skill';
+
 export interface ToolDef {
   name: string;
   description: string;
   schema: z.ZodObject<z.ZodRawShape>;
   execute: (params: Record<string, unknown>) => Promise<ToolResult>;
+  /** Optional provenance — defaults to 'local' when omitted (preserves
+   *  existing behavior for the ~15 hand-written local tools). Remote bridge,
+   *  MCP client, and skill loader set this explicitly. */
+  source?: ToolSource;
+  /** For non-local sources, an optional sub-name (e.g. MCP server name,
+   *  skill file basename). Used for grouping in `/tools`. */
+  sourceName?: string;
 }
 
 /** Convert a ToolDef's Zod schema to Ollama tool format */

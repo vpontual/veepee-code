@@ -3,7 +3,7 @@ import type { ConversationSignals } from './models.js';
 import type { AgentMode } from './agent.js';
 import { KnowledgeState } from './knowledge.js';
 import { detectProject, formatProjectInfo, getCodingGuidance } from './detect.js';
-import { getOutputStyle } from './styles.js';
+import { getOutputStyle } from './output-styles.js';
 import { getRecentShellHistory, formatShellHistoryBlock } from './shellhistory.js';
 import { readdirSync, readFileSync, statSync, existsSync } from 'fs';
 import { join, relative } from 'path';
@@ -39,7 +39,7 @@ function getProjectTree(cwd: string, maxFiles = 150, maxDepth = 3): string {
       const entries = readdirSync(dir, { withFileTypes: true })
         .filter(e => !e.name.startsWith('.') &&
           !['node_modules', 'dist', 'build', '.next', '__pycache__', '.git',
-            'venv', '.venv', 'target', 'vendor', '.cache'].includes(e.name))
+            'venv', '.venv', 'target', 'vendor', '.cache', 'scratch'].includes(e.name))
         .sort((a, b) => {
           if (a.isDirectory() && !b.isDirectory()) return -1;
           if (!a.isDirectory() && b.isDirectory()) return 1;

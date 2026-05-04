@@ -145,17 +145,38 @@ Key settings:
 
 ## Keyboard shortcuts
 
+### Input
+
 | Key | Action |
 |-----|--------|
 | `Enter` | Submit |
 | `Shift+Enter` | New line |
+| `Up` / `Down` | Cycle through previously sent prompts |
+| `Ctrl+A` / `Ctrl+E` | Cursor to start / end of input |
+| `Alt+B` / `Alt+F` | Cursor word left / right |
+| `Ctrl+W` | Delete previous word |
+| `Ctrl+U` | Delete entire input |
+
+### Chat / scrollback
+
+| Key | Action |
+|-----|--------|
+| Trackpad / mouse wheel | Scroll chat by 3 lines per tick |
+| `Shift+Up` / `Shift+Down` | Scroll by 3 lines (also `Ctrl+Up` / `Ctrl+Down`) |
+| `PgUp` / `PgDn` | Scroll by 10 lines |
+| `Ctrl+Home` / `Ctrl+End` | Jump to top / bottom of chat |
+| Click + drag | Native text selection — terminal handles it (mouse-tracking off) |
+| `Ctrl+Y` | Copy last response to clipboard |
+
+### Application
+
+| Key | Action |
+|-----|--------|
 | `Ctrl+P` or `/` | Command palette |
 | `Tab` | Show tools |
-| `Ctrl+Y` | Copy last response to clipboard |
+| `Ctrl+L` | Clear screen |
 | `Ctrl+C` | Interrupt generation |
 | `Ctrl+D` | Quit |
-| `Up/Down` | Message history |
-| `PgUp/PgDn` | Browse conversation |
 
 ## Context management
 

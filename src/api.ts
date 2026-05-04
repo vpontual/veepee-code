@@ -274,7 +274,7 @@ export function startApiServer(config: ApiConfig): { port: number; connectionCou
       // Execute a tool directly — requires VEEPEE_CODE_API_EXECUTE=1 opt-in
       if (path === '/api/execute' && req.method === 'POST') {
         if (!config.apiExecute) {
-          sendJson(res, 403, { error: '/api/execute is disabled. Set apiExecute to true in vcode.config.json to enable.' });
+          sendJson(res, 403, { error: '/api/execute is disabled. Set apiExecute to true in ~/.veepee-code/settings.json to enable.' });
           return;
         }
 

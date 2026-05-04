@@ -99,6 +99,8 @@ export type AppAction =
   | { type: 'SET_SCROLL'; offset: number }
   | { type: 'SCROLL_UP'; amount: number }
   | { type: 'SCROLL_DOWN'; amount: number }
+  | { type: 'SCROLL_TOP' }
+  | { type: 'SCROLL_BOTTOM' }
   | { type: 'SET_MODEL'; name: string; size?: string; role?: string }
   | { type: 'SET_STATS'; tokens: number; percent: number; messages: number; elapsed: number }
   | { type: 'START_STREAM' }

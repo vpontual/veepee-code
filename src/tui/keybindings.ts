@@ -10,15 +10,24 @@ export type KeyAction =
   | 'cursorLeft' | 'cursorRight' | 'cursorHome' | 'cursorEnd'
   | 'cursorWordLeft' | 'cursorWordRight'
   | 'deleteBack' | 'deleteForward' | 'deleteWord' | 'deleteLine'
-  | 'clearScreen' | 'copyResponse' | 'selectUp' | 'selectDown'
-  | 'dismiss' | 'tab';
+  | 'clearScreen' | 'copyResponse'
+  | 'tab';
 
 /** Raw key codes to named actions */
 export interface KeybindingMap {
   [rawKey: string]: KeyAction;
 }
 
-/** Default keybinding configuration */
+/**
+ * Default keybinding configuration.
+ *
+ * NOTE (2026-05-03): `resolveKey` is currently a stub — `tui/index.ts` does
+ * direct string matching on raw keystrokes rather than routing through this
+ * map. User overrides at `~/.veepee-code/keybindings.json` are loaded but
+ * not honored. Phase 1 of the world-class-parity plan wires this up. Until
+ * then, this map serves as the authoritative documentation of what keys
+ * are bound — the handler is kept in sync with these declarations.
+ */
 const DEFAULT_BINDINGS: KeybindingMap = {
   // Submit
   '\r': 'submit',
@@ -37,11 +46,15 @@ const DEFAULT_BINDINGS: KeybindingMap = {
   '\x19': 'copyResponse', // Ctrl+Y
   '\t': 'tab',
 
-  // Scroll
-  '\x1b[5~': 'scrollPageUp',   // PgUp
-  '\x1b[6~': 'scrollPageDown', // PgDn
-  '\x1b[1;5A': 'scrollUp',     // Ctrl+Up
-  '\x1b[1;5B': 'scrollDown',   // Ctrl+Down
+  // Scroll — chat viewport
+  '\x1b[5~': 'scrollPageUp',     // PgUp
+  '\x1b[6~': 'scrollPageDown',   // PgDn
+  '\x1b[1;2A': 'scrollUp',       // Shift+Up
+  '\x1b[1;2B': 'scrollDown',     // Shift+Down
+  '\x1b[1;5A': 'scrollUp',       // Ctrl+Up
+  '\x1b[1;5B': 'scrollDown',     // Ctrl+Down
+  '\x1b[1;5H': 'scrollTop',      // Ctrl+Home
+  '\x1b[1;5F': 'scrollBottom',   // Ctrl+End
 
   // History (arrows handled contextually — these are for when no menu is open)
   '\x1b[A': 'historyPrev',  // Up
@@ -116,6 +129,10 @@ export function describeKey(raw: string): string {
     '\x1b[A': 'Up', '\x1b[B': 'Down', '\x1b[C': 'Right', '\x1b[D': 'Left',
     '\x1b[5~': 'PgUp', '\x1b[6~': 'PgDn', '\x7f': 'Backspace',
     '\x01': 'Ctrl+A', '\x05': 'Ctrl+E', '\x17': 'Ctrl+W', '\x15': 'Ctrl+U',
+    '\x1b[1;2A': 'Shift+Up', '\x1b[1;2B': 'Shift+Down',
+    '\x1b[1;5A': 'Ctrl+Up', '\x1b[1;5B': 'Ctrl+Down',
+    '\x1b[1;5H': 'Ctrl+Home', '\x1b[1;5F': 'Ctrl+End',
+    '\x1b[1;5D': 'Ctrl+Left', '\x1b[1;5C': 'Ctrl+Right',
   };
   return map[raw] ?? raw.replace(/\x1b/g, 'Esc');
 }

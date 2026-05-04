@@ -700,14 +700,18 @@ async function runGitHubAuth(): Promise<void> {
 
 // ─── Config Helpers ─────────────────────────────────────────────────────────
 
-/** Load existing config values (from vcode.config.json or legacy .env) */
+/** Load existing config values (from settings.json, legacy vcode.config.json,
+ *  or even-more-legacy .env). Wizard works with the env-var-key shape, so we
+ *  flatten the JSON config into that shape regardless of source file. */
 function loadExistingConfig(): Record<string, string> {
   const configDir = resolve(process.env.HOME || '~', '.veepee-code');
-  const jsonPath = resolve(configDir, 'vcode.config.json');
+  const newPath = resolve(configDir, 'settings.json');
+  const legacyPath = resolve(configDir, 'vcode.config.json');
   const envPath = resolve(configDir, '.env');
   const values: Record<string, string> = {};
 
-  if (existsSync(jsonPath)) {
+  const jsonPath = existsSync(newPath) ? newPath : (existsSync(legacyPath) ? legacyPath : null);
+  if (jsonPath) {
     const config = JSON.parse(readFileSync(jsonPath, 'utf-8'));
     // Map JSON fields back to wizard env var keys
     if (config.proxyUrl) values['VEEPEE_CODE_PROXY_URL'] = config.proxyUrl;
@@ -737,7 +741,7 @@ function loadExistingConfig(): Record<string, string> {
   return values;
 }
 
-/** Save config values to ~/.veepee-code/vcode.config.json */
+/** Save config values to ~/.veepee-code/settings.json */
 function saveConfig(values: Record<string, string>): void {
   const configDir = resolve(process.env.HOME || '~', '.veepee-code');
   mkdirSync(configDir, { recursive: true });
@@ -769,7 +773,7 @@ function saveConfig(values: Record<string, string>): void {
     };
   }
 
-  writeFileSync(resolve(configDir, 'vcode.config.json'), JSON.stringify(config, null, 2) + '\n');
+  writeFileSync(resolve(configDir, 'settings.json'), JSON.stringify(config, null, 2) + '\n');
 }
 
 // ─── Step Runner ────────────────────────────────────────────────────────────
@@ -1042,8 +1046,10 @@ async function runModelStep(
 /** Check if the wizard should run (no config file exists) */
 export function needsWizard(): boolean {
   const configDir = resolve(process.env.HOME || '~', '.veepee-code');
-  const jsonPath = resolve(configDir, 'vcode.config.json');
+  const newPath = resolve(configDir, 'settings.json');
+  const legacyJsonPath = resolve(configDir, 'vcode.config.json');
   const envPath = resolve(configDir, '.env');
+  const jsonPath = existsSync(newPath) ? newPath : legacyJsonPath;
   // Config exists if either new JSON or legacy .env is present (migration happens at load time)
   return !existsSync(jsonPath) && !existsSync(envPath);
 }
@@ -1212,7 +1218,11 @@ async function renderSummary(values: Record<string, string>, steps: WizardStep[]
 
   row += 1;
   moveTo(row, 5);
-  const configPath = resolve(process.env.HOME || '~', '.veepee-code', 'vcode.config.json');
+  // Show whichever filename actually exists; new is canonical.
+  const configDir = resolve(process.env.HOME || '~', '.veepee-code');
+  const newPath = resolve(configDir, 'settings.json');
+  const legacyPath = resolve(configDir, 'vcode.config.json');
+  const configPath = existsSync(newPath) ? newPath : legacyPath;
   process.stdout.write(theme.dim(`Config: ${configPath}`));
 
   row += 2;

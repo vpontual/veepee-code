@@ -5,7 +5,7 @@ import { existsSync } from 'fs';
 export type PermissionDecision = 'allow' | 'allow_always' | 'deny';
 
 // Prompt handler — can be replaced by TUI's promptPermission
-type PromptHandler = (toolName: string, args: Record<string, unknown>, reason?: string) => Promise<string>;
+type PromptHandler = (toolName: string, args: Record<string, unknown>, reason?: string, preview?: string) => Promise<string>;
 
 export class PermissionManager {
   private alwaysAllowed = new Set<string>();
@@ -51,13 +51,17 @@ export class PermissionManager {
     // no-op when TUI is handling prompts
   }
 
-  /** Check if a tool call is allowed, prompting the user if needed */
-  async check(toolName: string, args: Record<string, unknown>): Promise<PermissionDecision> {
+  /** Check if a tool call is allowed, prompting the user if needed.
+   *  `preview` is an optional formatted diff/summary surfaced in the prompt
+   *  so the user can decide knowing what's about to change. Caller computes
+   *  the preview (e.g. unified diff for edit_file/write_file) — keeps this
+   *  module agnostic of tool semantics. */
+  async check(toolName: string, args: Record<string, unknown>, preview?: string): Promise<PermissionDecision> {
     const dangerous = PermissionManager.DANGEROUS_PATTERNS.find(
       p => p.tool === toolName && p.check(args)
     );
     if (dangerous) {
-      return this.prompt(toolName, args, dangerous.reason);
+      return this.prompt(toolName, args, dangerous.reason, preview);
     }
 
     if (PermissionManager.SAFE_TOOLS.has(toolName)) {
@@ -86,15 +90,15 @@ export class PermissionManager {
       }
     }
 
-    return this.prompt(toolName, args);
+    return this.prompt(toolName, args, undefined, preview);
   }
 
-  private async prompt(toolName: string, args: Record<string, unknown>, reason?: string): Promise<PermissionDecision> {
+  private async prompt(toolName: string, args: Record<string, unknown>, reason?: string, preview?: string): Promise<PermissionDecision> {
     if (!this.promptHandler) {
       return 'allow'; // API mode — no interactive prompt
     }
 
-    const answer = await this.promptHandler(toolName, args, reason);
+    const answer = await this.promptHandler(toolName, args, reason, preview);
     const choice = answer.trim().toLowerCase();
 
     if (choice === 'y' || choice === 'yes') {
