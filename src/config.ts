@@ -256,7 +256,13 @@ export function migrateEnvToJson(): boolean {
 
 /** Migrate legacy `vcode.config.json` to `settings.json`. Returns true if
  *  migration occurred. The legacy file is renamed to `vcode.config.json.bak`
- *  rather than deleted, so users can verify the migration succeeded. */
+ *  rather than deleted, so users can verify the migration succeeded.
+ *
+ *  Prints a one-time stderr notice on migration so users don't think their
+ *  config was wiped when they see the renamed `.bak` and a new `settings.json`
+ *  they don't recognize. (This was a real reported confusion — the migration
+ *  used to be silent.)
+ */
 export function migrateLegacyConfig(): boolean {
   const newPath = getGlobalSettingsPath();
   const legacyPath = getLegacyGlobalSettingsPath();
@@ -274,6 +280,12 @@ export function migrateLegacyConfig(): boolean {
 
   writeFileSync(newPath, content);
   renameSync(legacyPath, legacyPath + '.bak');
+  // Stderr so it doesn't pollute -p / --print stdout. Visible in interactive use.
+  process.stderr.write(
+    `\n  ▸ Config migrated: vcode.config.json → settings.json\n` +
+    `    Your settings are intact at ${newPath}\n` +
+    `    The old file was renamed to vcode.config.json.bak (safe to delete)\n\n`,
+  );
   return true;
 }
 

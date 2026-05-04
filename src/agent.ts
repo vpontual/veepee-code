@@ -35,6 +35,35 @@ export interface AgentEvent {
   hookBlocked?: boolean;
 }
 
+/**
+ * Sampling presets for Qwen3-family models.
+ * Source: https://huggingface.co/Qwen/Qwen3.6-35B-A3B "Best Practices" section.
+ * Forwarded by ollama_proxy → vLLM (see proxy/vllm-adapter.ts mapOptionsToVllm).
+ * Note: Qwen docs say `repetition_penalty`; Ollama-shape key is `repeat_penalty`
+ * which the proxy renames back to `repetition_penalty` for vLLM.
+ *
+ * CODING: thinking-mode coding tasks (act/plan) — tighter sampling.
+ * INSTRUCT: non-thinking conversational mode (chat) — Qwen's "Instruct" preset.
+ *           Used when `think: false` is honored by the proxy (Qwen3 + vLLM only).
+ */
+export const QWEN_CODING_PRESET = {
+  temperature: 0.6,
+  top_p: 0.95,
+  top_k: 20,
+  min_p: 0.0,
+  presence_penalty: 0.0,
+  repeat_penalty: 1.0,
+} as const;
+
+export const QWEN_INSTRUCT_PRESET = {
+  temperature: 0.7,
+  top_p: 0.80,
+  top_k: 20,
+  min_p: 0.0,
+  presence_penalty: 1.5,
+  repeat_penalty: 1.0,
+} as const;
+
 // Planning intent detection patterns
 const PLAN_PATTERNS = [
   /\bplan\b/i, /\bdesign\b/i, /\barchitect\b/i, /\bstrateg/i,
@@ -382,13 +411,17 @@ export class Agent {
     return this.effort;
   }
 
-  /** Get Ollama options based on effort level */
-  private getEffortOptions(): { num_predict?: number; temperature?: number } {
+  /**
+   * Get Ollama options based on effort level.
+   * Effort controls output length only; sampling temp/top_p/etc come from
+   * QWEN_CODING_PRESET (Qwen-recommended values for thinking-mode coding).
+   */
+  private getEffortOptions(): { num_predict: number } {
     switch (this.effort) {
-      case 'low': return { num_predict: 256, temperature: 0.3 };
-      case 'high': return { num_predict: 4096, temperature: 0.7 };
+      case 'low': return { num_predict: 256 };
+      case 'high': return { num_predict: 4096 };
       case 'medium':
-      default: return { num_predict: 1024, temperature: 0.5 };
+      default: return { num_predict: 1024 };
     }
   }
 
@@ -569,6 +602,13 @@ export class Agent {
           tools = tools.filter(t => allowedTools.has(t.function?.name || ''));
         }
         const effortOpts = this.getEffortOptions();
+        // Sampling preset: chat mode → conversational/general; act/plan → coding.
+        // Both Qwen-recommended; harmless on other Qwen3.x models, only wrong if
+        // the user unlocks to a non-Qwen family (no current path does this).
+        // Chat mode: thinking is actually disabled (proxy translates think:false
+        // → chat_template_kwargs.enable_thinking=false for Qwen3 on vLLM), so we
+        // use Qwen's Instruct preset. Act/plan keep thinking + Coding preset.
+        const samplingPreset = this.mode === 'chat' ? QWEN_INSTRUCT_PRESET : QWEN_CODING_PRESET;
 
         // Retry wrapper: one retry with 3s backoff on connection errors
         const chatWithRetry = async () => {
@@ -581,6 +621,7 @@ export class Agent {
               think: useThinking,
               keep_alive: '30m',
               options: {
+                ...samplingPreset,
                 ...(numCtx ? { num_ctx: numCtx } : {}),
                 ...effortOpts,
               },
@@ -598,6 +639,7 @@ export class Agent {
                 think: useThinking,
                 keep_alive: '30m',
                 options: {
+                  ...samplingPreset,
                   ...(numCtx ? { num_ctx: numCtx } : {}),
                   ...effortOpts,
                 },
