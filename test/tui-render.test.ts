@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { appReducer, initialState } from '../src/tui/reducer.js';
+import { coerceToString } from '../src/tui/index.js';
 
 describe('TUI app reducer', () => {
   it('SET_VIEW transitions view state', () => {
@@ -110,5 +111,47 @@ describe('TUI app reducer', () => {
   it('ADD_TOOL_CALL is no-op without tracker', () => {
     const state = appReducer(initialState, { type: 'ADD_TOOL_CALL', name: 'grep' });
     expect(state.turnTracker).toBeNull();
+  });
+});
+
+describe('coerceToString — defense against [object Object] leaks', () => {
+  it('passes strings through unchanged', () => {
+    expect(coerceToString('hello')).toBe('hello');
+    expect(coerceToString('')).toBe('');
+    expect(coerceToString('multi\nline')).toBe('multi\nline');
+  });
+
+  it('returns empty string for null/undefined (preserves || \'\' fallback semantics)', () => {
+    expect(coerceToString(null)).toBe('');
+    expect(coerceToString(undefined)).toBe('');
+  });
+
+  it('extracts message from Error instances', () => {
+    expect(coerceToString(new Error('boom'))).toBe('boom');
+    expect(coerceToString(new TypeError('bad type'))).toBe('bad type');
+  });
+
+  it('JSON-serializes plain objects instead of producing [object Object]', () => {
+    expect(coerceToString({ foo: 'bar' })).toBe('{"foo":"bar"}');
+    expect(coerceToString({ a: 1, b: [2, 3] })).toBe('{"a":1,"b":[2,3]}');
+  });
+
+  it('handles circular references without throwing', () => {
+    const obj: Record<string, unknown> = { a: 1 };
+    obj.self = obj;
+    const out = coerceToString(obj);
+    expect(out).toContain('"a":1');
+    expect(out).toContain('[circular]');
+  });
+
+  it('coerces numbers and booleans sensibly', () => {
+    expect(coerceToString(42)).toBe('42');
+    expect(coerceToString(true)).toBe('true');
+    expect(coerceToString(false)).toBe('false');
+  });
+
+  it('never returns the literal "[object Object]" for plain objects', () => {
+    expect(coerceToString({})).not.toBe('[object Object]');
+    expect(coerceToString({ x: 1 })).not.toBe('[object Object]');
   });
 });

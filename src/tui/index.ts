@@ -13,6 +13,31 @@ function stripAnsi(str: string): string {
   return str.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
+/**
+ * Defense-in-depth: coerce non-string values into something the user can read.
+ * Bare `${obj}` would render `[object Object]` (useless for debugging); JSON
+ * preserves the actual shape so a leaked object surfaces its real content.
+ * Strings pass through unchanged. Errors get their message; other non-strings
+ * get JSON.stringify with a circular-reference guard.
+ */
+export function coerceToString(v: unknown): string {
+  if (typeof v === 'string') return v;
+  if (v === null || v === undefined) return '';
+  if (v instanceof Error) return v.message || v.toString();
+  try {
+    const seen = new WeakSet();
+    return JSON.stringify(v, (_k, val) => {
+      if (typeof val === 'object' && val !== null) {
+        if (seen.has(val)) return '[circular]';
+        seen.add(val);
+      }
+      return val;
+    }) ?? String(v);
+  } catch {
+    return String(v);
+  }
+}
+
 export { theme, box, icons } from './theme.js';
 
 // ─── Command Definitions (needed for filter logic) ──────────────────────────
@@ -363,10 +388,14 @@ export class TUI {
   }
 
   showToolResult(name: string, success: boolean, output: string): void {
-    const lines = output.split('\n');
+    // Defense: upstream typing claims `output: string` but TS doesn't enforce
+    // at runtime — a leaked object would `.split` crash or render as
+    // "[object Object]". Coerce so the actual shape surfaces instead.
+    const safeOutput = coerceToString(output);
+    const lines = safeOutput.split('\n');
     const preview = lines.length > 3
       ? lines.slice(0, 3).join('\n') + `\n... (${lines.length - 3} more lines)`
-      : output;
+      : safeOutput;
     this.dispatch({ type: 'ADD_MESSAGE', message: { role: 'tool_result', content: preview, success, meta: name } });
     this.dispatch({
       type: 'UPDATE_TOOL_CALL',
@@ -448,12 +477,12 @@ export class TUI {
     }
     this.dispatch({ type: 'SET_TURN_TRACKER', tracker: null });
     this.dispatch({ type: 'SET_PROGRESS_BAR_ACTIVE', active: false });
-    this.dispatch({ type: 'ADD_MESSAGE', message: { role: 'system', content: `${theme.error(msg)}` } });
+    this.dispatch({ type: 'ADD_MESSAGE', message: { role: 'system', content: `${theme.error(coerceToString(msg))}` } });
     this.dispatch({ type: 'SET_VIEW', view: 'conversation' });
   }
 
   showInfo(msg: string): void {
-    this.dispatch({ type: 'ADD_MESSAGE', message: { role: 'system', content: msg } });
+    this.dispatch({ type: 'ADD_MESSAGE', message: { role: 'system', content: coerceToString(msg) } });
     const state = this.getState();
     if (state?.view === 'welcome' && state.messages.length > 0) {
       this.dispatch({ type: 'SET_VIEW', view: 'conversation' });
