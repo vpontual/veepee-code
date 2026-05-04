@@ -759,28 +759,46 @@ export class Agent {
           yield { type: 'error', error: 'Response timed out or interrupted' };
           return;
         }
-        // Defense: Ollama SDK and undici sometimes throw plain objects (e.g.
-        // `{status:500, body:...}`) instead of Error instances. Bare String(obj)
-        // returns useless "[object Object]"; JSON-serialize to surface the
-        // actual shape so users can debug what went wrong.
+        // Defense: the Ollama SDK's ResponseError class stringifies its
+        // `message` arg via the Error constructor — so when vLLM returns an
+        // error JSON whose `.error` field is an object (not a string), the
+        // SDK ends up with `responseError.message = "[object Object]"`.
+        // The original object IS preserved on `responseError.error` though.
+        // Same pattern for any custom Error subclass that wraps structured
+        // data: try the .error / .body / .response fields before giving up.
+        const safeStringify = (v: unknown): string => {
+          try {
+            const seen = new WeakSet();
+            return JSON.stringify(v, (_k, val) => {
+              if (typeof val === 'object' && val !== null) {
+                if (seen.has(val)) return '[circular]';
+                seen.add(val);
+              }
+              return val;
+            }) || String(v);
+          } catch {
+            return String(v);
+          }
+        };
         let msg: string;
         if (err instanceof Error) {
-          msg = err.message || err.toString();
+          // If the message got corrupted to "[object Object]" or is empty,
+          // unwrap any structured data the SDK preserved on the Error.
+          const baseMsg = err.message || err.toString();
+          const errObj = err as Error & { error?: unknown; body?: unknown; response?: unknown; status_code?: unknown; cause?: unknown };
+          const recoverable = errObj.error ?? errObj.body ?? errObj.response ?? errObj.cause;
+          if (baseMsg === '[object Object]' && recoverable !== undefined) {
+            msg = typeof recoverable === 'string' ? recoverable : safeStringify(recoverable);
+          } else if (recoverable !== undefined && typeof recoverable === 'object') {
+            // Append structured data when present so users see status codes etc.
+            msg = `${baseMsg} ${safeStringify(recoverable)}`;
+          } else {
+            msg = baseMsg;
+          }
         } else if (typeof err === 'string') {
           msg = err;
         } else if (err && typeof err === 'object') {
-          try {
-            const seen = new WeakSet();
-            msg = JSON.stringify(err, (_k, v) => {
-              if (typeof v === 'object' && v !== null) {
-                if (seen.has(v)) return '[circular]';
-                seen.add(v);
-              }
-              return v;
-            }) || String(err);
-          } catch {
-            msg = String(err);
-          }
+          msg = safeStringify(err);
         } else {
           msg = String(err);
         }
