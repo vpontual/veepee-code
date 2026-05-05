@@ -65,7 +65,8 @@ const COMMANDS: CommandDef[] = [
   { name: '/permissions', args: '', description: 'Show permission settings' },
   { name: '/revoke', args: '<tool>', description: 'Revoke always-allow for a tool' },
   { name: '/status', args: '', description: 'Show session status' },
-  { name: '/clear', args: '', description: 'Clear conversation history' },
+  { name: '/clear', args: '', description: 'Clear conversation history (mid-run: stops + wipes)' },
+  { name: '/stop', args: '', description: 'Mid-run: interrupt the agent (same as Ctrl+C). Between turns: shows the gesture.' },
   { name: '/compact', args: '', description: 'Compact conversation to free context' },
   { name: '/help', args: '', description: 'Show all commands' },
   { name: '/save', args: '[name]', description: 'Save current conversation as a session' },
@@ -127,6 +128,10 @@ export class TUI {
   private permissionResolve: ((value: string) => void) | null = null;
   private modelSelectorResolve: ((value: { name: string; action: 'use' | 'default' } | null) => void) | null = null;
   private abortHandler: (() => void) | null = null;
+  /** Called when the user types /clear while the agent is running. The owner
+   *  is expected to abort + wipe history. Falls back to abortHandler when
+   *  unset. */
+  private clearOnRunHandler: (() => void) | null = null;
   private turnTrackerInterval: ReturnType<typeof setInterval> | null = null;
   private stdinHandler: ((data: Buffer) => void) | null = null;
   private pendingDispatches: import('./types.js').AppAction[] = [];
@@ -317,6 +322,12 @@ export class TUI {
 
   setAbortHandler(handler: () => void): void {
     this.abortHandler = handler;
+  }
+
+  /** Set the handler used when the user types /clear while the agent is
+   *  running. Owner should abort + wipe history. */
+  setClearOnRunHandler(handler: () => void): void {
+    this.clearOnRunHandler = handler;
   }
 
   addUserMessage(content: string): void {
@@ -1090,6 +1101,34 @@ export class TUI {
   private handleQueuedInput(key: string): void {
     const state = this.getState();
     if (!state) return;
+
+    // Enter while the agent is running: intercept /stop and /clear as
+    // mid-run interrupts. Anything else falls through to type-ahead so
+    // the user can keep composing the next prompt.
+    if (key === '\r' || key === '\n') {
+      const cmd = state.queuedInput.trim();
+      if (cmd === '/stop') {
+        this.dispatch({ type: 'SET_QUEUED_INPUT', text: '', cursor: 0 });
+        if (this.abortHandler) {
+          this.abortHandler();
+          this.showInfo(theme.warning('Stopped.'));
+        }
+        return;
+      }
+      if (cmd === '/clear') {
+        this.dispatch({ type: 'SET_QUEUED_INPUT', text: '', cursor: 0 });
+        if (this.clearOnRunHandler) {
+          this.clearOnRunHandler();
+        } else if (this.abortHandler) {
+          this.abortHandler();
+          this.showInfo(theme.warning('Stopped (no clear handler bound — history kept).'));
+        }
+        return;
+      }
+      // Plain Enter with non-command text: leave it queued for the next
+      // input prompt — matches existing type-ahead behavior.
+      return;
+    }
 
     // Backspace (must be checked before printable — 0x7f is > 32)
     if (key === '\x7f' || key === '\b') {

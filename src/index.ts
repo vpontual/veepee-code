@@ -504,6 +504,13 @@ async function main() {
 
   // Wire Ctrl+C abort
   tui.setAbortHandler(() => agent.abort());
+  // /clear typed mid-run: abort + wipe history in one gesture.
+  tui.setClearOnRunHandler(() => {
+    agent.abort();
+    agent.clear();
+    permissions.resetSession();
+    tui.showInfo(theme.warning('Stopped and cleared.'));
+  });
 
   // Lock mode: no benchmark, no roster — the locked model is the one and only.
   // Skip the first-launch benchmark that would otherwise fire against every
@@ -1069,6 +1076,7 @@ async function handleCommand(
         `  ${theme.accent('/model auto')}       Auto-switch on     ${theme.accent('/tools')}      List all tools`,
         `  ${theme.accent('/review <prompt>')}  Run one turn through reviewModel (different-family second opinion)`,
         `  ${theme.accent('/clear')}            Clear history      ${theme.accent('/compact')}    Free context space`,
+        `  ${theme.accent('/stop')}             ${theme.dim('Type while agent runs to interrupt (same as Ctrl+C). /clear also stops + wipes.')}`,
         `  ${theme.accent('/status')}           Session info       ${theme.accent('/quit')}       Exit`,
         `  ${theme.accent('/init')}             Create VEEPEE.md    ${theme.accent('/setup')}       Validate tools`,
         `  ${theme.accent('/save [name]')}      Save session        ${theme.accent('/sessions')}    List saved sessions`,
@@ -1157,6 +1165,20 @@ async function handleCommand(
       agent.clear();
       permissions.resetSession();
       tui.showInfo('Conversation cleared.');
+      return false;
+
+    case '/stop':
+      // Mid-run /stop is intercepted by the TUI before reaching here. This
+      // path runs only when the user typed /stop between turns — explain
+      // the gesture so they discover it.
+      tui.showInfo([
+        theme.dim('Nothing to stop — no agent is running.'),
+        '',
+        'Mid-run interrupts:',
+        `  ${theme.accent('Ctrl+C')}    Abort the current turn`,
+        `  ${theme.accent('/stop⏎')}    Type while agent is running — same as Ctrl+C`,
+        `  ${theme.accent('/clear⏎')}   Stop and wipe conversation history in one gesture`,
+      ].join('\n'));
       return false;
 
     case '/effort': {
