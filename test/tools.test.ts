@@ -20,6 +20,7 @@ describe('ToolRegistry', () => {
     expect(registry.has('read_file')).toBe(true);
     expect(registry.has('write_file')).toBe(true);
     expect(registry.has('edit_file')).toBe(true);
+    expect(registry.has('multi_edit')).toBe(true);
     expect(registry.has('glob')).toBe(true);
     expect(registry.has('grep')).toBe(true);
     expect(registry.has('bash')).toBe(true);
@@ -267,5 +268,133 @@ describe('FileTracker integration with edit_file / write_file', () => {
     const result = await registry.execute('bash', { command: 'echo unrelated' });
     expect(result.success).toBe(true);
     expect(tracker.size()).toBe(1);
+  });
+});
+
+describe('multi_edit', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'vcode-multiedit-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function setup(): { registry: ToolRegistry; tracker: FileTracker } {
+    const tracker = new FileTracker();
+    const registry = new ToolRegistry();
+    for (const tool of registerCodingTools(undefined, tracker)) registry.register(tool);
+    return { registry, tracker };
+  }
+
+  it('applies all edits atomically when each one matches', async () => {
+    const { registry } = setup();
+    const p = join(dir, 'src.ts');
+    writeFileSync(p, 'const a = 1;\nconst b = 2;\nconst c = 3;\n');
+    await registry.execute('read_file', { path: p });
+
+    const result = await registry.execute('multi_edit', {
+      path: p,
+      edits: [
+        { old_string: 'const a = 1;', new_string: 'const a = 10;' },
+        { old_string: 'const b = 2;', new_string: 'const b = 20;' },
+        { old_string: 'const c = 3;', new_string: 'const c = 30;' },
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(readFileSync(p, 'utf-8')).toBe('const a = 10;\nconst b = 20;\nconst c = 30;\n');
+    expect(result.output).toContain('applied 3 edits');
+  });
+
+  it('writes nothing when any op would fail', async () => {
+    const { registry } = setup();
+    const p = join(dir, 'src.ts');
+    const original = 'foo\nbar\nbaz\n';
+    writeFileSync(p, original);
+    await registry.execute('read_file', { path: p });
+
+    const result = await registry.execute('multi_edit', {
+      path: p,
+      edits: [
+        { old_string: 'foo', new_string: 'FOO' },
+        { old_string: 'NOT_PRESENT', new_string: 'X' }, // fails
+        { old_string: 'baz', new_string: 'BAZ' },
+      ],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('op 1 failed');
+    expect(result.error).toContain('1/3 edits would succeed');
+    // No partial write — file is untouched.
+    expect(readFileSync(p, 'utf-8')).toBe(original);
+  });
+
+  it('applies edits sequentially so later edits can see earlier ones', async () => {
+    const { registry } = setup();
+    const p = join(dir, 'src.ts');
+    writeFileSync(p, 'const oldName = 1;\noldName + 2;\n');
+    await registry.execute('read_file', { path: p });
+
+    // First op renames; second op only succeeds against the renamed content.
+    const result = await registry.execute('multi_edit', {
+      path: p,
+      edits: [
+        { old_string: 'const oldName = 1;', new_string: 'const newName = 1;' },
+        { old_string: 'oldName + 2;', new_string: 'newName + 2;' },
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(readFileSync(p, 'utf-8')).toBe('const newName = 1;\nnewName + 2;\n');
+  });
+
+  it('refuses on a stale file (file modified on disk after read)', async () => {
+    const { registry, tracker } = setup();
+    const p = join(dir, 'src.ts');
+    writeFileSync(p, 'foo\n');
+    await registry.execute('read_file', { path: p });
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(p, future, future);
+
+    const result = await registry.execute('multi_edit', {
+      path: p,
+      edits: [{ old_string: 'foo', new_string: 'bar' }],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('modified on disk');
+    expect(readFileSync(p, 'utf-8')).toBe('foo\n');
+    expect(tracker.size()).toBe(1); // tracker entry preserved
+  });
+
+  it('respects replace_all per edit', async () => {
+    const { registry } = setup();
+    const p = join(dir, 'src.ts');
+    writeFileSync(p, 'foo foo foo\nbar bar\n');
+    await registry.execute('read_file', { path: p });
+
+    const result = await registry.execute('multi_edit', {
+      path: p,
+      edits: [
+        { old_string: 'foo', new_string: 'X', replace_all: true },
+        { old_string: 'bar bar', new_string: 'YY' }, // unique, no replace_all needed
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(readFileSync(p, 'utf-8')).toBe('X X X\nYY\n');
+  });
+
+  it('fails with a clear error when a non-replace_all edit matches multiple times', async () => {
+    const { registry } = setup();
+    const p = join(dir, 'src.ts');
+    writeFileSync(p, 'foo\nfoo\n');
+    await registry.execute('read_file', { path: p });
+
+    const result = await registry.execute('multi_edit', {
+      path: p,
+      edits: [{ old_string: 'foo', new_string: 'bar' }],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('found 2 times');
+    expect(readFileSync(p, 'utf-8')).toBe('foo\nfoo\n');
   });
 });

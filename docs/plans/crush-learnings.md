@@ -227,6 +227,8 @@ function createSubAgentSummarizeTool(subAgents: SubAgentManager | null): ToolDef
 
 ## 4. Multi-edit with atomic rollback
 
+**Status: SHIPPED 2026-05-04.** New `multi_edit` tool in `src/tools/coding.ts`. Extracted shared `applySingleEdit(content, oldStr, newStr, replaceAll, relPath)` pure helper that both `edit_file` and `multi_edit` use — same exact-match-then-fuzzy-whitespace dialect. Validate-then-write semantics: walks edits sequentially against the running content, bails on the first failure with "{n}/{total} edits would succeed, but op {i} failed" and writes nothing. Threaded through FileTracker (stale check + post-write recordRead) and IgnoreManager. Added to PLAN_DISABLED_TOOLS, `_previewToolCall` (best-effort sequential simulation for diff preview), `KnowledgeState.filesModified`, and `ContextManager.filesWritten`. 6 integration tests cover atomic success, atomic abort with no partial write, sequential dependency between edits, stale-file refusal, replace_all per edit, and multi-match without replace_all.
+
 **Effort:** ~½ day.
 
 **Why:** Today the agent makes N sequential `edit_file` calls for multi-op refactors. If op 3 fails, ops 1-2 are already committed and there's no way to roll back. Crush's `multiedit` validates all ops upfront, applies them in order, and aborts with a structured failure report at the first broken op — leaving earlier edits intact but signaling clearly what failed.
@@ -1167,7 +1169,7 @@ if (process.argv.includes('schema')) {
 | 1 | Hash-sig loop detection | 30min | **SHIPPED 2026-05-04** |
 | 2 | File staleness check | ½ day | **SHIPPED 2026-05-04** |
 | 3 | `agent` tool (subagent) | 1h | SHIPPED earlier (Parity Phase 3 task tool) |
-| 4 | Multi-edit | ½ day | Open |
+| 4 | Multi-edit | ½ day | **SHIPPED 2026-05-04** |
 | 5 | Two-model split + summarization | 1 day | **SHIPPED 2026-05-04** |
 | 6 | Skills catalog | 1-2 days | SHIPPED earlier (Parity Phase 2) |
 | 7 | Pub/sub permissions | 1 day | Open |

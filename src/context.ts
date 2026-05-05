@@ -523,7 +523,7 @@ export class ContextManager {
     if (toolName === 'read_file' && filePath) {
       this.filesRead.add(filePath);
     }
-    if (['write_file', 'edit_file'].includes(toolName) && filePath) {
+    if (['write_file', 'edit_file', 'multi_edit'].includes(toolName) && filePath) {
       this.filesWritten.add(filePath);
       this.invalidateProjectTree();
     }

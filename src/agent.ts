@@ -1082,6 +1082,24 @@ export class Agent {
         return previewWrite(existing, newContent, relative(process.cwd(), path));
       }
 
+      if (toolName === 'multi_edit') {
+        if (!existsSync(path)) return undefined;
+        const oldContent = readFileSync(path, 'utf-8');
+        const edits = Array.isArray(args.edits) ? args.edits as Array<{ old_string?: string; new_string?: string; replace_all?: boolean }> : [];
+        // Best-effort simulation: apply edits sequentially with simple
+        // replace; if any step doesn't match, bail and skip preview.
+        let working = oldContent;
+        for (const e of edits) {
+          const oldStr = String(e.old_string ?? '');
+          const newStr = String(e.new_string ?? '');
+          if (!working.includes(oldStr)) return undefined;
+          working = e.replace_all === true
+            ? working.split(oldStr).join(newStr)
+            : working.replace(oldStr, newStr);
+        }
+        return previewEdit(oldContent, working, relative(process.cwd(), path));
+      }
+
       return undefined;
     } catch {
       return undefined; // never block on preview failure

@@ -14,6 +14,7 @@ export function registerCodingTools(ignoreManager?: IgnoreManager, fileTracker?:
     createReadFileTool(ignoreManager, fileTracker),
     createWriteFileTool(ignoreManager, fileTracker),
     createEditFileTool(ignoreManager, fileTracker),
+    createMultiEditTool(ignoreManager, fileTracker),
     createGlobTool(ignoreManager),
     createGrepTool(ignoreManager),
     createBashTool(fileTracker),
@@ -88,6 +89,72 @@ function createWriteFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
   };
 }
 
+/**
+ * Apply a single edit (exact-match → fuzzy whitespace fallback) to `content`,
+ * returning the new content + match count, or a typed error. Pure function —
+ * does no I/O. Shared by edit_file and multi_edit so both speak the same
+ * matching dialect.
+ */
+type EditApplyResult =
+  | { ok: true; updated: string; matchCount: number }
+  | { ok: false; error: string };
+
+function applySingleEdit(
+  content: string,
+  oldStr: string,
+  newStr: string,
+  replaceAll: boolean,
+  relPathForErrors: string,
+): EditApplyResult {
+  const occurrences = content.split(oldStr).length - 1;
+
+  if (occurrences > 0) {
+    if (!replaceAll && occurrences > 1) {
+      return { ok: false, error: `old_string found ${occurrences} times in ${relPathForErrors} — it must be unique. Include more surrounding context, or set replace_all=true.` };
+    }
+    const updated = replaceAll ? content.replaceAll(oldStr, newStr) : content.replace(oldStr, newStr);
+    return { ok: true, updated, matchCount: occurrences };
+  }
+
+  // Fuzzy whitespace match
+  const normalize = (s: string) => s.replace(/[ \t]+/g, ' ').replace(/\r\n/g, '\n');
+  const normalizedContent = normalize(content);
+  const normalizedOld = normalize(oldStr);
+  const fuzzyOccurrences = normalizedContent.split(normalizedOld).length - 1;
+
+  if (fuzzyOccurrences === 0) {
+    const firstLine = oldStr.split('\n')[0].trim();
+    const lineIdx = content.split('\n').findIndex(l => l.trim().includes(firstLine));
+    const hint = lineIdx >= 0
+      ? `\nNearest match around line ${lineIdx + 1}:\n${content.split('\n').slice(Math.max(0, lineIdx - 1), lineIdx + 3).map((l, i) => `  ${lineIdx + i}: ${l}`).join('\n')}`
+      : '';
+    return { ok: false, error: `old_string not found in ${relPathForErrors}. Read the file first to get the exact content.${hint}` };
+  }
+
+  if (!replaceAll && fuzzyOccurrences > 1) {
+    return { ok: false, error: `old_string found ${fuzzyOccurrences} times (with whitespace normalization) — include more context.` };
+  }
+
+  const lines = content.split('\n');
+  const oldLines = oldStr.split('\n');
+  let startLine = -1;
+
+  for (let i = 0; i <= lines.length - oldLines.length; i++) {
+    const slice = lines.slice(i, i + oldLines.length).join('\n');
+    if (normalize(slice) === normalizedOld) {
+      startLine = i;
+      break;
+    }
+  }
+
+  if (startLine === -1) {
+    return { ok: false, error: `Whitespace-fuzzy match found but could not locate exact position. Read the file and retry with exact content.` };
+  }
+
+  const actualOld = lines.slice(startLine, startLine + oldLines.length).join('\n');
+  return { ok: true, updated: content.replace(actualOld, newStr), matchCount: 1 };
+}
+
 function createEditFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker): ToolDef {
   return {
     name: 'edit_file',
@@ -113,67 +180,15 @@ function createEditFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTra
         const replaceAll = params.replace_all as boolean;
         const relPath = relative(process.cwd(), filePath);
 
-        let updated: string;
-        let matchCount: number;
+        const result = applySingleEdit(content, oldStr, newStr, replaceAll, relPath);
+        if (!result.ok) return fail(result.error);
 
-        // Exact match first
-        const occurrences = content.split(oldStr).length - 1;
-
-        if (occurrences > 0) {
-          matchCount = occurrences;
-          if (!replaceAll && occurrences > 1) {
-            return fail(`old_string found ${occurrences} times in ${relPath} — it must be unique. Include more surrounding context, or set replace_all=true.`);
-          }
-          updated = replaceAll ? content.replaceAll(oldStr, newStr) : content.replace(oldStr, newStr);
-        } else {
-          // Fuzzy whitespace match: normalize tabs/spaces and try again
-          const normalize = (s: string) => s.replace(/[ \t]+/g, ' ').replace(/\r\n/g, '\n');
-          const normalizedContent = normalize(content);
-          const normalizedOld = normalize(oldStr);
-          const fuzzyOccurrences = normalizedContent.split(normalizedOld).length - 1;
-
-          if (fuzzyOccurrences === 0) {
-            // Show nearby content to help the model
-            const firstLine = oldStr.split('\n')[0].trim();
-            const lineIdx = content.split('\n').findIndex(l => l.trim().includes(firstLine));
-            const hint = lineIdx >= 0
-              ? `\nNearest match around line ${lineIdx + 1}:\n${content.split('\n').slice(Math.max(0, lineIdx - 1), lineIdx + 3).map((l, i) => `  ${lineIdx + i}: ${l}`).join('\n')}`
-              : '';
-            return fail(`old_string not found in ${relPath}. Read the file first to get the exact content.${hint}`);
-          }
-
-          if (!replaceAll && fuzzyOccurrences > 1) {
-            return fail(`old_string found ${fuzzyOccurrences} times (with whitespace normalization) — include more context.`);
-          }
-
-          // Find the actual string in the file that matches after normalization
-          const lines = content.split('\n');
-          const oldLines = oldStr.split('\n');
-          let startLine = -1;
-
-          for (let i = 0; i <= lines.length - oldLines.length; i++) {
-            const slice = lines.slice(i, i + oldLines.length).join('\n');
-            if (normalize(slice) === normalizedOld) {
-              startLine = i;
-              break;
-            }
-          }
-
-          if (startLine === -1) {
-            return fail(`Whitespace-fuzzy match found but could not locate exact position. Read the file and retry with exact content.`);
-          }
-
-          const actualOld = lines.slice(startLine, startLine + oldLines.length).join('\n');
-          updated = content.replace(actualOld, newStr);
-          matchCount = 1;
-        }
-
-        await writeFile(filePath, updated, 'utf-8');
+        await writeFile(filePath, result.updated, 'utf-8');
         fileTracker?.recordRead(filePath);
 
         const oldLines = oldStr.split('\n');
         const newLines = newStr.split('\n');
-        const diffLines: string[] = [`Edited ${relPath}${matchCount > 1 ? ` (${matchCount} replacements)` : ''}:`];
+        const diffLines: string[] = [`Edited ${relPath}${result.matchCount > 1 ? ` (${result.matchCount} replacements)` : ''}:`];
         for (const line of oldLines.slice(0, 10)) diffLines.push(`- ${line}`);
         if (oldLines.length > 10) diffLines.push(`  ... (${oldLines.length - 10} more lines)`);
         for (const line of newLines.slice(0, 10)) diffLines.push(`+ ${line}`);
@@ -181,6 +196,59 @@ function createEditFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTra
         return ok(diffLines.join('\n'));
       } catch (err) {
         return fail(`Cannot edit file: ${(err as Error).message}`);
+      }
+    },
+  };
+}
+
+function createMultiEditTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker): ToolDef {
+  return {
+    name: 'multi_edit',
+    description: 'Apply multiple edits to a single file with atomic validation. All edits are checked sequentially against the running content; if any one would fail, no changes are written and the error reports which op failed and how many would have succeeded. Use for multi-step refactors on a single file to avoid partial writes when the model batches several edits in one turn.',
+    schema: z.object({
+      path: z.string().describe('File path to edit'),
+      edits: z.array(z.object({
+        old_string: z.string().describe('Exact string to find and replace'),
+        new_string: z.string().describe('Replacement string'),
+        replace_all: z.boolean().optional().default(false).describe('Replace all occurrences instead of requiring uniqueness'),
+      })).min(1).describe('List of edits to apply in order against the running content'),
+    }),
+    execute: async (params) => {
+      try {
+        const filePath = resolve(params.path as string);
+        const blocked = ignoreManager?.getBlockedReason(filePath);
+        if (blocked) return fail(`Access blocked by .veepeignore (${blocked}): ${filePath}`);
+        if (fileTracker) {
+          const stale = fileTracker.checkFresh(filePath);
+          if (stale) return fail(stale);
+        }
+
+        const original = await readFile(filePath, 'utf-8');
+        const relPath = relative(process.cwd(), filePath);
+        const edits = params.edits as Array<{ old_string: string; new_string: string; replace_all?: boolean }>;
+
+        // Phase 1: validate-and-simulate. Walk edits in order against the
+        // running content; bail on the first failure WITHOUT writing.
+        let working = original;
+        const matches: number[] = [];
+        for (let i = 0; i < edits.length; i++) {
+          const e = edits[i];
+          const r = applySingleEdit(working, e.old_string, e.new_string, e.replace_all ?? false, relPath);
+          if (!r.ok) {
+            return fail(`multi_edit: ${i}/${edits.length} edits would succeed, but op ${i} failed: ${r.error}\nNo changes written. Re-read the file and retry.`);
+          }
+          working = r.updated;
+          matches.push(r.matchCount);
+        }
+
+        // Phase 2: commit. Single write of the fully-simulated content.
+        await writeFile(filePath, working, 'utf-8');
+        fileTracker?.recordRead(filePath);
+
+        const summary = matches.map((m, i) => `  op ${i}: ${m} replacement${m === 1 ? '' : 's'}`).join('\n');
+        return ok(`multi_edit: applied ${edits.length} edit${edits.length === 1 ? '' : 's'} to ${relPath}\n${summary}`);
+      } catch (err) {
+        return fail(`Cannot multi_edit file: ${(err as Error).message}`);
       }
     },
   };

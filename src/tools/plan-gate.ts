@@ -27,6 +27,7 @@ import type { PermissionManager } from '../permissions.js';
 export const PLAN_DISABLED_TOOLS = new Set<string>([
   'edit_file',
   'write_file',
+  'multi_edit',
   'bash',
   'shell',  // remote bridge variant
   'docker',
@@ -42,7 +43,7 @@ export function createExitPlanModeTool(
       'Submit your plan for user approval and exit plan mode.',
       'Call this only when your plan is complete and you are ready to start executing.',
       'The user will be shown the plan and must explicitly approve before mutating tools (edit_file, write_file, bash) become available.',
-      'On approval: agent switches to act mode, plan is persisted to .veepee/plan.md, and you can begin implementing.',
+      'On approval: agent switches to act mode, plan is persisted to .veepee/plan.md, mutating tools (edit_file, write_file, multi_edit, bash) become available, and you can begin implementing.',
       'On rejection: you stay in plan mode; revise the plan and try again.',
     ].join('\n'),
     schema: z.object({
@@ -97,7 +98,7 @@ export function createExitPlanModeTool(
 
       return {
         success: true,
-        output: 'Plan approved by user. Switched to act mode. Mutating tools (edit_file, write_file, bash) are now available. Plan saved to .veepee/plan.md — update it with [DONE] markers as you complete steps.',
+        output: 'Plan approved by user. Switched to act mode. Mutating tools (edit_file, write_file, multi_edit, bash) are now available. Plan saved to .veepee/plan.md — update it with [DONE] markers as you complete steps.',
       };
     },
   };

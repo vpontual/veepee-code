@@ -101,7 +101,7 @@ export class KnowledgeState {
         }
       }
 
-      if (name === 'write_file' || name === 'edit_file') {
+      if (name === 'write_file' || name === 'edit_file' || name === 'multi_edit') {
         if (toolCalls) {
           for (const call of toolCalls) {
             if (call.function.name === name) {
