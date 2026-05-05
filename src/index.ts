@@ -20,6 +20,7 @@ import { validateIntegrations, formatSetupReport } from './setup.js';
 import { saveSession, listSessions, findSession, formatSessionList, autoName } from './sessions.js';
 import { getProjectSession, setProjectSession, listProjects, formatProjectList } from './projects.js';
 import { IgnoreManager } from './ignore.js';
+import { FileTracker } from './filetracker.js';
 import { ObservabilityManager } from './observability.js';
 import { RalphEngine } from './ralph.js';
 import { MoeEngine, type MoeStrategy } from './moe.js';
@@ -127,10 +128,12 @@ async function main() {
   let defaultModel = modelManager.selectDefault();
   let defaultProfile = modelManager.getProfile(defaultModel);
 
-  // Register tools — pass IgnoreManager for .veepeignore support
+  // Register tools — pass IgnoreManager for .veepeignore support and
+  // FileTracker for stale-edit detection.
   const ignoreManager = new IgnoreManager(process.cwd());
+  const fileTracker = new FileTracker();
   const registry = new ToolRegistry();
-  for (const tool of registerCodingTools(ignoreManager)) registry.register(tool);
+  for (const tool of registerCodingTools(ignoreManager, fileTracker)) registry.register(tool);
   for (const tool of registerWebTools(config)) registry.register(tool);
   for (const tool of registerDevOpsTools()) registry.register(tool);
 
@@ -1422,17 +1425,22 @@ async function handleCommand(
       return false;
     }
 
-    case '/status':
+    case '/status': {
+      const summarizerLabel = config.summarizerModel
+        ? theme.accent(config.summarizerModel)
+        : theme.dim(`(falls back to ${modelManager.getCurrentModel()})`);
       tui.showInfo([
         `${theme.textBold('Session:')}`,
-        `  Model:    ${theme.accent(modelManager.getCurrentModel())}`,
-        `  Messages: ${agent.getContext().messageCount()}`,
-        `  Tokens:   ~${agent.getContext().estimateTokens().toLocaleString()}`,
-        `  Tools:    ${registry.count()}`,
-        `  API:      http://localhost:${apiPort}`,
-        `  CWD:      ${process.cwd()}`,
+        `  Model:       ${theme.accent(modelManager.getCurrentModel())}`,
+        `  Summarizer:  ${summarizerLabel}`,
+        `  Messages:    ${agent.getContext().messageCount()}`,
+        `  Tokens:      ~${agent.getContext().estimateTokens().toLocaleString()}`,
+        `  Tools:       ${registry.count()}`,
+        `  API:         http://localhost:${apiPort}`,
+        `  CWD:         ${process.cwd()}`,
       ].join('\n'));
       return false;
+    }
 
     case '/benchmark': {
       const subCmd = parts[1]?.toLowerCase();

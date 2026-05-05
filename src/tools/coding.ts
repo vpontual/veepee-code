@@ -7,15 +7,16 @@ import { z } from 'zod';
 import type { ToolDef, ToolResult } from './types.js';
 import { ok, fail } from './types.js';
 import type { IgnoreManager } from '../ignore.js';
+import type { FileTracker } from '../filetracker.js';
 
-export function registerCodingTools(ignoreManager?: IgnoreManager): ToolDef[] {
+export function registerCodingTools(ignoreManager?: IgnoreManager, fileTracker?: FileTracker): ToolDef[] {
   return [
-    createReadFileTool(ignoreManager),
-    createWriteFileTool(ignoreManager),
-    createEditFileTool(ignoreManager),
+    createReadFileTool(ignoreManager, fileTracker),
+    createWriteFileTool(ignoreManager, fileTracker),
+    createEditFileTool(ignoreManager, fileTracker),
     createGlobTool(ignoreManager),
     createGrepTool(ignoreManager),
-    createBashTool(),
+    createBashTool(fileTracker),
     createGitTool(),
     createGithubTool(),
     createListFilesTool(),
@@ -23,7 +24,7 @@ export function registerCodingTools(ignoreManager?: IgnoreManager): ToolDef[] {
   ];
 }
 
-function createReadFileTool(ignoreManager?: IgnoreManager): ToolDef {
+function createReadFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker): ToolDef {
   return {
     name: 'read_file',
     description: 'Read a file from the filesystem. Returns the full file content with line numbers. Use this to understand code before making changes.',
@@ -48,6 +49,7 @@ function createReadFileTool(ignoreManager?: IgnoreManager): ToolDef {
           .map((line, i) => `${String(offset + i + 1).padStart(5)}  ${line}`)
           .join('\n');
 
+        fileTracker?.recordRead(filePath);
         return ok(numbered);
       } catch (err) {
         return fail(`Cannot read file: ${(err as Error).message}`);
@@ -56,7 +58,7 @@ function createReadFileTool(ignoreManager?: IgnoreManager): ToolDef {
   };
 }
 
-function createWriteFileTool(ignoreManager?: IgnoreManager): ToolDef {
+function createWriteFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker): ToolDef {
   return {
     name: 'write_file',
     description: 'Write content to a file, creating it if it does not exist or overwriting if it does. Use for creating new files.',
@@ -69,7 +71,14 @@ function createWriteFileTool(ignoreManager?: IgnoreManager): ToolDef {
         const filePath = resolve(params.path as string);
         const blocked = ignoreManager?.getBlockedReason(filePath);
         if (blocked) return fail(`Access blocked by .veepeignore (${blocked}): ${filePath}`);
+        // Staleness check: only complain if the file already exists. Creating
+        // a brand-new file is always fine.
+        if (fileTracker) {
+          const stale = fileTracker.checkFresh(filePath, false);
+          if (stale) return fail(stale);
+        }
         await writeFile(filePath, params.content as string, 'utf-8');
+        fileTracker?.recordRead(filePath);
         const lines = (params.content as string).split('\n').length;
         return ok(`Wrote ${lines} lines to ${relative(process.cwd(), filePath)}`);
       } catch (err) {
@@ -79,7 +88,7 @@ function createWriteFileTool(ignoreManager?: IgnoreManager): ToolDef {
   };
 }
 
-function createEditFileTool(ignoreManager?: IgnoreManager): ToolDef {
+function createEditFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker): ToolDef {
   return {
     name: 'edit_file',
     description: 'Edit a file by replacing a string match. Provide old_string (text to find) and new_string (replacement). By default old_string must be unique; set replace_all=true to replace every occurrence.',
@@ -94,6 +103,10 @@ function createEditFileTool(ignoreManager?: IgnoreManager): ToolDef {
         const filePath = resolve(params.path as string);
         const blocked = ignoreManager?.getBlockedReason(filePath);
         if (blocked) return fail(`Access blocked by .veepeignore (${blocked}): ${filePath}`);
+        if (fileTracker) {
+          const stale = fileTracker.checkFresh(filePath);
+          if (stale) return fail(stale);
+        }
         const content = await readFile(filePath, 'utf-8');
         const oldStr = params.old_string as string;
         const newStr = params.new_string as string;
@@ -156,6 +169,7 @@ function createEditFileTool(ignoreManager?: IgnoreManager): ToolDef {
         }
 
         await writeFile(filePath, updated, 'utf-8');
+        fileTracker?.recordRead(filePath);
 
         const oldLines = oldStr.split('\n');
         const newLines = newStr.split('\n');
@@ -276,7 +290,7 @@ function createGrepTool(ignoreManager?: IgnoreManager): ToolDef {
   };
 }
 
-function createBashTool(): ToolDef {
+function createBashTool(fileTracker?: FileTracker): ToolDef {
   return {
     name: 'bash',
     description: 'Execute a shell command and return its output. Use for running builds, tests, package managers, system commands, or any operation that needs shell access.',
@@ -289,6 +303,14 @@ function createBashTool(): ToolDef {
       return new Promise<ToolResult>((res) => {
         const cwd = resolve((params.cwd as string) || process.cwd());
         const timeout = (params.timeout as number) || 120_000;
+        const command = params.command as string;
+        // Heuristic: forget tracker entries for any tracked file whose path
+        // appears in the command string. This catches `sed -i foo.ts`,
+        // `prettier --write a.ts`, `mv x y`, etc. without false-positiving on
+        // pure-read commands like `git status` or `npm test`.
+        if (fileTracker) {
+          forgetReferencedPaths(fileTracker, command, cwd);
+        }
 
         const child = spawn('bash', ['-c', params.command as string], {
           cwd,
@@ -562,6 +584,23 @@ function createListFilesTool(): ToolDef {
       }
     },
   };
+}
+
+/**
+ * Forget tracker entries for any tracked file referenced by the given shell
+ * command. Matches by basename (foo.ts) or by relative/absolute path. Avoids
+ * O(N) regex per path with a quick substring pre-filter.
+ */
+function forgetReferencedPaths(tracker: FileTracker, command: string, cwd: string): void {
+  const tracked = tracker.paths();
+  if (tracked.length === 0) return;
+  for (const abs of tracked) {
+    const rel = relative(cwd, abs);
+    const base = abs.split('/').pop() ?? abs;
+    if (command.includes(abs) || (rel && !rel.startsWith('..') && command.includes(rel)) || command.includes(base)) {
+      tracker.forget(abs);
+    }
+  }
 }
 
 function createUpdateMemoryTool(): ToolDef {

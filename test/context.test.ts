@@ -143,4 +143,70 @@ describe('ContextManager', () => {
     expect(signals.fileOpsCount).toBe(0);
     expect(signals.errorCount).toBe(0);
   });
+
+  describe('compaction summary message', () => {
+    it('preserves an injected summary message at the head of the window after compact()', () => {
+      const ctx = new ContextManager('test');
+      ctx.setSystemPrompt('test-model');
+      ctx.setContextLimit(512);
+
+      for (let i = 0; i < 20; i++) {
+        ctx.addUser(`message ${i} ${'x'.repeat(60)}`);
+        ctx.addAssistant(`reply ${i} ${'y'.repeat(60)}`);
+      }
+
+      ctx.setSummaryMessage({
+        role: 'user',
+        content: '[Context summary from earlier turns]: implemented loop detection',
+      });
+
+      const before = ctx.getAllMessages().length;
+      const compacted = ctx.compact();
+      expect(compacted).toBe(true);
+
+      const after = ctx.getAllMessages();
+      expect(after.length).toBeLessThan(before);
+      expect(after[0].role).toBe('user');
+      expect(after[0].content).toContain('Context summary from earlier turns');
+    });
+
+    it('clear() resets the summary message', () => {
+      const ctx = new ContextManager('test');
+      ctx.setSystemPrompt('test-model');
+      ctx.setSummaryMessage({ role: 'user', content: '[Context summary]: foo' });
+      expect(ctx.getSummaryMessage()).not.toBe(null);
+
+      ctx.clear();
+      expect(ctx.getSummaryMessage()).toBe(null);
+    });
+
+    it('compact() returns false when there are not enough messages to drop', () => {
+      const ctx = new ContextManager('test');
+      ctx.setSystemPrompt('test-model');
+      ctx.addUser('hi');
+      ctx.addAssistant('hello');
+      expect(ctx.compact()).toBe(false);
+    });
+
+    it('compactAsync falls back to drop-only when the proxy is unreachable', async () => {
+      const ctx = new ContextManager('test');
+      ctx.setSystemPrompt('test-model');
+      ctx.setContextLimit(512);
+
+      for (let i = 0; i < 20; i++) {
+        ctx.addUser(`message ${i} ${'x'.repeat(60)}`);
+        ctx.addAssistant(`reply ${i} ${'y'.repeat(60)}`);
+      }
+
+      const before = ctx.getAllMessages().length;
+      const compacted = await ctx.compactAsync(
+        'http://127.0.0.1:1',
+        'fake-model',
+        null,
+        500,
+      );
+      expect(compacted).toBe(true);
+      expect(ctx.getAllMessages().length).toBeLessThan(before);
+    });
+  });
 });

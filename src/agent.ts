@@ -11,6 +11,7 @@ import { SubAgentManager } from './subagent.js';
 import { runHooks, shouldBlock, type HookExecResult } from './hooks.js';
 import { previewEdit, previewWrite } from './diff.js';
 import { PLAN_DISABLED_TOOLS } from './tools/plan-gate.js';
+import { signatureOf, detectStuckSignature, LOOP_WINDOW, LOOP_MAX_REPEATS, type SignedStep } from './loop-detection.js';
 import { readFile, readFile as readFileAsync, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, relative } from 'path';
 import { existsSync, readFileSync } from 'fs';
@@ -509,7 +510,12 @@ export class Agent {
 
     // Check for context compaction
     if (this.context.needsCompaction()) {
-      if (this.context.compact(this.config.proxyUrl, this.modelManager.getCurrentModel())) {
+      const compacted = await this.context.compactAsync(
+        this.config.proxyUrl,
+        this.modelManager.getCurrentModel(),
+        this.config.summarizerModel,
+      );
+      if (compacted) {
         yield { type: 'thinking', content: 'Compacted conversation to free context space' };
 
         // Recover saved plan after compaction so the model doesn't lose it
@@ -521,9 +527,9 @@ export class Agent {
       }
     }
 
-    // Stuck loop detection: track recent tool calls to detect repetition
-    const recentToolCalls: string[] = [];
-    const MAX_IDENTICAL_CALLS = 3;
+    // Stuck loop detection: hash-signature window (input + output).
+    // Catches ABAB oscillation, not just N consecutive identical calls.
+    const recentSteps: SignedStep[] = [];
     const MAX_TURNS_WITHOUT_OUTPUT = 15;
     let turnsWithoutUserContent = 0;
 
@@ -852,40 +858,44 @@ export class Agent {
       // parallel and sequential paths. See _fireHooks helper at end of class.
       const allReadOnly = toolCalls.length > 1 && toolCalls.every(c => READ_ONLY_TOOLS.has(c.function.name));
 
+      // Per-call result strings for loop signature, in toolCalls order.
+      const stepResults: string[] = new Array(toolCalls.length).fill('');
+
       if (allReadOnly) {
         // Parallel execution for independent read-only calls
         for (const call of toolCalls) {
           yield { type: 'tool_call', name: call.function.name, args: (call.function.arguments || {}) as Record<string, unknown> };
         }
         // Permission checks must be serialized to avoid concurrent prompt races.
-        const executableCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
-        const earlyResults: Array<{ name: string; args: Record<string, unknown>; result: { success: boolean; output: string; error?: string } }> = [];
-        for (const call of toolCalls) {
+        const executableCalls: Array<{ idx: number; name: string; args: Record<string, unknown> }> = [];
+        const earlyResults: Array<{ idx: number; name: string; args: Record<string, unknown>; result: { success: boolean; output: string; error?: string } }> = [];
+        for (let i = 0; i < toolCalls.length; i++) {
+          const call = toolCalls[i];
           const name = call.function.name;
           const args = (call.function.arguments || {}) as Record<string, unknown>;
           if (allowedTools && !allowedTools.has(name)) {
-            earlyResults.push({ name, args, result: { success: false, output: '', error: `Tool "${name}" not allowed` } });
+            earlyResults.push({ idx: i, name, args, result: { success: false, output: '', error: `Tool "${name}" not allowed` } });
             continue;
           }
           const decision = permissionMode === 'auto_allow'
             ? 'allow'
             : await this.permissions.check(name, args);
           if (decision === 'deny') {
-            earlyResults.push({ name, args, result: { success: false, output: '', error: 'Permission denied' } });
+            earlyResults.push({ idx: i, name, args, result: { success: false, output: '', error: 'Permission denied' } });
             continue;
           }
           // PreToolUse hook — non-zero exit blocks the tool call.
           const preBlock = yield* this._fireHooks('PreToolUse', { tool: name, args, cwd: process.cwd() });
           if (preBlock.blocked) {
-            earlyResults.push({ name, args, result: { success: false, output: '', error: preBlock.reason || 'Blocked by hook' } });
+            earlyResults.push({ idx: i, name, args, result: { success: false, output: '', error: preBlock.reason || 'Blocked by hook' } });
             continue;
           }
-          executableCalls.push({ name, args });
+          executableCalls.push({ idx: i, name, args });
         }
-        const executed = await Promise.all(executableCalls.map(async ({ name, args }) => {
+        const executed = await Promise.all(executableCalls.map(async ({ idx, name, args }) => {
           const startedAt = Date.now();
           const result = await this.registry.execute(name, args);
-          return { name, args, result, durationMs: Date.now() - startedAt };
+          return { idx, name, args, result, durationMs: Date.now() - startedAt };
         }));
         // Fire PostToolUse for each executed call, in order. Output is purely
         // informational here; PostToolUse cannot abort what already happened.
@@ -893,7 +903,7 @@ export class Agent {
           yield* this._fireHooks('PostToolUse', { tool: name, args, cwd: process.cwd(), result, durationMs });
         }
         const results = [...earlyResults, ...executed];
-        for (const { name, args, result } of results) {
+        for (const { idx, name, args, result } of results) {
           yield {
             type: 'tool_result', name,
             success: result.success,
@@ -901,17 +911,21 @@ export class Agent {
             error: result.error,
           };
           const resultContent = result.success ? result.output : `Error: ${result.error}`;
+          stepResults[idx] = resultContent;
           this.context.addToolResult(name, resultContent, (args.path as string) || undefined);
         }
       } else {
         // Sequential execution for write/mixed calls
-        for (const call of toolCalls) {
+        for (let i = 0; i < toolCalls.length; i++) {
+          const call = toolCalls[i];
           const toolName = call.function.name;
           const toolArgs = (call.function.arguments || {}) as Record<string, unknown>;
 
           if (allowedTools && !allowedTools.has(toolName) && toolName !== 'update_memory') {
+            const msg = `Tool "${toolName}" not allowed`;
             yield { type: 'tool_result', name: toolName, success: false, content: `Tool "${toolName}" is not in the allowed set for this request` };
-            this.context.addToolResult(toolName, `Tool "${toolName}" not allowed`);
+            stepResults[i] = msg;
+            this.context.addToolResult(toolName, msg);
             continue;
           }
 
@@ -919,8 +933,10 @@ export class Agent {
             const key = (toolArgs.key as string) || '';
             const value = (toolArgs.value as string) || '';
             this.context.getKnowledgeState().updateMemory(key, value);
-            yield { type: 'tool_result', name: toolName, success: true, content: `Stored: ${key} = ${value}` };
-            this.context.addToolResult(toolName, `Stored: ${key} = ${value}`);
+            const msg = `Stored: ${key} = ${value}`;
+            yield { type: 'tool_result', name: toolName, success: true, content: msg };
+            stepResults[i] = msg;
+            this.context.addToolResult(toolName, msg);
             continue;
           }
 
@@ -932,7 +948,9 @@ export class Agent {
             : await this.permissions.check(toolName, toolArgs, preview);
           if (decision === 'deny') {
             yield { type: 'permission_denied', name: toolName };
-            this.context.addToolResult(toolName, `Permission denied: user rejected ${toolName}`);
+            const msg = `Permission denied: user rejected ${toolName}`;
+            stepResults[i] = msg;
+            this.context.addToolResult(toolName, msg);
             continue;
           }
 
@@ -941,14 +959,16 @@ export class Agent {
             tool: toolName, args: toolArgs, cwd: process.cwd(),
           });
           if (preBlock.blocked) {
+            const msg = preBlock.reason || 'Blocked by hook';
             yield {
               type: 'tool_result',
               name: toolName,
               success: false,
-              content: preBlock.reason || 'Blocked by hook',
-              error: preBlock.reason || 'Blocked by hook',
+              content: msg,
+              error: msg,
             };
-            this.context.addToolResult(toolName, preBlock.reason || 'Blocked by hook', (toolArgs.path as string) || undefined);
+            stepResults[i] = msg;
+            this.context.addToolResult(toolName, msg, (toolArgs.path as string) || undefined);
             continue;
           }
 
@@ -971,6 +991,7 @@ export class Agent {
 
           const resultContent = result.success ? result.output : `Error: ${result.error}`;
           const filePath = (toolArgs.path as string) || undefined;
+          stepResults[i] = resultContent;
           this.context.addToolResult(toolName, resultContent, filePath);
         }
       }
@@ -978,18 +999,20 @@ export class Agent {
       // Flush knowledge state update after all tool results are collected
       this.context.flushKnowledgeUpdate(fullContent);
 
-      // Stuck loop detection
+      // Stuck loop detection: signature = sha256(name + args + result) per call.
+      // Same call + same output > LOOP_MAX_REPEATS times in a LOOP_WINDOW window
+      // means stuck. Same call + different output is productive iteration.
       if (toolCalls.length > 0) {
-        const callSig = toolCalls.map(c => `${c.function.name}:${JSON.stringify(c.function.arguments)}`).join('|');
-        recentToolCalls.push(callSig);
-        if (recentToolCalls.length > MAX_IDENTICAL_CALLS) recentToolCalls.shift();
-
-        // Detect identical consecutive calls
-        if (recentToolCalls.length >= MAX_IDENTICAL_CALLS &&
-            recentToolCalls.every(c => c === recentToolCalls[0])) {
-          yield { type: 'error', error: `Stopped: model called ${toolCalls[0].function.name} ${MAX_IDENTICAL_CALLS} times with identical args. It may be stuck in a loop.` };
-          this.abortController = null;
-          return;
+        const sig = signatureOf(toolCalls, stepResults);
+        if (sig) {
+          recentSteps.push({ signature: sig });
+          if (recentSteps.length > LOOP_WINDOW) recentSteps.shift();
+          if (detectStuckSignature(recentSteps)) {
+            const names = toolCalls.map(c => c.function.name).join(', ');
+            yield { type: 'error', error: `Stopped: same tool call+result repeated >${LOOP_MAX_REPEATS} times in last ${LOOP_WINDOW} steps (${names}). Likely stuck.` };
+            this.abortController = null;
+            return;
+          }
         }
       }
 
@@ -1007,7 +1030,12 @@ export class Agent {
 
       // Proactive compaction check after tool results (context grows most here)
       if (this.context.needsCompaction()) {
-        if (this.context.compact(this.config.proxyUrl, this.modelManager.getCurrentModel())) {
+        const compacted = await this.context.compactAsync(
+          this.config.proxyUrl,
+          this.modelManager.getCurrentModel(),
+          this.config.summarizerModel,
+        );
+        if (compacted) {
           yield { type: 'thinking', content: 'Compacted conversation to free context space' };
 
           const savedPlan = await this.loadSavedPlan();

@@ -7,6 +7,10 @@ export interface Config {
   model: string | null;
   lockModel: string | null;
   reviewModel: string | null;
+  /** Model used for compaction summaries. Falls back to the current chat
+   *  model when null. Pin a smaller/cheaper model here to keep summaries
+   *  fast and stop them from blocking the main loop on a large model. */
+  summarizerModel: string | null;
   autoSwitch: boolean;
   maxModelSize: number;  // max parameter count in billions (default 40)
   minModelSize: number;  // min for act mode — skip tiny models (default 12)
@@ -94,6 +98,7 @@ export interface ConfigFile {
   model?: string | null;
   lockModel?: string | null;
   reviewModel?: string | null;
+  summarizerModel?: string | null;
   autoSwitch?: boolean;
   maxModelSize?: number;
   minModelSize?: number;
@@ -121,6 +126,7 @@ const DEFAULTS: Config = {
   model: null,
   lockModel: null,
   reviewModel: null,
+  summarizerModel: null,
   autoSwitch: true,
   maxModelSize: 40,
   minModelSize: 12,
@@ -350,6 +356,7 @@ export function loadConfig(configPath?: string): Config {
     model: merged.model ?? DEFAULTS.model,
     lockModel: merged.lockModel ?? DEFAULTS.lockModel,
     reviewModel: merged.reviewModel ?? DEFAULTS.reviewModel,
+    summarizerModel: merged.summarizerModel ?? DEFAULTS.summarizerModel,
     autoSwitch: merged.autoSwitch ?? DEFAULTS.autoSwitch,
     maxModelSize: merged.maxModelSize ?? DEFAULTS.maxModelSize,
     minModelSize: merged.minModelSize ?? DEFAULTS.minModelSize,

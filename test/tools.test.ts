@@ -1,7 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, rmSync, utimesSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { registerCodingTools } from '../src/tools/coding.js';
 import { toOllamaTool } from '../src/tools/types.js';
+import { FileTracker } from '../src/filetracker.js';
 
 describe('ToolRegistry', () => {
   it('registers and retrieves tools', () => {
@@ -130,5 +134,138 @@ describe('Coding tools execution', () => {
 
     const result = await registry.execute('git', { args: 'status' });
     expect(result.success || result.error?.includes('EPERM')).toBe(true);
+  });
+});
+
+describe('FileTracker integration with edit_file / write_file', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'vcode-tools-tracker-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('edit_file refuses a file the agent never read', async () => {
+    const tracker = new FileTracker();
+    const registry = new ToolRegistry();
+    for (const tool of registerCodingTools(undefined, tracker)) registry.register(tool);
+
+    const p = join(dir, 'a.txt');
+    writeFileSync(p, 'hello world\n');
+
+    const result = await registry.execute('edit_file', {
+      path: p,
+      old_string: 'hello',
+      new_string: 'goodbye',
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('was not read in this session');
+    expect(readFileSync(p, 'utf-8')).toBe('hello world\n');
+  });
+
+  it('edit_file refuses a file modified on disk after read', async () => {
+    const tracker = new FileTracker();
+    const registry = new ToolRegistry();
+    for (const tool of registerCodingTools(undefined, tracker)) registry.register(tool);
+
+    const p = join(dir, 'a.txt');
+    writeFileSync(p, 'hello world\n');
+
+    // Read the file (records timestamp)
+    const readResult = await registry.execute('read_file', { path: p });
+    expect(readResult.success).toBe(true);
+
+    // Bump mtime into the future
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(p, future, future);
+
+    const result = await registry.execute('edit_file', {
+      path: p,
+      old_string: 'hello',
+      new_string: 'goodbye',
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('modified on disk after you last read it');
+    expect(readFileSync(p, 'utf-8')).toBe('hello world\n');
+  });
+
+  it('edit_file succeeds when the file is fresh', async () => {
+    const tracker = new FileTracker();
+    const registry = new ToolRegistry();
+    for (const tool of registerCodingTools(undefined, tracker)) registry.register(tool);
+
+    const p = join(dir, 'a.txt');
+    writeFileSync(p, 'hello world\n');
+
+    await registry.execute('read_file', { path: p });
+    const result = await registry.execute('edit_file', {
+      path: p,
+      old_string: 'hello',
+      new_string: 'goodbye',
+    });
+    expect(result.success).toBe(true);
+    expect(readFileSync(p, 'utf-8')).toBe('goodbye world\n');
+  });
+
+  it('write_file allows creating a brand-new file', async () => {
+    const tracker = new FileTracker();
+    const registry = new ToolRegistry();
+    for (const tool of registerCodingTools(undefined, tracker)) registry.register(tool);
+
+    const p = join(dir, 'new.txt');
+    const result = await registry.execute('write_file', { path: p, content: 'fresh\n' });
+    expect(result.success).toBe(true);
+    expect(readFileSync(p, 'utf-8')).toBe('fresh\n');
+  });
+
+  it('write_file refuses overwrite of a stale existing file', async () => {
+    const tracker = new FileTracker();
+    const registry = new ToolRegistry();
+    for (const tool of registerCodingTools(undefined, tracker)) registry.register(tool);
+
+    const p = join(dir, 'a.txt');
+    writeFileSync(p, 'v1\n');
+    await registry.execute('read_file', { path: p });
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(p, future, future);
+
+    const result = await registry.execute('write_file', { path: p, content: 'v2\n' });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('modified on disk');
+    expect(readFileSync(p, 'utf-8')).toBe('v1\n');
+  });
+
+  it('bash command mentioning a tracked file forgets it', async () => {
+    const tracker = new FileTracker();
+    const registry = new ToolRegistry();
+    for (const tool of registerCodingTools(undefined, tracker)) registry.register(tool);
+
+    const p = join(dir, 'sed-target.txt');
+    writeFileSync(p, 'before\n');
+    await registry.execute('read_file', { path: p });
+    expect(tracker.size()).toBe(1);
+
+    // A bash command that just references the file by basename should clear it.
+    const result = await registry.execute('bash', { command: `echo skipping sed-target.txt` });
+    expect(result.success).toBe(true);
+    expect(tracker.size()).toBe(0);
+  });
+
+  it('bash command not mentioning the file does not forget tracked entries', async () => {
+    const tracker = new FileTracker();
+    const registry = new ToolRegistry();
+    for (const tool of registerCodingTools(undefined, tracker)) registry.register(tool);
+
+    const p = join(dir, 'kept.txt');
+    writeFileSync(p, 'data\n');
+    await registry.execute('read_file', { path: p });
+    expect(tracker.size()).toBe(1);
+
+    const result = await registry.execute('bash', { command: 'echo unrelated' });
+    expect(result.success).toBe(true);
+    expect(tracker.size()).toBe(1);
   });
 });

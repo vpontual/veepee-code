@@ -30,6 +30,8 @@
 
 ## 1. Hash-signature loop detection
 
+**Status: SHIPPED 2026-05-04.** New module `src/loop-detection.ts` exports `signatureOf` (sha256 of name+args+result per call) and `detectStuckSignature` (LOOP_WINDOW=10, LOOP_MAX_REPEATS=5). Wired into `src/agent.ts` agent loop, replaces the old `MAX_IDENTICAL_CALLS=3` consecutive-equality check. 12 unit tests in `test/loop-detection.test.ts` cover ABAB oscillation, productive iteration (different output), empty-signature turns, and window-aging.
+
 **Effort:** ~30 minutes. Pure upgrade. No downside.
 
 **Why:** VEEPEE Code's current stuck-loop check (`src/agent.ts` ~line 785) only fires on 3 byte-identical *consecutive* tool calls. It misses `ABABAB` oscillation and `A call, A call, B call, A call` patterns. Crush catches both.
@@ -115,6 +117,8 @@ Wire it into the agent loop: after each step (tool calls + results collected), c
 ---
 
 ## 2. File staleness check on edits
+
+**Status: SHIPPED 2026-05-04.** New module `src/filetracker.ts` (`FileTracker` class). Constructed in `src/index.ts` and threaded through `registerCodingTools(ignoreManager, fileTracker)` into `read_file` (recordRead), `edit_file` and `write_file` (checkFresh before, recordRead after), and `bash` (forgetReferencedPaths heuristic — clears tracking for any tracked file whose absolute/relative path or basename appears in the command). `recordRead` records `max(stat.mtimeMs, Date.now())` to avoid fractional-mtime false positives. 7 FileTracker unit tests + 7 integration tests through the real tool registry, total 14 new tests.
 
 **Effort:** ~½ day.
 
@@ -314,6 +318,8 @@ function createMultiEditTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
 ---
 
 ## 5. Two-model split + semantic summarization
+
+**Status: SHIPPED 2026-05-04.** Added `summarizerModel: string | null` to `Config` (defaults to null = falls back to current chat model). New `ContextManager.compactAsync(host, mainModel, summarizerModel?, timeoutMs=60_000)` is now awaited from both compaction call sites in `src/agent.ts`. On success, parses both `KS:` and `SUMMARY:` sections and replaces dropped messages with a single synthetic `[Context summary from earlier turns]: ...` user message at the head of the window. The synthetic message persists across future compactions and is reset by `clear()`. Falls back to drop-only behavior on timeout/failure. The legacy sync `compact()` is kept for non-awaiting callers and now also preserves the existing summary message. `/status` shows the configured summarizer or notes the fallback. 4 new context tests including an unreachable-proxy fallback test.
 
 **Effort:** ~1 day.
 
@@ -1156,19 +1162,19 @@ if (process.argv.includes('schema')) {
 
 ## Sequencing summary
 
-| Order | Item | Effort | Rationale |
-|-------|------|--------|-----------|
-| 1 | Hash-sig loop detection | 30min | Free win |
-| 2 | File staleness check | ½ day | Safety, low effort |
-| 3 | `agent` tool (subagent) | 1h | Unlocks dead code |
-| 4 | Multi-edit | ½ day | Enables atomic refactors |
-| 5 | Two-model split + summarization | 1 day | Long-session quality |
-| 6 | Skills catalog | 1-2 days | Ecosystem interop |
-| 7 | Pub/sub permissions | 1 day | Cleaner shape, enables parallel UIs |
-| 8 | MCP client | 2-3 days | Instant access to MCP ecosystem |
-| 9 | Catalog | 1-2 days | Lower priority, embed first |
-| 10 | LSP (Phase A minimum) | weeks | **Biggest quality gain** — dedicated plan session first |
-| B1 | JSON Schema export | ½ day | Polish, do alongside anything |
+| Order | Item | Effort | Status |
+|-------|------|--------|--------|
+| 1 | Hash-sig loop detection | 30min | **SHIPPED 2026-05-04** |
+| 2 | File staleness check | ½ day | **SHIPPED 2026-05-04** |
+| 3 | `agent` tool (subagent) | 1h | SHIPPED earlier (Parity Phase 3 task tool) |
+| 4 | Multi-edit | ½ day | Open |
+| 5 | Two-model split + summarization | 1 day | **SHIPPED 2026-05-04** |
+| 6 | Skills catalog | 1-2 days | SHIPPED earlier (Parity Phase 2) |
+| 7 | Pub/sub permissions | 1 day | Open |
+| 8 | MCP client | 2-3 days | SHIPPED earlier (Parity Phase 2) |
+| 9 | Catalog | 1-2 days | Open (lower priority) |
+| 10 | LSP (Phase A minimum) | weeks | Open — **biggest quality gain**, dedicated plan session first |
+| B1 | JSON Schema export | ½ day | Open |
 
 Total for items 1-9: roughly **1-2 weeks** of focused work. Item 10 is its own thing.
 

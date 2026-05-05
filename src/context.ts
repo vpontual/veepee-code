@@ -252,6 +252,9 @@ export class ContextManager {
   private sandboxPath: string | null = null;
   private activeStyle: string | null = null;
   private shellHistoryBlock: string = '';
+  /** Synthetic compaction-summary message kept across future compactions so
+   *  history doesn't keep stacking. Re-summarized when it grows too long. */
+  private summaryMessage: Message | null = null;
 
   constructor(sessionId?: string) {
     this.knowledgeState = new KnowledgeState(sessionId || Date.now().toString(36));
@@ -591,52 +594,179 @@ export class ContextManager {
     return used > this.contextLimit * 0.90;
   }
 
+  /**
+   * Synchronous compaction. Drops old messages, kicks off a best-effort
+   * summary into the knowledge state in the background. Kept for callers
+   * that cannot await (e.g. legacy paths). Prefer {@link compactAsync} where
+   * possible — it produces a synthetic summary message that the model sees
+   * on the very next turn.
+   */
   compact(ollamaHost?: string, model?: string): boolean {
     const windowMessages = this.getMessages();
     if (this.messages.length <= windowMessages.length + 4) return false;
 
-    // Summarize dropped messages into knowledge state via LLM (best-effort, non-blocking)
     const droppedMessages = this.messages.slice(0, this.messages.length - windowMessages.length);
     if (ollamaHost && model && droppedMessages.length > 2) {
+      // Fire-and-forget KS-only update (no synthetic summary message inserted).
       this.summarizeIntoKnowledge(ollamaHost, model, droppedMessages).catch(() => {});
     }
 
-    this.messages = windowMessages;
+    // Keep the existing summary message at the head if we have one.
+    this.messages = this.summaryMessage
+      ? [this.summaryMessage, ...windowMessages]
+      : windowMessages;
     return true;
   }
 
-  private async summarizeIntoKnowledge(host: string, model: string, messages: Message[]): Promise<void> {
+  /**
+   * Awaitable compaction. Calls the summarizer model (defaults to {@code mainModel})
+   * to produce both KS updates AND a natural-language summary paragraph,
+   * then replaces dropped messages with a single synthetic
+   * `[Context summary from earlier turns]: ...` user message at the head of
+   * the window. The synthetic message persists across future compactions.
+   *
+   * Falls back to {@link compact}'s drop-only behavior on failure or timeout.
+   *
+   * @returns true when at least the drop happened.
+   */
+  async compactAsync(
+    ollamaHost: string,
+    mainModel: string,
+    summarizerModel?: string | null,
+    timeoutMs = 60_000,
+  ): Promise<boolean> {
+    const windowMessages = this.getMessages();
+    if (this.messages.length <= windowMessages.length + 4) return false;
+
+    const droppedMessages = this.messages.slice(0, this.messages.length - windowMessages.length);
+    const model = summarizerModel || mainModel;
+
+    if (droppedMessages.length > 2) {
+      try {
+        const summary = await Promise.race([
+          this.summarizeForCompaction(ollamaHost, model, droppedMessages),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+        ]);
+
+        if (summary && summary.length >= 50) {
+          this.summaryMessage = {
+            role: 'user',
+            content: `[Context summary from earlier turns]: ${summary}`,
+          };
+        }
+      } catch {
+        // Summarizer failed — fall back to drop-only behavior.
+      }
+    }
+
+    this.messages = this.summaryMessage
+      ? [this.summaryMessage, ...windowMessages]
+      : windowMessages;
+    return true;
+  }
+
+  /**
+   * Summarize dropped messages into BOTH a KS update and a one-paragraph
+   * natural-language summary. Returns the natural-language paragraph (the
+   * KS portion is applied as a side effect on success).
+   *
+   * Returns null if the model produces nothing usable.
+   */
+  private async summarizeForCompaction(
+    host: string,
+    model: string,
+    messages: Message[],
+  ): Promise<string | null> {
     const { Ollama: OllamaClient } = await import('ollama');
     const client = new OllamaClient({ host });
     const ks = this.knowledgeState;
     const currentState = ks.serialize();
-    const msgSummary = messages.map(m => `[${m.role}] ${(m.content || '').slice(0, 200)}`).join('\n');
+    const msgSummary = messages.map((m) => `[${m.role}] ${(m.content || '').slice(0, 400)}`).join('\n');
 
-    const resp = await client.chat({
+    const prompt = `You are summarizing earlier conversation turns to free context. Produce two sections.
+
+Current knowledge state:
+${currentState}
+
+Messages being summarized (oldest first):
+${msgSummary}
+
+Output format (no preamble, no fences):
+
+KS:
+FACTS: [fact1 | fact2]
+DECISIONS: [decision1 | decision2]
+OPEN_QUESTIONS: [q1]
+ERRORS: [err1]
+
+SUMMARY:
+<one paragraph: what happened, what was decided, which files were touched, what state the work is in. Keep under 800 characters.>`;
+
+    const resp = (await client.chat({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      keep_alive: '30m',
+      options: { num_predict: 768 },
+    } as never)) as unknown as { message: { content: string } };
+
+    const content = resp.message?.content?.trim();
+    if (!content) return null;
+
+    // Apply KS updates if the KS: section is present.
+    const ksMatch = content.match(/KS:\s*([\s\S]*?)(?:\n\s*SUMMARY:|$)/);
+    if (ksMatch) {
+      this.applyKsBlock(ksMatch[1]);
+      await ks.save();
+    }
+
+    const summaryMatch = content.match(/SUMMARY:\s*([\s\S]+?)$/);
+    const paragraph = summaryMatch?.[1]?.trim();
+    return paragraph || null;
+  }
+
+  /** Parse a KS:-style block (KEY: [val | val]) into knowledge memory entries. */
+  private applyKsBlock(block: string): void {
+    const ks = this.knowledgeState;
+    for (const line of block.split('\n')) {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) continue;
+      const key = line.slice(0, colonIdx).trim();
+      const val = line.slice(colonIdx + 1).trim();
+      const keyMap: Record<string, string> = {
+        FACTS: 'fact',
+        DECISIONS: 'decision',
+        OPEN_QUESTIONS: 'open_question',
+        ERRORS: 'error',
+      };
+      if (key in keyMap) {
+        const delimiter = val.includes(' | ') ? ' | ' : ',';
+        const items = val.replace(/^\[/, '').replace(/\]$/, '').split(delimiter).map((s) => s.trim()).filter(Boolean);
+        for (const item of items) {
+          ks.updateMemory(keyMap[key], item);
+        }
+      }
+    }
+  }
+
+  /** Best-effort fire-and-forget KS update (used by sync compact path). */
+  private async summarizeIntoKnowledge(host: string, model: string, messages: Message[]): Promise<void> {
+    const { Ollama: OllamaClient } = await import('ollama');
+    const client = new OllamaClient({ host });
+    const currentState = this.knowledgeState.serialize();
+    const msgSummary = messages.map((m) => `[${m.role}] ${(m.content || '').slice(0, 200)}`).join('\n');
+
+    const resp = (await client.chat({
       model,
       messages: [
         { role: 'user', content: `Update this knowledge state with any new facts, decisions, files, or context from these messages. Only output the updated state, same format.\n\nCurrent state:\n${currentState}\n\nMessages being compacted:\n${msgSummary}` },
       ],
       keep_alive: '30m',
       options: { num_predict: 512 },
-    } as never) as unknown as { message: { content: string } };
+    } as never)) as unknown as { message: { content: string } };
 
-    if (resp.message.content) {
-      for (const line of resp.message.content.split('\n')) {
-        const colonIdx = line.indexOf(':');
-        if (colonIdx === -1) continue;
-        const key = line.slice(0, colonIdx).trim();
-        const val = line.slice(colonIdx + 1).trim();
-        const keyMap: Record<string, string> = { FACTS: 'fact', DECISIONS: 'decision', OPEN_QUESTIONS: 'open_question', ERRORS: 'error' };
-        if (key in keyMap) {
-          const delimiter = val.includes(' | ') ? ' | ' : ',';
-          const items = val.replace(/^\[/, '').replace(/\]$/, '').split(delimiter).map(s => s.trim()).filter(Boolean);
-          for (const item of items) {
-            ks.updateMemory(keyMap[key], item);
-          }
-        }
-      }
-      await ks.save();
+    if (resp.message?.content) {
+      this.applyKsBlock(resp.message.content);
+      await this.knowledgeState.save();
     }
   }
 
@@ -646,7 +776,18 @@ export class ContextManager {
     this.filesWritten.clear();
     this.errorCount = 0;
     this.lastTurnToolCalls = 0;
+    this.summaryMessage = null;
     this.knowledgeState = new KnowledgeState(Date.now().toString(36));
+  }
+
+  /** Get the current synthetic compaction-summary message, if any. */
+  getSummaryMessage(): Message | null {
+    return this.summaryMessage;
+  }
+
+  /** Override the synthetic compaction-summary message. Test/restore hook. */
+  setSummaryMessage(msg: Message | null): void {
+    this.summaryMessage = msg;
   }
 
   messageCount(): number {
