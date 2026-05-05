@@ -50,6 +50,7 @@ const COMMANDS: CommandDef[] = [
   { name: '/add-dir', args: '<path>', description: 'Add a working directory' },
   { name: '/worktree', args: '[cmd]', description: 'Git worktree isolation (create/list/cleanup)' },
   { name: '/effort', args: '<level>', description: 'Set effort level (low/medium/high)' },
+  { name: '/retry', args: '', description: 'Re-run the last user message (useful after transient model/server errors)' },
   { name: '/benchmark context', args: '', description: 'Probe optimal context sizes per model' },
   { name: '/shell', args: '', description: 'Enter interactive shell mode (exit to return)' },
   { name: '/sandbox', args: '', description: 'List sandbox files' },

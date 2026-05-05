@@ -1180,6 +1180,30 @@ async function handleCommand(
       return false;
     }
 
+    case '/retry': {
+      // Find the most recent user message in the agent's context and re-run
+      // it. Useful when a transient error (proxy busy, model not loaded,
+      // network blip) interrupted the previous turn and the model never
+      // produced a useful answer. We don't pop the failed turn from history
+      // — keeping it lets the model see what happened, which sometimes helps
+      // it adapt; if the user wants a clean slate, /clear before /retry.
+      const allMessages = agent.getContext().getAllMessages();
+      let lastUser: string | null = null;
+      for (let i = allMessages.length - 1; i >= 0; i--) {
+        if (allMessages[i].role === 'user' && allMessages[i].content) {
+          lastUser = allMessages[i].content as string;
+          break;
+        }
+      }
+      if (!lastUser) {
+        tui.showInfo(theme.dim('No previous user message to retry.'));
+        return false;
+      }
+      tui.showInfo(`${theme.dim('↻ Retrying:')} ${theme.muted(lastUser.length > 80 ? lastUser.slice(0, 77) + '…' : lastUser)}`);
+      await runTurn(lastUser);
+      return false;
+    }
+
     case '/compact': {
       const ctx = agent.getContext();
       if (ctx.messageCount() <= 4) {
