@@ -418,7 +418,19 @@ export class ContextManager {
     return this.lastPromptTokens;
   }
 
-  /** Get messages that fit within the token budget (sent to API) */
+  /** Get messages that fit within the token budget (sent to API).
+   *
+   *  Sliding window invariants we MUST preserve (OpenAI/vLLM Qwen3 reject otherwise):
+   *  1. The window must contain at least one `user` message — without one the
+   *     Qwen3 chat template raises "No user query found in messages." (HTTP 400).
+   *  2. Every `tool` message must be preceded by its corresponding `assistant`
+   *     message (the one whose `tool_calls` produced it). An orphan tool
+   *     message at the start of the window has no call to thread back to.
+   *
+   *  Algorithm: walk newest → oldest collecting until budget; then repair the
+   *  prefix by dropping orphan tools and (if needed) injecting the most recent
+   *  user message from the original history.
+   */
   getMessages(): Message[] {
     if (this.messages.length === 0) return [];
 
@@ -441,6 +453,25 @@ export class ContextManager {
 
       window.unshift(msg);
       estimatedTokens += msgTokens;
+    }
+
+    // Repair invariant #2: drop leading tool messages that have no preceding
+    // assistant in the window. They'd be orphans and confuse the chat template.
+    while (window.length > 0 && window[0].role === 'tool') {
+      window.shift();
+    }
+
+    // Repair invariant #1: ensure at least one user message is present.
+    // If trimming + budget left us without one, hunt the most recent user
+    // message from the full history and prepend it. This grows the window
+    // slightly but only by one short message — far better than a 400.
+    if (!window.some(m => m.role === 'user')) {
+      for (let i = this.messages.length - 1; i >= 0; i--) {
+        if (this.messages[i].role === 'user') {
+          window.unshift(this.messages[i]);
+          break;
+        }
+      }
     }
 
     return window;
