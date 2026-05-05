@@ -21,6 +21,7 @@ import { saveSession, listSessions, findSession, formatSessionList, autoName } f
 import { getProjectSession, setProjectSession, listProjects, formatProjectList } from './projects.js';
 import { IgnoreManager } from './ignore.js';
 import { FileTracker } from './filetracker.js';
+import { Profiler } from './profiler.js';
 import { ObservabilityManager } from './observability.js';
 import { RalphEngine } from './ralph.js';
 import { MoeEngine, type MoeStrategy } from './moe.js';
@@ -52,6 +53,9 @@ const VERSION = '0.3.0';
 
 
 async function main() {
+  const profiler = new Profiler(process.argv.includes('--profile'));
+  profiler.mark('main() entered');
+
   // Project list: vcode --projects
   if (process.argv.includes('--projects')) {
     const projects = await listProjects();
@@ -77,6 +81,7 @@ async function main() {
   }
 
   let config = loadConfig();
+  profiler.mark('config loaded');
 
   // Check for -p / --print mode (non-interactive, output to stdout)
   const printIdx = process.argv.findIndex(a => a === '-p' || a === '--print');
@@ -86,6 +91,7 @@ async function main() {
   let modelManager = new ModelManager(config);
   try {
     await modelManager.discover();
+    profiler.mark('models discovered');
   } catch (err) {
     console.error(chalk.red(`Failed to connect to proxy at ${config.proxyUrl}`));
     console.error(chalk.dim((err as Error).message));
@@ -143,6 +149,7 @@ async function main() {
   for (const tool of registerWebTools(config)) registry.register(tool);
   for (const tool of registerDevOpsTools()) registry.register(tool);
   for (const tool of registerLspTools(lspManager)) registry.register(tool);
+  profiler.mark('tools registered');
 
   // Pre-warm any server with warmOnStart=true. Fire-and-forget — we
   // don't want session start to block on LSP init.
@@ -159,6 +166,7 @@ async function main() {
     if (remoteTools.length > 0) {
       console.error(chalk.dim(`  ${remoteTools.length} remote tools loaded`));
     }
+    profiler.mark('remote tools discovered');
   }
 
   // Connect to configured MCP servers and register their tools. Failures
@@ -181,6 +189,7 @@ async function main() {
   }
   // Clean up child processes on shutdown.
   process.on('beforeExit', () => { void closeMcpClients(mcpClients); });
+  profiler.mark('mcp connected');
 
   // Skills — register the skill_invoke meta-tool ONLY when at least one
   // skill is on disk. Skill bodies stay on disk; only the index is in the
@@ -278,6 +287,9 @@ async function main() {
   if (printQuery) {
     const jsonSchemaArg = process.argv.find(a => a.startsWith('--json-schema='));
     const jsonSchemaFile = jsonSchemaArg?.split('=')[1];
+
+    profiler.mark('entering print mode');
+    profiler.flush();
 
     // Auto-allow all permissions in print mode
     permissions.setPromptHandler(async () => 'y');
@@ -397,7 +409,9 @@ async function main() {
   const actualApiPort = api.port;
 
   // Initialize TUI
+  profiler.mark('api server started');
   const tui = new TUI();
+  profiler.flush();
   tui.setProgressBar(config.progressBar);
   tui.start({
     model: defaultModel,
@@ -1132,10 +1146,16 @@ async function handleCommand(
         `  ${theme.dim('  Configure in settings.json mcpServers: { name: { command, args } } or { url }.')}`,
         `  ${theme.dim('  Tools registered as mcp__<server>__<tool>; per-server allow list supported.')}`,
         '',
+        `${theme.textBold('Health and configuration:')}`,
+        `  ${theme.accent('/doctor')}           Audit env (proxy, fleet, LSP, hooks, MCP, CLI tools)`,
+        `  ${theme.accent('/doctor fix')}       Apply available auto-fixes`,
+        `  ${theme.accent('/extras')}           List language bundles (LSP + formatter hook + prompt hints)`,
+        `  ${theme.accent('/extras add typescript')}     Install one`,
+        '',
         `${theme.textBold('Language Server Protocol (LSP):')}`,
         `  ${theme.accent('/lsp')}              List configured LSP servers and live status`,
-        `  ${theme.dim('  Tools: lsp_diagnostics, lsp_restart. Configure under "lsp" in settings.json.')}`,
-        `  ${theme.dim('  See docs/plans/v0.4-lsp.md. Phase A only — diagnostics inlined into edits comes in B.')}`,
+        `  ${theme.dim('  Tools: lsp_diagnostics, lsp_references, lsp_definition, lsp_restart.')}`,
+        `  ${theme.dim('  Configure under "lsp" in settings.json. See docs/plans/v0.4-lsp.md.')}`,
         '',
         `${theme.textBold('Hooks (run shell commands at lifecycle events):')}`,
         `  ${theme.accent('/hooks')}            Show configured hooks   ${theme.accent('/hooks trust')}  Trust this project`,
@@ -1706,12 +1726,178 @@ async function handleCommand(
       return false;
     }
 
+    case '/extras': {
+      const sub = parts[1]?.toLowerCase();
+      const { listExtras, addExtra, removeExtra } = await import('./extras/index.js');
+
+      if (!sub || sub === 'list') {
+        const items = listExtras();
+        const lines: string[] = [`${theme.textBold('Extras')} ${theme.dim('(LazyVim-style language bundles — LSP + formatters + prompt hints)')}`];
+        for (const { extra, active, matchesCwd } of items) {
+          const status = active ? theme.success('on ') : theme.dim('off');
+          const here = matchesCwd ? theme.accent(' [matches cwd]') : '';
+          lines.push(`  ${status} ${theme.accent(extra.name.padEnd(12))} ${theme.dim(extra.description)}${here}`);
+        }
+        lines.push('');
+        lines.push(theme.dim(`Add:    /extras add <name>    Remove: /extras remove <name>`));
+        tui.showInfo(lines.join('\n'));
+        return false;
+      }
+
+      if (sub === 'add') {
+        const name = parts[2];
+        if (!name) { tui.showInfo(theme.warning('Usage: /extras add <name>')); return false; }
+        const out = addExtra(name);
+        const lines: string[] = [];
+        if (!out.ok) {
+          lines.push(`${theme.warning('✗')} ${out.message}`);
+        } else {
+          lines.push(`${theme.success('✓')} ${out.message}`);
+          if (out.installed.length) lines.push(theme.dim(`  Installed LSP: ${out.installed.join(', ')}`));
+          if (out.alreadyPresent.length) lines.push(theme.dim(`  Already present: ${out.alreadyPresent.join(', ')}`));
+          if (out.hooksAdded > 0) lines.push(theme.dim(`  Registered ${out.hooksAdded} PostToolUse hook${out.hooksAdded === 1 ? '' : 's'}`));
+          lines.push(theme.dim(`  Restart vcode to activate the new hooks and prompt section.`));
+        }
+        tui.showInfo(lines.join('\n'));
+        return false;
+      }
+
+      if (sub === 'remove') {
+        const name = parts[2];
+        if (!name) { tui.showInfo(theme.warning('Usage: /extras remove <name>')); return false; }
+        const out = removeExtra(name);
+        tui.showInfo(out.ok
+          ? `${theme.success('✓')} ${out.message} (removed ${out.hooksRemoved} hook${out.hooksRemoved === 1 ? '' : 's'})`
+          : `${theme.warning('✗')} ${out.message}`);
+        return false;
+      }
+
+      tui.showInfo([
+        `${theme.textBold('Usage:')}`,
+        `  ${theme.accent('/extras')}                    List built-in extras (active + match-cwd marker)`,
+        `  ${theme.accent('/extras add <name>')}         Install LSP + register hooks for the bundle`,
+        `  ${theme.accent('/extras remove <name>')}      Unregister hooks (LSP servers stay)`,
+      ].join('\n'));
+      return false;
+    }
+
+    case '/doctor': {
+      const { defaultChecks, runChecks, renderDoctor } = await import('./doctor/index.js');
+      const sub = parts[1];
+      const checks = defaultChecks(config);
+
+      if (!sub) {
+        tui.showInfo(theme.dim('Running checks...'));
+        const summary = await runChecks(checks);
+        tui.showInfo(renderDoctor(summary));
+        return false;
+      }
+
+      if (sub === 'fix') {
+        const idFilter = parts[2];
+        tui.showInfo(theme.dim('Running checks before applying fixes...'));
+        const summary = await runChecks(checks);
+        const candidates = summary.results.filter((r) =>
+          (r.result.severity === 'error' || r.result.severity === 'warn') &&
+          typeof r.check.fix === 'function' &&
+          (!idFilter || r.check.id === idFilter),
+        );
+        if (candidates.length === 0) {
+          tui.showInfo(idFilter
+            ? `${theme.dim(`No fixable issue with id "${idFilter}".`)}`
+            : `${theme.success('Nothing to fix — no fixable issues found.')}`);
+          return false;
+        }
+        const fixLines: string[] = [`${theme.textBold('Applying fixes:')}`];
+        for (const { check } of candidates) {
+          fixLines.push(theme.dim(`  → ${check.id} (${check.fixLabel ?? check.description})`));
+          try {
+            const out = await check.fix!();
+            fixLines.push(`    ${out.ok ? theme.success('✓') : theme.warning('✗')} ${out.message}`);
+          } catch (err) {
+            fixLines.push(`    ${theme.warning('✗')} fix threw: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        tui.showInfo(fixLines.join('\n'));
+        return false;
+      }
+
+      tui.showInfo([
+        `${theme.textBold('Usage:')}`,
+        `  ${theme.accent('/doctor')}              Run all health checks`,
+        `  ${theme.accent('/doctor fix')}          Apply every available auto-fix`,
+        `  ${theme.accent('/doctor fix <id>')}     Apply just one fix (id from the report)`,
+      ].join('\n'));
+      return false;
+    }
+
     case '/lsp': {
+      const sub = parts[1]?.toLowerCase();
+
+      if (sub === 'install') {
+        const { KNOWN_RECIPES, recipeByLabel, detectRecipes, runInstall, writeServerToSettings, whichBin } = await import('./lsp/install.js');
+        let labels = parts.slice(2);
+        if (labels.length === 0) {
+          // Auto-detect from cwd
+          const detected = detectRecipes(process.cwd());
+          if (detected.length === 0) {
+            tui.showInfo([
+              `${theme.warning('No project markers detected in')} ${process.cwd()}`,
+              '',
+              `Available recipes:`,
+              ...KNOWN_RECIPES.map((r) => `  ${theme.accent(r.label.padEnd(12))} ${theme.dim(r.language)}`),
+              '',
+              `Usage: ${theme.accent('/lsp install <label> [<label>...]')}`,
+            ].join('\n'));
+            return false;
+          }
+          labels = detected.map((r) => r.label);
+          tui.showInfo(`${theme.dim('Auto-detected')} ${labels.join(', ')} ${theme.dim('from project markers in')} ${process.cwd()}`);
+        }
+        const lines: string[] = [];
+        for (const label of labels) {
+          const recipe = recipeByLabel(label);
+          if (!recipe) {
+            lines.push(`${theme.warning('✗')} Unknown recipe '${label}'. Known: ${KNOWN_RECIPES.map((r) => r.label).join(', ')}`);
+            continue;
+          }
+          const existing = whichBin(recipe.binaryProbe);
+          if (existing) {
+            lines.push(`${theme.success('✓')} ${recipe.language} already installed at ${existing}`);
+          } else {
+            lines.push(`${theme.dim('→')} Installing ${recipe.language}: ${recipe.install.command} ${recipe.install.args.join(' ')}`);
+            const out = runInstall(recipe);
+            lines.push(`  ${out.ok ? theme.success('✓') : theme.warning('✗')} ${out.message}`);
+            if (!out.ok) continue;
+          }
+          const w = writeServerToSettings(recipe.label, recipe.serverConfig);
+          if (w.changed) {
+            lines.push(`  ${theme.success('✓')} Added lsp.${recipe.label} to ${w.path}`);
+          } else {
+            lines.push(`  ${theme.dim('•')} Settings unchanged: ${w.reason}`);
+          }
+        }
+        lines.push('');
+        lines.push(theme.dim('Restart vcode to pick up new LSP servers.'));
+        tui.showInfo(lines.join('\n'));
+        return false;
+      }
+
+      if (sub === 'help' || sub === '?') {
+        tui.showInfo([
+          `${theme.textBold('LSP commands:')}`,
+          `  ${theme.accent('/lsp')}                       Show configured servers and live status`,
+          `  ${theme.accent('/lsp install')}               Auto-detect project type and install recipes`,
+          `  ${theme.accent('/lsp install <label>...')}    Install specific recipes (typescript, python, go, rust, lua)`,
+        ].join('\n'));
+        return false;
+      }
+
       const cfg = config.lsp;
       const lines: string[] = [`${theme.textBold('LSP servers')}`];
       if (!cfg || Object.keys(cfg).length === 0) {
         lines.push(theme.dim('  (none configured)'));
-        lines.push(theme.dim('  Add an "lsp" block to settings.json. See docs/plans/v0.4-lsp.md.'));
+        lines.push(theme.dim('  Run /lsp install to set one up. See docs/plans/v0.4-lsp.md.'));
       } else {
         const running = new Set(lspManager.runningLabels());
         for (const [label, c] of Object.entries(cfg)) {

@@ -263,6 +263,36 @@ try {
   // config.ts not present — skip.
 }
 
+// ─── Check 8c: every config sub-shape that gets executed has an enabled flag
+//
+// Hooks, MCP servers, LSP servers, and extras all run code or inject
+// content into the system prompt. Users need a way to toggle each without
+// deleting it. Assert each interface has either `enabled?: boolean` or
+// `disabled?: boolean`.
+
+try {
+  const cfg = readFileSync(resolve(ROOT, 'src/config.ts'), 'utf-8');
+  const lspCfg = readFileSync(resolve(ROOT, 'src/lsp/config.ts'), 'utf-8');
+  const extrasTypes = readFileSync(resolve(ROOT, 'src/extras/types.ts'), 'utf-8');
+  const candidates = [
+    { name: 'HookEntry', src: cfg },
+    { name: 'McpServerConfig', src: cfg },
+    { name: 'LspServerConfig', src: lspCfg },
+    { name: 'Extra', src: extrasTypes },
+  ];
+  for (const { name, src } of candidates) {
+    const re = new RegExp(`export interface ${name}\\b[^{]*{([\\s\\S]*?)\\n}`);
+    const m = src.match(re);
+    if (!m) continue;
+    const body = m[1];
+    if (!/enabled\??:\s*boolean/.test(body) && !/disabled\??:\s*boolean/.test(body)) {
+      issues.push(`${name}: must declare enabled?: boolean or disabled?: boolean so users can toggle without removing the entry.`);
+    }
+  }
+} catch {
+  // file not present — skip
+}
+
 // ─── Check 8b: LspServerConfig exposed in DEFAULTS + loadConfig merge ──
 //
 // Mirrors the subagent check. The LSP block is opt-in (default null) but

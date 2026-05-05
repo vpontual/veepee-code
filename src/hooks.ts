@@ -278,6 +278,8 @@ export async function runHooks(
   const subject = eventSubject(event, payload);
   const filtered: HookWithOrigin[] = [];
   for (const item of collected) {
+    // Per-hook disable flag — lets users toggle without removing from settings.
+    if (item.hook.enabled === false) continue;
     // Project/local require trust
     if (item.layer !== 'global' && trust !== 'trusted') continue;
     if (!matcherFires(item.hook.matcher, subject)) continue;

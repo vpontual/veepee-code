@@ -40,6 +40,11 @@ export interface Config {
    *  (e.g. "typescript", "go"). When null, LSP is fully disabled and the
    *  lsp_diagnostics tool is not registered. See docs/plans/v0.4-lsp.md. */
   lsp: Record<string, LspServerConfig> | null;
+  /** Active extras (LazyVim-style language bundles). Each name corresponds
+   *  to an entry in src/extras/builtins.ts. Adding via /extras add <name>
+   *  installs the bundle's LSP recipes + hooks; the system-prompt section
+   *  injects when cwd matches the bundle's projectMarkers. */
+  extras: string[];
 }
 
 export interface SubagentConfig {
@@ -95,6 +100,9 @@ export interface HookEntry {
   description?: string;
   /** Override default 30s timeout in milliseconds. */
   timeoutMs?: number;
+  /** When false, the hook is configured but does not run. Lets users
+   *  toggle a hook without removing it from settings. */
+  enabled?: boolean;
 }
 
 export interface ConfigFile {
@@ -124,6 +132,7 @@ export interface ConfigFile {
   mcpServers?: Record<string, McpServerConfig> | null;
   subagent?: SubagentConfig | null;
   lsp?: Record<string, LspServerConfig> | null;
+  extras?: string[];
 }
 
 const DEFAULTS: Config = {
@@ -153,6 +162,7 @@ const DEFAULTS: Config = {
   mcpServers: null,
   subagent: null,
   lsp: null,
+  extras: [],
 };
 
 // ─── Settings hierarchy paths ─────────────────────────────────────────
@@ -384,6 +394,7 @@ export function loadConfig(configPath?: string): Config {
     mcpServers: merged.mcpServers ?? DEFAULTS.mcpServers,
     subagent: merged.subagent ?? DEFAULTS.subagent,
     lsp: merged.lsp ?? DEFAULTS.lsp,
+    extras: merged.extras ?? DEFAULTS.extras,
   };
 }
 

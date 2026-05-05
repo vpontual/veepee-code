@@ -88,6 +88,38 @@ function findCandidates(partial: string, cwd: string): string[] {
   return out.sort((a, b) => a.length - b.length || a.localeCompare(b));
 }
 
+/** Walk the project looking for files whose BASENAME contains the
+ *  needle (case-insensitive). Used as a fallback when prefix matching
+ *  produces zero candidates — covers "I know it's named like this but
+ *  don't remember the directory" lookups. */
+function findCandidatesBySubstring(needle: string, cwd: string): string[] {
+  const lower = needle.toLowerCase();
+  if (!lower) return [];
+  const out: string[] = [];
+  const stack: string[] = [cwd];
+  while (stack.length > 0 && out.length < MAX_CANDIDATES) {
+    const dir = stack.pop()!;
+    let entries: string[];
+    try { entries = readdirSync(dir); } catch { continue; }
+    for (const name of entries) {
+      if (out.length >= MAX_CANDIDATES) break;
+      if (name.startsWith('.')) continue;
+      if (SKIP_DIRS.has(name)) continue;
+      const full = resolve(dir, name);
+      let isDir = false;
+      try { isDir = statSync(full).isDirectory(); } catch { continue; }
+      if (isDir) { stack.push(full); continue; }
+      if (name.toLowerCase().includes(lower)) {
+        out.push(relative(cwd, full));
+      }
+    }
+  }
+  // Rank: shortest path first, then alphabetical. A file at /src/uri.ts
+  // beats /node_modules/some-pkg/lib/internal/uri.ts in a perfect world,
+  // but SKIP_DIRS already filters node_modules.
+  return out.sort((a, b) => a.length - b.length || a.localeCompare(b));
+}
+
 /** Attempt to complete an @file mention at the cursor. */
 export function completeFileMention(
   input: string,
@@ -97,7 +129,14 @@ export function completeFileMention(
   const m = findMention(input, cursor);
   if (!m || m.partial.length === 0) return null;
 
-  const candidates = findCandidates(m.partial, cwd);
+  let candidates = findCandidates(m.partial, cwd);
+  // Fallback: if prefix match found nothing, try substring on the basename.
+  // We only fall back when the user's partial has no slash — once they
+  // commit to a path prefix we trust their intent.
+  if (candidates.length === 0 && !m.partial.includes('/')) {
+    candidates = findCandidatesBySubstring(m.partial, cwd);
+  }
+
   if (candidates.length === 0) {
     return { partial: m.partial, candidates: [] };
   }

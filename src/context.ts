@@ -383,6 +383,17 @@ export class ContextManager {
       }
     }
 
+    // Inject system-prompt sections from active extras whose project markers
+    // are present in cwd. Lazy-required to avoid an import cycle on startup.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { activeSystemPromptSections } = require('./extras/manager.js') as typeof import('./extras/manager.js');
+      const extrasBlock = activeSystemPromptSections(process.cwd());
+      if (extrasBlock) this.systemPrompt += extrasBlock;
+    } catch {
+      // extras not loadable in this build (tests etc.) — skip silently
+    }
+
     if (this.mode === 'chat') {
       // Build live tool list — only show tools that are actually registered
       const availableChatTools = CHAT_TOOLS.filter(t => this.registeredToolNames.includes(t));
