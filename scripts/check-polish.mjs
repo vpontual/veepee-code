@@ -263,6 +263,22 @@ try {
   // config.ts not present — skip.
 }
 
+// ─── Check 8b: LspServerConfig exposed in DEFAULTS + loadConfig merge ──
+//
+// Mirrors the subagent check. The LSP block is opt-in (default null) but
+// must be merged from layered settings or it's undefined at runtime.
+
+try {
+  const cfg = readFileSync(resolve(ROOT, 'src/config.ts'), 'utf-8');
+  if (cfg.includes('LspServerConfig')) {
+    if (!cfg.includes('lsp: null') || !cfg.match(/lsp:\s*merged\.lsp/)) {
+      issues.push('config.ts: `lsp` field not wired through DEFAULTS and loadConfig merge — config will be `undefined` at runtime.');
+    }
+  }
+} catch {
+  // config.ts not present — skip.
+}
+
 // ─── Check 9: Image extensions consistent between extract & expand ────
 //
 // extractImages(...) and expandFileMentions(...) both look at file

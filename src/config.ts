@@ -1,5 +1,6 @@
 import { resolve, join } from 'path';
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'fs';
+import type { LspServerConfig } from './lsp/config.js';
 
 export interface Config {
   proxyUrl: string;
@@ -35,6 +36,10 @@ export interface Config {
   /** Subagent (Task tool) constraints. Both fields optional — defaults
    *  preserve current behavior. */
   subagent: SubagentConfig | null;
+  /** Language Server Protocol integration. Keyed by language label
+   *  (e.g. "typescript", "go"). When null, LSP is fully disabled and the
+   *  lsp_diagnostics tool is not registered. See docs/plans/v0.4-lsp.md. */
+  lsp: Record<string, LspServerConfig> | null;
 }
 
 export interface SubagentConfig {
@@ -118,6 +123,7 @@ export interface ConfigFile {
   hooks?: HooksConfig | null;
   mcpServers?: Record<string, McpServerConfig> | null;
   subagent?: SubagentConfig | null;
+  lsp?: Record<string, LspServerConfig> | null;
 }
 
 const DEFAULTS: Config = {
@@ -146,6 +152,7 @@ const DEFAULTS: Config = {
   hooks: null,
   mcpServers: null,
   subagent: null,
+  lsp: null,
 };
 
 // ─── Settings hierarchy paths ─────────────────────────────────────────
@@ -376,6 +383,7 @@ export function loadConfig(configPath?: string): Config {
     hooks: merged.hooks ?? DEFAULTS.hooks,
     mcpServers: merged.mcpServers ?? DEFAULTS.mcpServers,
     subagent: merged.subagent ?? DEFAULTS.subagent,
+    lsp: merged.lsp ?? DEFAULTS.lsp,
   };
 }
 

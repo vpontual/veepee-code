@@ -36,6 +36,8 @@ import { resolveApiHost } from './api-host.js';
 
 // Tool registrations
 import { registerCodingTools } from './tools/coding.js';
+import { registerLspTools } from './tools/lsp.js';
+import { LspManager } from './lsp/manager.js';
 
 import { registerWebTools } from './tools/web.js';
 import { registerDevOpsTools } from './tools/devops.js';
@@ -136,6 +138,18 @@ async function main() {
   for (const tool of registerCodingTools(ignoreManager, fileTracker)) registry.register(tool);
   for (const tool of registerWebTools(config)) registry.register(tool);
   for (const tool of registerDevOpsTools()) registry.register(tool);
+
+  // LSP integration (Phase A) — gated on config.lsp. Tools are always
+  // registered so users get a helpful "no LSP configured" error instead
+  // of "tool not found." See docs/plans/v0.4-lsp.md.
+  const lspManager = new LspManager(config.lsp);
+  for (const tool of registerLspTools(lspManager)) registry.register(tool);
+  // Pre-warm any server with warmOnStart=true. Fire-and-forget — we
+  // don't want session start to block on LSP init.
+  lspManager.warmStart().catch(() => undefined);
+  // Clean shutdown on orderly exit (matches MCP cleanup pattern at line ~185).
+  // SIGINT goes through the TUI; SIGTERM hits the existing handler below.
+  process.on('beforeExit', () => { void lspManager.shutdown(); });
 
   // Discover remote tools (e.g. from Llama Rider)
   if (config.remote) {
@@ -900,7 +914,7 @@ async function main() {
     if (trimmed.startsWith('/')) {
       // Show the command in the chat (but don't start the turn tracker — commands don't go to the LLM)
       tui.addCommandMessage(trimmed);
-      const result = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId, sandbox, preview, syncManager, runTurn);
+      const result = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId, sandbox, preview, syncManager, lspManager, runTurn);
       if (result === true) break; // quit
       if (typeof result === 'string' && result.startsWith('session:')) {
         currentSessionId = result.slice(8) || null;
@@ -1040,6 +1054,7 @@ async function handleCommand(
   sandbox: SandboxManager,
   preview: PreviewManager,
   syncManager: SyncManager | null,
+  lspManager: LspManager,
   runTurn: (text: string) => Promise<void>,
 ): Promise<boolean | string | void> {
   // Returns: true = quit, 'session:<id>' = set session ID, void = continue
@@ -1116,6 +1131,11 @@ async function handleCommand(
         `  ${theme.accent('/mcp')}               List configured servers and tool counts`,
         `  ${theme.dim('  Configure in settings.json mcpServers: { name: { command, args } } or { url }.')}`,
         `  ${theme.dim('  Tools registered as mcp__<server>__<tool>; per-server allow list supported.')}`,
+        '',
+        `${theme.textBold('Language Server Protocol (LSP):')}`,
+        `  ${theme.accent('/lsp')}              List configured LSP servers and live status`,
+        `  ${theme.dim('  Tools: lsp_diagnostics, lsp_restart. Configure under "lsp" in settings.json.')}`,
+        `  ${theme.dim('  See docs/plans/v0.4-lsp.md. Phase A only — diagnostics inlined into edits comes in B.')}`,
         '',
         `${theme.textBold('Hooks (run shell commands at lifecycle events):')}`,
         `  ${theme.accent('/hooks')}            Show configured hooks   ${theme.accent('/hooks trust')}  Trust this project`,
@@ -1681,6 +1701,32 @@ async function handleCommand(
         const totalTools = groups.reduce((n, g) => n + g.tools.length, 0);
         lines.push('');
         lines.push(theme.dim(`  ${totalTools} MCP tool${totalTools === 1 ? '' : 's'} registered across ${groups.length} server${groups.length === 1 ? '' : 's'}.`));
+      }
+      tui.showInfo(lines.join('\n'));
+      return false;
+    }
+
+    case '/lsp': {
+      const cfg = config.lsp;
+      const lines: string[] = [`${theme.textBold('LSP servers')}`];
+      if (!cfg || Object.keys(cfg).length === 0) {
+        lines.push(theme.dim('  (none configured)'));
+        lines.push(theme.dim('  Add an "lsp" block to settings.json. See docs/plans/v0.4-lsp.md.'));
+      } else {
+        const running = new Set(lspManager.runningLabels());
+        for (const [label, c] of Object.entries(cfg)) {
+          const status = c.enabled === false
+            ? theme.dim('disabled')
+            : running.has(label)
+              ? theme.success('running')
+              : theme.dim('idle');
+          const reason = lspManager.failureReason(label);
+          const reasonStr = reason ? theme.warning(`  failed: ${reason}`) : '';
+          const filetypes = c.filetypes.map((s) => `.${s}`).join(' ');
+          lines.push(`  ${theme.accent(label.padEnd(12))} ${status.padEnd(16)} ${theme.dim(c.command)} ${theme.dim(filetypes)}${reasonStr}`);
+        }
+        lines.push('');
+        lines.push(theme.dim(`  Tools: lsp_diagnostics, lsp_restart. Use /tools for the full registry.`));
       }
       tui.showInfo(lines.join('\n'));
       return false;

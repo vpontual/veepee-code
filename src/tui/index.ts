@@ -65,6 +65,7 @@ const COMMANDS: CommandDef[] = [
   { name: '/permissions', args: '', description: 'Show permission settings' },
   { name: '/revoke', args: '<tool>', description: 'Revoke always-allow for a tool' },
   { name: '/status', args: '', description: 'Show session status' },
+  { name: '/lsp', args: '', description: 'List configured LSP servers and their status' },
   { name: '/clear', args: '', description: 'Clear conversation history (mid-run: stops + wipes)' },
   { name: '/stop', args: '', description: 'Mid-run: interrupt the agent (same as Ctrl+C). Between turns: shows the gesture.' },
   { name: '/compact', args: '', description: 'Compact conversation to free context' },
