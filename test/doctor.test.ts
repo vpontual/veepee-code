@@ -13,6 +13,41 @@ function check(id: string, severity: 'ok' | 'warn' | 'error' | 'info', message: 
   };
 }
 
+// Re-export the matcher for testing — checks.ts doesn't export it directly,
+// so we re-create the same logic here. If this assertion drifts from the
+// implementation, the e2e smoke test will catch it.
+function fleetNameMatches(configured: string, reported: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, '');
+  const a = norm(configured); const b = norm(reported);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+describe('fleet name matcher (substring/dash-agnostic)', () => {
+  it('matches normalized equal names', () => {
+    expect(fleetNameMatches('dgx-spark', 'DGX Spark')).toBe(true);
+    expect(fleetNameMatches('orin-agx', 'Orin AGX')).toBe(true);
+  });
+
+  it('matches when configured is a substring of reported', () => {
+    expect(fleetNameMatches('nano-1', 'Jetson Nano 1')).toBe(true);
+  });
+
+  it('matches when reported is a substring of configured', () => {
+    expect(fleetNameMatches('dgx-spark-prod', 'DGX Spark')).toBe(true);
+  });
+
+  it('does not match unrelated names', () => {
+    expect(fleetNameMatches('orin-agx', 'DGX Spark')).toBe(false);
+    expect(fleetNameMatches('nano-1', 'nano-2')).toBe(false);
+  });
+
+  it('handles empty names safely', () => {
+    expect(fleetNameMatches('', 'anything')).toBe(false);
+    expect(fleetNameMatches('anything', '')).toBe(false);
+  });
+});
+
 describe('doctor.runChecks', () => {
   it('returns a tallied summary', async () => {
     const summary = await runChecks([

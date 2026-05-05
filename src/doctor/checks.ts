@@ -71,17 +71,71 @@ function checkProxyReachable(config: Config): Check {
   };
 }
 
-function checkFleetServer(server: { name: string; url: string }): Check {
+/** Probe the proxy's aggregated /api/ps once and parse out which servers
+ *  are actually serving (regardless of backend: ollama, vLLM, etc.). The
+ *  per-fleet checks then look this snapshot up by name. */
+interface ProxyPsEntry {
+  name: string;
+  _server?: string;
+  _host?: string;
+}
+
+async function fetchProxyPs(proxyUrl: string, timeoutMs = 5000): Promise<ProxyPsEntry[] | null> {
+  return new Promise((resolve) => {
+    const u = new URL(proxyUrl);
+    const req = httpRequest({
+      method: 'GET',
+      hostname: u.hostname,
+      port: u.port || (u.protocol === 'https:' ? 443 : 80),
+      path: '/api/ps',
+      timeout: timeoutMs,
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as { models?: ProxyPsEntry[] };
+          resolve(j.models ?? []);
+        } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+/** Match fleet name (e.g. "dgx-spark") against proxy's _server label
+ *  (e.g. "DGX Spark"). Case-insensitive, dash/space agnostic, substring
+ *  in either direction — the configured name might be short ("nano-1")
+ *  while the reported label is verbose ("Jetson Nano 1"), or vice versa. */
+function fleetNameMatches(configured: string, reported: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, '');
+  const a = norm(configured);
+  const b = norm(reported);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+function checkFleetServer(server: { name: string; url: string }, psSnapshot: ProxyPsEntry[] | null | undefined, proxyOk: boolean): Check {
   return {
     id: `fleet-${server.name}`,
     category: 'Network',
-    description: `Fleet server "${server.name}" at ${server.url}`,
+    description: `Fleet server "${server.name}"`,
     async run(): Promise<CheckResult> {
-      const r = await probeOllama(server.url);
-      if (!r) {
-        return { severity: 'warn', message: `${server.name} unreachable at ${server.url}`, detail: 'Subagents pinned to this server will fail. Other models still work via the proxy.' };
+      if (!proxyOk) {
+        return { severity: 'info', message: `${server.name}: skipped (proxy unreachable, can't query state)` };
       }
-      return { severity: 'ok', message: `${server.name} reachable (${r.latencyMs}ms${r.version ? `, ollama ${r.version}` : ''})` };
+      if (!psSnapshot) {
+        return { severity: 'warn', message: `${server.name}: proxy did not return /api/ps`, detail: 'Could not determine fleet state. Proxy may be too old or misconfigured.' };
+      }
+      const matches = psSnapshot.filter((m) => m._server && fleetNameMatches(server.name, m._server));
+      if (matches.length === 0) {
+        return { severity: 'warn', message: `${server.name}: not reporting any loaded models`, detail: `Proxy /api/ps did not list any model on this server. Backend may be down, restarting, or unreachable from the proxy. (Configured fleet URL: ${server.url})` };
+      }
+      const host = matches[0]._host ?? '?';
+      const models = matches.map((m) => m.name).join(', ');
+      return { severity: 'ok', message: `${server.name} serving ${matches.length} model${matches.length === 1 ? '' : 's'} via ${host}`, detail: `Loaded: ${models}` };
     },
   };
 }
@@ -278,13 +332,21 @@ function checkMcpStdioBinaries(config: Config): Check {
 
 /** ─── Composer ────────────────────────────────────────────────────── */
 
-/** Build the list of checks for the current Config. Pure function — does
- *  not run anything. */
-export function defaultChecks(config: Config): Check[] {
+/** Build the list of checks for the current Config. Pure-ish: the fleet
+ *  checks share a one-shot /api/ps snapshot taken at construction time so
+ *  we don't hammer the proxy with N parallel calls — at the cost of needing
+ *  to await this builder. */
+export async function defaultChecks(config: Config): Promise<Check[]> {
+  // Take a single proxy-state snapshot up front so all fleet checks read
+  // the same /api/ps output. Awaited here (~1 RTT) rather than per-check.
+  const probe = await probeOllama(config.proxyUrl, 3000);
+  const proxyOk = probe !== null;
+  const psSnapshot = proxyOk ? await fetchProxyPs(config.proxyUrl) : null;
+
   const checks: Check[] = [
     checkSettingsReadable(),
     checkProxyReachable(config),
-    ...config.fleet.map((s) => checkFleetServer(s)),
+    ...config.fleet.map((s) => checkFleetServer(s, psSnapshot, proxyOk)),
     checkRosterFreshness(),
     checkApiToken(config),
     checkCliTool('git', 'warn', 'git is required by the git/github tools.'),

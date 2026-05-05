@@ -1784,7 +1784,7 @@ async function handleCommand(
     case '/doctor': {
       const { defaultChecks, runChecks, renderDoctor } = await import('./doctor/index.js');
       const sub = parts[1];
-      const checks = defaultChecks(config);
+      const checks = await defaultChecks(config);
 
       if (!sub) {
         tui.showInfo(theme.dim('Running checks...'));
