@@ -901,6 +901,8 @@ export class ModelCatalog {
 
 ## 10. LSP diagnostics inlined into edit tool results ⭐️⭐️⭐️
 
+**Status (2026-05-04): Design session complete.** Detailed implementation plan lives at `docs/plans/v0.4-lsp.md` (484 lines). Library choice (`vscode-jsonrpc@8` + `vscode-languageserver-protocol@3`) validated against `typescript-language-server` via a 90-line spike at `/tmp/lsp-spike/spike.mjs` — diagnostic returned in ~1 second end-to-end. Phases A/B/C/D, config schema, restart story, and pre-flight checklist all pinned in the design doc.
+
 **Effort:** **Weeks, not days.** This is the single biggest quality multiplier but also the largest piece of work. Deserves its own plan-mode design session before any code is written.
 
 **Why:** When the agent calls `edit_file`, crush does:
@@ -1175,7 +1177,7 @@ if (process.argv.includes('schema')) {
 | 7 | Pub/sub permissions | 1 day | Open |
 | 8 | MCP client | 2-3 days | SHIPPED earlier (Parity Phase 2) |
 | 9 | Catalog | 1-2 days | Open (lower priority) |
-| 10 | LSP (Phase A minimum) | weeks | Open — **biggest quality gain**, dedicated plan session first |
+| 10 | LSP (Phase A minimum) | weeks | **Design done 2026-05-04** — see `docs/plans/v0.4-lsp.md` |
 | B1 | JSON Schema export | ½ day | Open |
 
 Total for items 1-9: roughly **1-2 weeks** of focused work. Item 10 is its own thing.
