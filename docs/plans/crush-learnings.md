@@ -901,7 +901,7 @@ export class ModelCatalog {
 
 ## 10. LSP diagnostics inlined into edit tool results ⭐️⭐️⭐️
 
-**Status (2026-05-04): Design session complete.** Detailed implementation plan lives at `docs/plans/v0.4-lsp.md` (484 lines). Library choice (`vscode-jsonrpc@8` + `vscode-languageserver-protocol@3`) validated against `typescript-language-server` via a 90-line spike at `/tmp/lsp-spike/spike.mjs` — diagnostic returned in ~1 second end-to-end. Phases A/B/C/D, config schema, restart story, and pre-flight checklist all pinned in the design doc.
+**Status (2026-05-05): SHIPPED — all four phases A/B/C/D landed.** Design doc at `docs/plans/v0.4-lsp.md`. Quality multiplier active: every successful `edit_file` / `write_file` / `multi_edit` against a file matching a configured LSP server appends `<file_diagnostics>` / `<project_diagnostics>` / `<diagnostic_summary>` to the tool result. Standalone tools `lsp_diagnostics`, `lsp_references`, `lsp_definition`, `lsp_restart`. `read_file` warms the matching server. 30 LSP tests pass against real `typescript-language-server` (16 unit + 4 integration + 10 end-to-end). Library choice was validated by a 90-line spike before any production code.
 
 **Effort:** **Weeks, not days.** This is the single biggest quality multiplier but also the largest piece of work. Deserves its own plan-mode design session before any code is written.
 
@@ -1177,7 +1177,7 @@ if (process.argv.includes('schema')) {
 | 7 | Pub/sub permissions | 1 day | Open |
 | 8 | MCP client | 2-3 days | SHIPPED earlier (Parity Phase 2) |
 | 9 | Catalog | 1-2 days | Open (lower priority) |
-| 10 | LSP (Phase A minimum) | weeks | **Design done 2026-05-04** — see `docs/plans/v0.4-lsp.md` |
+| 10 | LSP (Phases A/B/C/D) | weeks | **ALL SHIPPED 2026-05-05** — see `docs/plans/v0.4-lsp.md` |
 | B1 | JSON Schema export | ½ day | Open |
 
 Total for items 1-9: roughly **1-2 weeks** of focused work. Item 10 is its own thing.

@@ -135,15 +135,15 @@ async function main() {
   const ignoreManager = new IgnoreManager(process.cwd());
   const fileTracker = new FileTracker();
   const registry = new ToolRegistry();
-  for (const tool of registerCodingTools(ignoreManager, fileTracker)) registry.register(tool);
-  for (const tool of registerWebTools(config)) registry.register(tool);
-  for (const tool of registerDevOpsTools()) registry.register(tool);
-
-  // LSP integration (Phase A) — gated on config.lsp. Tools are always
+  // LSP integration (Phases A-D) — gated on config.lsp. Tools are always
   // registered so users get a helpful "no LSP configured" error instead
   // of "tool not found." See docs/plans/v0.4-lsp.md.
   const lspManager = new LspManager(config.lsp);
+  for (const tool of registerCodingTools(ignoreManager, fileTracker, lspManager)) registry.register(tool);
+  for (const tool of registerWebTools(config)) registry.register(tool);
+  for (const tool of registerDevOpsTools()) registry.register(tool);
   for (const tool of registerLspTools(lspManager)) registry.register(tool);
+
   // Pre-warm any server with warmOnStart=true. Fire-and-forget — we
   // don't want session start to block on LSP init.
   lspManager.warmStart().catch(() => undefined);

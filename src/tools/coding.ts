@@ -8,13 +8,17 @@ import type { ToolDef, ToolResult } from './types.js';
 import { ok, fail } from './types.js';
 import type { IgnoreManager } from '../ignore.js';
 import type { FileTracker } from '../filetracker.js';
+import type { LspManager } from '../lsp/manager.js';
+import { notifyLSPs } from '../lsp/manager.js';
+import { formatDiagnostics } from '../lsp/diagnostics.js';
+import { pathToFileUri } from '../lsp/uri.js';
 
-export function registerCodingTools(ignoreManager?: IgnoreManager, fileTracker?: FileTracker): ToolDef[] {
+export function registerCodingTools(ignoreManager?: IgnoreManager, fileTracker?: FileTracker, lspManager?: LspManager): ToolDef[] {
   return [
-    createReadFileTool(ignoreManager, fileTracker),
-    createWriteFileTool(ignoreManager, fileTracker),
-    createEditFileTool(ignoreManager, fileTracker),
-    createMultiEditTool(ignoreManager, fileTracker),
+    createReadFileTool(ignoreManager, fileTracker, lspManager),
+    createWriteFileTool(ignoreManager, fileTracker, lspManager),
+    createEditFileTool(ignoreManager, fileTracker, lspManager),
+    createMultiEditTool(ignoreManager, fileTracker, lspManager),
     createGlobTool(ignoreManager),
     createGrepTool(ignoreManager),
     createBashTool(fileTracker),
@@ -25,7 +29,28 @@ export function registerCodingTools(ignoreManager?: IgnoreManager, fileTracker?:
   ];
 }
 
-function createReadFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker): ToolDef {
+/**
+ * Best-effort: sync the file with the matching LSP, wait briefly for diags,
+ * format and append. When LSP isn't configured for the file's extension, or
+ * the manager wasn't provided, returns an empty string so the original
+ * tool output is byte-identical to the pre-Phase-B behavior.
+ */
+async function appendLspDiagnostics(
+  lspManager: LspManager | undefined,
+  filePath: string,
+): Promise<string> {
+  if (!lspManager) return '';
+  try {
+    if (!lspManager.matchByPath(filePath)) return '';
+    await notifyLSPs(lspManager, filePath);
+    const block = formatDiagnostics(lspManager.getAllDiagnostics(), filePath);
+    return block ? `\n\n${block}` : '';
+  } catch {
+    return '';
+  }
+}
+
+function createReadFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker, lspManager?: LspManager): ToolDef {
   return {
     name: 'read_file',
     description: 'Read a file from the filesystem. Returns the full file content with line numbers. Use this to understand code before making changes.',
@@ -51,6 +76,20 @@ function createReadFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTra
           .join('\n');
 
         fileTracker?.recordRead(filePath);
+
+        // Phase D: fire-and-forget open in the matching LSP server so it
+        // has the file cached for later diagnostics queries. Never blocks
+        // read_file; never throws.
+        if (lspManager) {
+          const label = lspManager.matchByPath(filePath);
+          if (label) {
+            lspManager.getClientByLabel(label).then((c) => {
+              if (!c) return;
+              return c.openFile(pathToFileUri(filePath), c.label, content);
+            }).catch(() => undefined);
+          }
+        }
+
         return ok(numbered);
       } catch (err) {
         return fail(`Cannot read file: ${(err as Error).message}`);
@@ -59,7 +98,7 @@ function createReadFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTra
   };
 }
 
-function createWriteFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker): ToolDef {
+function createWriteFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker, lspManager?: LspManager): ToolDef {
   return {
     name: 'write_file',
     description: 'Write content to a file, creating it if it does not exist or overwriting if it does. Use for creating new files.',
@@ -81,7 +120,9 @@ function createWriteFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
         await writeFile(filePath, params.content as string, 'utf-8');
         fileTracker?.recordRead(filePath);
         const lines = (params.content as string).split('\n').length;
-        return ok(`Wrote ${lines} lines to ${relative(process.cwd(), filePath)}`);
+        const summary = `Wrote ${lines} lines to ${relative(process.cwd(), filePath)}`;
+        const diagBlock = await appendLspDiagnostics(lspManager, filePath);
+        return ok(summary + diagBlock);
       } catch (err) {
         return fail(`Cannot write file: ${(err as Error).message}`);
       }
@@ -155,7 +196,7 @@ function applySingleEdit(
   return { ok: true, updated: content.replace(actualOld, newStr), matchCount: 1 };
 }
 
-function createEditFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker): ToolDef {
+function createEditFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker, lspManager?: LspManager): ToolDef {
   return {
     name: 'edit_file',
     description: 'Edit a file by replacing a string match. Provide old_string (text to find) and new_string (replacement). By default old_string must be unique; set replace_all=true to replace every occurrence.',
@@ -193,7 +234,9 @@ function createEditFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTra
         if (oldLines.length > 10) diffLines.push(`  ... (${oldLines.length - 10} more lines)`);
         for (const line of newLines.slice(0, 10)) diffLines.push(`+ ${line}`);
         if (newLines.length > 10) diffLines.push(`  ... (${newLines.length - 10} more lines)`);
-        return ok(diffLines.join('\n'));
+        const summary = diffLines.join('\n');
+        const diagBlock = await appendLspDiagnostics(lspManager, filePath);
+        return ok(summary + diagBlock);
       } catch (err) {
         return fail(`Cannot edit file: ${(err as Error).message}`);
       }
@@ -201,7 +244,7 @@ function createEditFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTra
   };
 }
 
-function createMultiEditTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker): ToolDef {
+function createMultiEditTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker, lspManager?: LspManager): ToolDef {
   return {
     name: 'multi_edit',
     description: 'Apply multiple edits to a single file with atomic validation. All edits are checked sequentially against the running content; if any one would fail, no changes are written and the error reports which op failed and how many would have succeeded. Use for multi-step refactors on a single file to avoid partial writes when the model batches several edits in one turn.',
@@ -246,7 +289,9 @@ function createMultiEditTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
         fileTracker?.recordRead(filePath);
 
         const summary = matches.map((m, i) => `  op ${i}: ${m} replacement${m === 1 ? '' : 's'}`).join('\n');
-        return ok(`multi_edit: applied ${edits.length} edit${edits.length === 1 ? '' : 's'} to ${relPath}\n${summary}`);
+        const head = `multi_edit: applied ${edits.length} edit${edits.length === 1 ? '' : 's'} to ${relPath}\n${summary}`;
+        const diagBlock = await appendLspDiagnostics(lspManager, filePath);
+        return ok(head + diagBlock);
       } catch (err) {
         return fail(`Cannot multi_edit file: ${(err as Error).message}`);
       }
