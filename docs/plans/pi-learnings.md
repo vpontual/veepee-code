@@ -390,9 +390,22 @@ When submitted text starts with `!!`:
 
 ## Phase P3 — Cumulative file tracking + retry-on-overflow in compaction
 
-**Status:** OPEN.
-**Effort:** ~½ day.
-**Dependencies:** P0 (uses `CompactionEntry.details`).
+**Status:** SHIPPED 2026-05-10.
+**Effort:** ~1 hour (single session).
+**Dependencies:** P0 was nominally a dependency for `CompactionEntry.details`, but the in-memory ledger was implemented directly on `ContextManager` and is independent of the JSONL session. P0's storage hooks remain available for future persistence.
+
+### Receipts (2026-05-10)
+
+- `ContextManager.compactedReadFiles` / `compactedModifiedFiles` (private string[] arrays, capped at `MAX_LEDGER_ENTRIES = 200` with FIFO eviction).
+- `mergeIntoFileLedger(messages)` — walks tool calls in dropped messages, extracts `read_file`/`glob`/`grep`/`list_files` paths into reads, `write_file`/`edit_file`/`multi_edit`/`notebook_edit` paths into modified. Modified takes precedence (a file appearing in both is dropped from reads).
+- Both `compact()` and `compactAsync()` call `mergeIntoFileLedger` before pruning.
+- `getSystemPrompt()` appends a "Files touched in earlier turns (compacted from context)" section when the ledger is non-empty. Lists are capped at 50 visible entries with `… and N more` tail when longer.
+- `getCompactedFileLedger()` / `setCompactedFileLedger()` exposed for external persistence (e.g. round-tripping through JSONL `CompactionEntry.details` after `/tree` rewinds).
+- `replaceMessages()` clears the ledger (rewind invalidates the abandoned branch's accumulation).
+- `compactWithRetry()` wraps `compactAsync` with a retry loop: if projected tokens still exceed `contextLimit * 0.85` after compaction, calls `dropAggressive()` (keep summary + last 4 messages only) and re-projects. Capped at 3 attempts. Calls `onRetry(attempt, projected, limit)` so the caller can yield events.
+- `agent.ts` updated at both compaction trigger points (initial check + post-tool-results) to use `compactWithRetry`. Yields a "Compacted conversation" thinking event, plus one "Compacting harder (attempt N) — projected X > Y cutoff" thinking event per retry.
+- 10 new tests in `test/compaction-ledger.test.ts`: ledger merging, modified-precedence, system-prompt rendering, replaceMessages clears, accumulation across compactions, FIFO cap at 200, retry triggers when overflow, retry caps at maxAttempts, retry no-ops when initial fits.
+- Total tests: **517 → 527 passing**.
 
 ### Why
 

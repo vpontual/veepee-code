@@ -519,13 +519,22 @@ export class Agent {
 
     // Check for context compaction
     if (this.context.needsCompaction()) {
-      const compacted = await this.context.compactAsync(
+      const retryEvents: Array<{ attempt: number; projected: number; limit: number }> = [];
+      const compacted = await this.context.compactWithRetry(
         this.config.proxyUrl,
         this.modelManager.getCurrentModel(),
         this.config.summarizerModel,
+        {
+          onRetry: (attempt, projected, limit) => {
+            retryEvents.push({ attempt, projected, limit });
+          },
+        },
       );
       if (compacted) {
         yield { type: 'thinking', content: 'Compacted conversation to free context space' };
+        for (const r of retryEvents) {
+          yield { type: 'thinking', content: `Compacting harder (attempt ${r.attempt}) — projected ${r.projected} > ${Math.round(r.limit * 0.85)} cutoff` };
+        }
 
         // Recover saved plan after compaction so the model doesn't lose it
         const savedPlan = await this.loadSavedPlan();
@@ -1057,13 +1066,22 @@ export class Agent {
 
       // Proactive compaction check after tool results (context grows most here)
       if (this.context.needsCompaction()) {
-        const compacted = await this.context.compactAsync(
+        const retryEvents: Array<{ attempt: number; projected: number; limit: number }> = [];
+        const compacted = await this.context.compactWithRetry(
           this.config.proxyUrl,
           this.modelManager.getCurrentModel(),
           this.config.summarizerModel,
+          {
+            onRetry: (attempt, projected, limit) => {
+              retryEvents.push({ attempt, projected, limit });
+            },
+          },
         );
         if (compacted) {
           yield { type: 'thinking', content: 'Compacted conversation to free context space' };
+          for (const r of retryEvents) {
+            yield { type: 'thinking', content: `Compacting harder (attempt ${r.attempt}) — projected ${r.projected} > ${Math.round(r.limit * 0.85)} cutoff` };
+          }
 
           const savedPlan = await this.loadSavedPlan();
           if (savedPlan) {

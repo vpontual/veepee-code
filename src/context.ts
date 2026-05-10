@@ -256,6 +256,14 @@ export class ContextManager {
    *  history doesn't keep stacking. Re-summarized when it grows too long. */
   private summaryMessage: Message | null = null;
 
+  /** Files read during messages that have since been compacted away. The set
+   *  accumulates across multiple compactions so the model retains awareness
+   *  of files touched in pre-summary history. Capped at MAX_LEDGER_ENTRIES
+   *  with FIFO eviction to bound system-prompt growth. */
+  private compactedReadFiles: string[] = [];
+  private compactedModifiedFiles: string[] = [];
+  private static readonly MAX_LEDGER_ENTRIES = 200;
+
   constructor(sessionId?: string) {
     this.knowledgeState = new KnowledgeState(sessionId || Date.now().toString(36));
   }
@@ -409,7 +417,92 @@ export class ContextManager {
   getSystemPrompt(): string {
     // Inject knowledge state into system prompt
     const ksBlock = this.knowledgeState.toSystemPromptBlock();
-    return this.systemPrompt + ksBlock;
+    return this.systemPrompt + ksBlock + this.compactedFilesBlock();
+  }
+
+  /** Render a "files touched earlier" section for the system prompt when
+   *  prior compactions dropped messages that included read/write tool calls.
+   *  Empty string when nothing has been compacted yet. Caps each list at
+   *  MAX_LEDGER_ENTRIES and shows a tail marker if truncated. */
+  private compactedFilesBlock(): string {
+    const reads = this.compactedReadFiles;
+    const writes = this.compactedModifiedFiles;
+    if (reads.length === 0 && writes.length === 0) return '';
+    const renderList = (items: string[]): string => {
+      if (items.length === 0) return '(none)';
+      return items.slice(-50).join(', ') + (items.length > 50 ? `, … and ${items.length - 50} more` : '');
+    };
+    return `\n\n## Files touched in earlier turns (compacted from context)
+Read: ${renderList(reads)}
+Modified: ${renderList(writes)}
+`;
+  }
+
+  /** Read access for callers that want to persist or display the ledger. */
+  getCompactedFileLedger(): { read: string[]; modified: string[] } {
+    return {
+      read: [...this.compactedReadFiles],
+      modified: [...this.compactedModifiedFiles],
+    };
+  }
+
+  /** Replace the ledger wholesale. Used by /tree rewinds to re-derive from
+   *  the JSONL session's CompactionEntry.details on the new active path. */
+  setCompactedFileLedger(reads: string[], modified: string[]): void {
+    this.compactedReadFiles = reads.slice(-ContextManager.MAX_LEDGER_ENTRIES);
+    this.compactedModifiedFiles = modified.slice(-ContextManager.MAX_LEDGER_ENTRIES);
+  }
+
+  /** Scan a list of (about-to-be-dropped) messages for tool calls that
+   *  read/wrote files, and merge them into the cumulative ledger. Modified
+   *  takes precedence over read — if a file appears in both, drop it from
+   *  reads to keep the model focused on what actually changed. */
+  private mergeIntoFileLedger(messages: Message[]): { reads: string[]; modified: string[] } {
+    const newReads = new Set<string>();
+    const newModified = new Set<string>();
+    for (const msg of messages) {
+      const calls = (msg as unknown as { tool_calls?: Array<{ function?: { name?: string; arguments?: Record<string, unknown> } }> }).tool_calls;
+      if (!calls) continue;
+      for (const call of calls) {
+        const name = call.function?.name;
+        const args = call.function?.arguments;
+        if (!name || !args) continue;
+        const path = (args.path ?? args.file_path ?? args.filename) as string | undefined;
+        if (!path || typeof path !== 'string') continue;
+        if (name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'notebook_edit') {
+          newModified.add(path);
+        } else if (name === 'read_file' || name === 'glob' || name === 'grep' || name === 'list_files') {
+          newReads.add(path);
+        }
+      }
+    }
+    // Modified > read precedence
+    for (const w of newModified) newReads.delete(w);
+
+    // Append + dedupe + cap (FIFO eviction at MAX_LEDGER_ENTRIES)
+    const seenReads = new Set(this.compactedReadFiles);
+    for (const r of newReads) {
+      if (seenReads.has(r) || this.compactedModifiedFiles.includes(r)) continue;
+      this.compactedReadFiles.push(r);
+      seenReads.add(r);
+    }
+    const seenMods = new Set(this.compactedModifiedFiles);
+    for (const w of newModified) {
+      if (seenMods.has(w)) continue;
+      this.compactedModifiedFiles.push(w);
+      seenMods.add(w);
+      // If it was previously in reads (added in a prior compaction), promote
+      // by removing from reads.
+      const idx = this.compactedReadFiles.indexOf(w);
+      if (idx >= 0) this.compactedReadFiles.splice(idx, 1);
+    }
+    if (this.compactedReadFiles.length > ContextManager.MAX_LEDGER_ENTRIES) {
+      this.compactedReadFiles = this.compactedReadFiles.slice(-ContextManager.MAX_LEDGER_ENTRIES);
+    }
+    if (this.compactedModifiedFiles.length > ContextManager.MAX_LEDGER_ENTRIES) {
+      this.compactedModifiedFiles = this.compactedModifiedFiles.slice(-ContextManager.MAX_LEDGER_ENTRIES);
+    }
+    return { reads: Array.from(newReads), modified: Array.from(newModified) };
   }
 
   /** Set the model's context window size in tokens */
@@ -506,6 +599,12 @@ export class ContextManager {
     this.lastTurnToolCalls = 0;
     this._pendingToolCalls = undefined;
     this._pendingToolResults = [];
+    // /tree rewind invalidates the legacy in-memory file ledger (it was
+    // accumulated across the now-abandoned branch's compactions). Caller
+    // can re-derive from the JSONL session's CompactionEntry.details if
+    // desired via setCompactedFileLedger().
+    this.compactedReadFiles = [];
+    this.compactedModifiedFiles = [];
   }
 
   getKnowledgeState(): KnowledgeState {
@@ -629,6 +728,10 @@ export class ContextManager {
     if (this.messages.length <= windowMessages.length + 4) return false;
 
     const droppedMessages = this.messages.slice(0, this.messages.length - windowMessages.length);
+    // Cumulative file ledger — accumulate file reads/writes from messages
+    // about to fall out of context.
+    this.mergeIntoFileLedger(droppedMessages);
+
     if (ollamaHost && model && droppedMessages.length > 2) {
       // Fire-and-forget KS-only update (no synthetic summary message inserted).
       this.summarizeIntoKnowledge(ollamaHost, model, droppedMessages).catch(() => {});
@@ -662,6 +765,8 @@ export class ContextManager {
     if (this.messages.length <= windowMessages.length + 4) return false;
 
     const droppedMessages = this.messages.slice(0, this.messages.length - windowMessages.length);
+    // Cumulative file ledger — record file reads/writes from dropped messages.
+    this.mergeIntoFileLedger(droppedMessages);
     const model = summarizerModel || mainModel;
 
     if (droppedMessages.length > 2) {
@@ -686,6 +791,56 @@ export class ContextManager {
       ? [this.summaryMessage, ...windowMessages]
       : windowMessages;
     return true;
+  }
+
+  /**
+   * Compact, then verify the post-compaction context fits inside the
+   * model's window with comfortable margin. If the summary + kept messages
+   * still project past 85% of the limit, drop additional messages (oldest
+   * first, preserving the synthetic summary at the head) and retry.
+   *
+   * Calls `onRetry` for each retry attempt so the agent can yield a status
+   * event ("compacting harder…") to the TUI instead of going silent.
+   *
+   * Caps at `maxAttempts` (default 3); after that, returns whatever shape
+   * the context is in — better than throwing.
+   */
+  async compactWithRetry(
+    ollamaHost: string,
+    mainModel: string,
+    summarizerModel?: string | null,
+    options?: {
+      onRetry?: (attempt: number, projectedTokens: number, limitTokens: number) => void;
+      maxAttempts?: number;
+    },
+  ): Promise<boolean> {
+    const maxAttempts = options?.maxAttempts ?? 3;
+    const ok = await this.compactAsync(ollamaHost, mainModel, summarizerModel);
+    if (!ok) return false;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const projected = this.estimateTokens();
+      if (projected <= this.contextLimit * 0.85) return true;
+
+      options?.onRetry?.(attempt, projected, this.contextLimit);
+
+      // Aggressive secondary pass: drop the oldest non-summary messages,
+      // keeping only the most recent few. Preserves the synthetic summary
+      // at the head so the model still has continuity.
+      this.dropAggressive();
+    }
+    return true;
+  }
+
+  /** Aggressive drop pass — keep summary + recent messages only. Used as a
+   *  fallback when compactAsync's standard window still overflows. */
+  private dropAggressive(): void {
+    const minKeep = 4;
+    const headStart = this.summaryMessage ? 1 : 0;
+    if (this.messages.length <= headStart + minKeep) return;
+    const recent = this.messages.slice(-minKeep);
+    this.messages = this.summaryMessage ? [this.summaryMessage, ...recent] : recent;
+    this.lastTurnToolCalls = 0;
   }
 
   /**
