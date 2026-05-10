@@ -45,6 +45,11 @@ export interface Config {
    *  installs the bundle's LSP recipes + hooks; the system-prompt section
    *  injects when cwd matches the bundle's projectMarkers. */
   extras: string[];
+  /** When true, new sessions are stored in the JSONL tree-session format
+   *  (one append-only file per session, supports `/tree` rewinds and labels).
+   *  Existing legacy `.json` sessions remain readable either way. Default
+   *  false until the new format has been dogfooded for a release cycle. */
+  useJsonlSessions: boolean;
 }
 
 export interface SubagentConfig {
@@ -133,6 +138,7 @@ export interface ConfigFile {
   subagent?: SubagentConfig | null;
   lsp?: Record<string, LspServerConfig> | null;
   extras?: string[];
+  useJsonlSessions?: boolean;
 }
 
 const DEFAULTS: Config = {
@@ -163,6 +169,7 @@ const DEFAULTS: Config = {
   subagent: null,
   lsp: null,
   extras: [],
+  useJsonlSessions: false,
 };
 
 // ─── Settings hierarchy paths ─────────────────────────────────────────
@@ -395,6 +402,7 @@ export function loadConfig(configPath?: string): Config {
     subagent: merged.subagent ?? DEFAULTS.subagent,
     lsp: merged.lsp ?? DEFAULTS.lsp,
     extras: merged.extras ?? DEFAULTS.extras,
+    useJsonlSessions: merged.useJsonlSessions ?? DEFAULTS.useJsonlSessions,
   };
 }
 

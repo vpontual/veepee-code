@@ -17,7 +17,8 @@ import { Benchmarker } from './benchmark.js';
 import { startApiServer } from './api.js';
 import { TUI, theme, icons } from './tui/index.js';
 import { validateIntegrations, formatSetupReport } from './setup.js';
-import { saveSession, listSessions, findSession, formatSessionList, autoName } from './sessions.js';
+import { saveSession, listSessions, findSession, formatSessionList, autoName, loadJsonlSession, autoAppendJsonlTurn, migrateLegacySessions } from './sessions.js';
+import { parseBang, runInlineShell, formatShellForLlm } from './inline-bash.js';
 import { getProjectSession, setProjectSession, listProjects, formatProjectList } from './projects.js';
 import { IgnoreManager } from './ignore.js';
 import { FileTracker } from './filetracker.js';
@@ -789,26 +790,34 @@ async function main() {
       Date.now() - sessionStart,
     );
 
+    // Drain any follow-up messages queued during the previous turn before
+    // soliciting new input. One-at-a-time delivery: pull the oldest pending,
+    // run it as a turn, and loop back. The remaining queue is drained on
+    // subsequent iterations.
     let input: string;
-    try {
-      input = await tui.getInput();
-    } catch {
-      // EOF / Ctrl+D
-      break;
+    const followUps = tui.peekPending().followUp > 0 ? tui.takeFollowUp() : [];
+    if (followUps.length > 0) {
+      // Process the oldest first; re-queue the rest so they go through the
+      // same intake path on the next iteration (preserves order, lets the
+      // user see/cancel each before it fires).
+      input = followUps[0];
+      // Re-queue any remaining follow-ups so the next loop iteration picks
+      // them up the same way (preserves "one-at-a-time" semantics).
+      for (let i = 1; i < followUps.length; i++) {
+        tui.queueFollowUp(followUps[i]);
+      }
+      tui.showInfo(theme.dim(`◆ Delivering queued follow-up: ${input.slice(0, 80)}${input.length > 80 ? '…' : ''}`));
+    } else {
+      try {
+        input = await tui.getInput();
+      } catch {
+        // EOF / Ctrl+D
+        break;
+      }
     }
 
     const trimmed = input.trim();
     if (!trimmed) continue;
-
-    // Shell escape: !command runs in terminal without touching the AI
-    if (trimmed.startsWith('!')) {
-      const shellCmd = trimmed.slice(1).trim();
-      if (shellCmd) {
-        tui.addCommandMessage(trimmed);
-        await runShellCommand(shellCmd, tui);
-      }
-      continue;
-    }
 
     // Agent turn — used for both normal input and for commands like /review
     // that want to run a one-off turn under a different model.
@@ -827,7 +836,9 @@ async function main() {
       let turnAssistantContent = '';
       const turnToolCalls: Array<{ name: string; success: boolean }> = [];
 
-      for await (const event of agent.run(text)) {
+      for await (const event of agent.run(text, {
+        onTurnBoundary: () => tui.takeSteering(),
+      })) {
         switch (event.type) {
           case 'text':
             if (event.content) {
@@ -924,6 +935,38 @@ async function main() {
       );
     };
 
+    // Inline bash. `!!cmd` runs silently (output shown but not sent to LLM);
+    // `!cmd` runs and forwards captured output to the LLM as the next user
+    // message. `! cmd` (with space) is treated as prose and falls through.
+    {
+      const bang = parseBang(trimmed);
+      if (bang.kind === 'silent') {
+        if (bang.cmd) {
+          tui.addCommandMessage(trimmed);
+          const result = runInlineShell(bang.cmd);
+          if (result.output) {
+            tui.showInfo(result.ok ? result.output : theme.error(`Exit ${result.exitCode}: ${result.output}`));
+          } else {
+            tui.showInfo(theme.dim('(no output)'));
+          }
+        }
+        continue;
+      }
+      if (bang.kind === 'send') {
+        if (bang.cmd) {
+          tui.addCommandMessage(trimmed);
+          const result = runInlineShell(bang.cmd);
+          if (result.output) {
+            tui.showInfo(result.ok ? result.output : theme.error(`Exit ${result.exitCode}: ${result.output}`));
+          } else {
+            tui.showInfo(theme.dim('(no output)'));
+          }
+          await runTurn(formatShellForLlm(bang.cmd, result));
+        }
+        continue;
+      }
+    }
+
     // Handle commands
     if (trimmed.startsWith('/')) {
       // Show the command in the chat (but don't start the turn tracker — commands don't go to the LLM)
@@ -938,6 +981,34 @@ async function main() {
 
     // Run agent
     await runTurn(trimmed);
+
+    // Per-turn JSONL auto-append (P0 deferral). Closes the loop on "no lost
+    // work after a crash" — every turn flushes new messages to the JSONL
+    // file. First turn auto-creates a session if none exists. Legacy `.json`
+    // sessions are left alone so users can opt in by enabling the flag.
+    if (config.useJsonlSessions) {
+      try {
+        const result = await autoAppendJsonlTurn({
+          currentSessionId,
+          cwd: process.cwd(),
+          model: modelManager.getCurrentModel(),
+          mode: agent.getMode(),
+          messages: agent.getContext().getAllMessages(),
+          knowledgeState: agent.getContext().getKnowledgeState().getData(),
+        });
+        if (result) {
+          // First-turn auto-create: persist the new id in projects.json so
+          // auto-resume works on the next launch.
+          if (currentSessionId !== result.id) {
+            currentSessionId = result.id;
+            await setProjectSession(process.cwd(), result.id, result.name);
+          }
+        }
+      } catch {
+        // Auto-append is best-effort — surface nothing on failure so the
+        // user's chat flow stays uninterrupted. Manual /save still works.
+      }
+    }
   }
 
   // Cleanup
@@ -1016,6 +1087,53 @@ async function diagnoseConnection(proxyUrl: string): Promise<void> {
 }
 
 // ─── Shell Escape ─────────────────────────────────────────────────────────────
+
+/** Project a JsonlSession's active path into the TreeView item shape. Pure
+ *  data transform — knows nothing about React/Ink, just renders previews
+ *  and attaches label metadata. Lives here (not in sessions/jsonl.ts) so
+ *  the storage module stays free of TUI types. */
+function buildTreeViewItems(j: import('./sessions/jsonl.js').JsonlSession): import('./tui/types.js').TreeViewItem[] {
+  const path = j.getActivePath();
+  const labels = j.getLabelsOnPath();
+  const leafId = j.getLeafId();
+  const out: import('./tui/types.js').TreeViewItem[] = [];
+  path.forEach((e, idx) => {
+    const labelEntries = labels.get(e.id) ?? [];
+    const labelNames = labelEntries.map(l => l.name);
+    const isLeaf = e.id === leafId;
+    let preview = '';
+    let role: string | undefined;
+    if (e.type === 'message') {
+      const me = e as { role: string; content: string };
+      role = me.role;
+      preview = (me.content || '').replace(/\n/g, ' ').slice(0, 80);
+    } else if (e.type === 'meta') {
+      preview = (e as { name: string }).name;
+    } else if (e.type === 'compaction') {
+      preview = (e as { summary: string }).summary.slice(0, 80);
+    } else if (e.type === 'label') {
+      preview = (e as { name: string }).name;
+    } else if (e.type === 'model_change') {
+      const c = e as { from: string; to: string };
+      preview = `${c.from} → ${c.to}`;
+    } else if (e.type === 'mode_change') {
+      const c = e as { from: string; to: string };
+      preview = `${c.from} → ${c.to}`;
+    } else if (e.type === 'custom') {
+      preview = `(${(e as { namespace: string }).namespace})`;
+    }
+    out.push({
+      id: e.id,
+      pathIndex: idx,
+      type: e.type as import('./tui/types.js').TreeViewItem['type'],
+      preview,
+      role,
+      isLeaf,
+      labels: labelNames,
+    });
+  });
+  return out;
+}
 
 async function runShellCommand(cmd: string, tui: TUI): Promise<void> {
   try {
@@ -2362,6 +2480,7 @@ ${gathered.join('\n\n')}`;
         process.cwd(),
         currentSessionId || undefined,
         ks.getData(),
+        { jsonl: config.useJsonlSessions },
       );
       // Also save the knowledge state file
       await ks.save();
@@ -2386,6 +2505,7 @@ ${gathered.join('\n\n')}`;
       if (!currentSessionId) {
         // Auto-save first, then rename
         const autoSaveName = autoName(agent.getContext().getAllMessages());
+        void autoSaveName;
         const session = await saveSession(
           newName,
           agent.getContext().getAllMessages(),
@@ -2394,6 +2514,7 @@ ${gathered.join('\n\n')}`;
           process.cwd(),
           undefined,
           agent.getContext().getKnowledgeState().getData(),
+          { jsonl: config.useJsonlSessions },
         );
         tui.showInfo(`${theme.success('Saved and named:')} ${theme.accent(newName)}`);
         return `session:${session.id}`;
@@ -2407,6 +2528,7 @@ ${gathered.join('\n\n')}`;
         process.cwd(),
         currentSessionId,
         agent.getContext().getKnowledgeState().getData(),
+        { jsonl: config.useJsonlSessions },
       );
       tui.showInfo(`${theme.success('Renamed to:')} ${theme.accent(newName)}`);
       return `session:${session.id}`;
@@ -2428,6 +2550,7 @@ ${gathered.join('\n\n')}`;
         process.cwd(),
         undefined,
         ks.getData(),
+        { jsonl: config.useJsonlSessions },
       );
       await setProjectSession(process.cwd(), forkedSession.id, forkedSession.name);
       tui.showInfo([
@@ -2436,6 +2559,138 @@ ${gathered.join('\n\n')}`;
         theme.dim('  Use /sessions to see both sessions.'),
       ].join('\n'));
       return `session:${forkedSession.id}`;
+    }
+
+    case '/tree': {
+      // Interactive picker over the active path. Arrow nav, Enter rewinds,
+      // Esc cancels, Ctrl+O cycles filter, Shift+L bookmarks. Stays open
+      // after a label so the user can keep navigating.
+      if (!currentSessionId) {
+        tui.showInfo(theme.dim('No active session. /save to start tracking branches with /tree.'));
+        return;
+      }
+      let j = await loadJsonlSession(currentSessionId);
+      if (!j) {
+        tui.showInfo([
+          theme.dim('This session is in the legacy JSON format. /tree requires JSONL.'),
+          theme.dim('Enable `useJsonlSessions: true` in settings.json, then /save to migrate.'),
+        ].join('\n'));
+        return;
+      }
+
+      while (true) {
+        const items = buildTreeViewItems(j);
+        const result = await tui.showTreeView(items);
+        if (!result) return;
+
+        if (result.action === 'rewind') {
+          try {
+            j.setLeaf(result.entryId);
+            const newMessages = j.getMessages();
+            agent.getContext().replaceMessages(newMessages);
+            const idx = items.findIndex(i => i.id === result.entryId);
+            tui.showInfo([
+              theme.success(`✓ Rewound to entry ${idx} (${items[idx]?.type ?? '?'})`),
+              theme.dim(`  Active path now has ${newMessages.length} messages. New turns branch off this point.`),
+              theme.dim('  The abandoned branch is preserved in the session file.'),
+            ].join('\n'));
+          } catch (err) {
+            tui.showInfo(theme.error(`Rewind failed: ${err instanceof Error ? err.message : String(err)}`));
+          }
+          return;
+        }
+        if (result.action === 'label') {
+          try {
+            j.label(result.entryId, result.name);
+            tui.showInfo(theme.dim(`  ★ Labeled "${result.name}"`));
+          } catch (err) {
+            tui.showInfo(theme.error(`Label failed: ${err instanceof Error ? err.message : String(err)}`));
+          }
+          // Reopen with refreshed items so the user sees the new ★
+          j = (await loadJsonlSession(currentSessionId))!;
+          continue;
+        }
+      }
+    }
+
+    case '/label': {
+      const labelName = parts.slice(1).join(' ');
+      if (!labelName) {
+        tui.showInfo('Usage: /label <name>');
+        return;
+      }
+      if (!currentSessionId) {
+        tui.showInfo(theme.dim('No active session — save it first with /save.'));
+        return;
+      }
+      const j = await loadJsonlSession(currentSessionId);
+      if (!j) {
+        tui.showInfo(theme.dim('Labels require the JSONL session format. Enable `useJsonlSessions` in settings.json.'));
+        return;
+      }
+      const entry = j.label(j.getLeafId(), labelName);
+      tui.showInfo(`${theme.success('★ Bookmarked:')} ${theme.accent(labelName)} ${theme.dim(`(entry ${entry.targetId.slice(0, 8)})`)}`);
+      return;
+    }
+
+    case '/clone': {
+      if (!currentSessionId) {
+        tui.showInfo(theme.dim('No active session — save it first with /save.'));
+        return;
+      }
+      const j = await loadJsonlSession(currentSessionId);
+      if (!j) {
+        tui.showInfo(theme.dim('/clone requires the JSONL session format. Enable `useJsonlSessions` in settings.json.'));
+        return;
+      }
+      const cloneName = parts.slice(1).join(' ') || `${j.getMeta().name} (clone)`;
+      const { join: pathJoin } = await import('path');
+      const { existsSync: exists } = await import('fs');
+      // Generate a new id + filename. Mirrors saveSession's slug logic.
+      const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const newSlug = cloneName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
+      const sessDir = (await import('./sessions.js')).getSessionDir();
+      let newPath = pathJoin(sessDir, `${newId}-${newSlug}.jsonl`);
+      // Highly unlikely collision
+      let attempt = 0;
+      while (exists(newPath) && attempt++ < 5) {
+        newPath = pathJoin(sessDir, `${newId}-${newSlug}-${attempt}.jsonl`);
+      }
+      const cloned = j.clone(newPath);
+      cloned.updateMeta({ name: cloneName });
+      await setProjectSession(process.cwd(), newId, cloneName);
+      tui.showInfo([
+        `${theme.success('Cloned:')} ${theme.accent(cloneName)} ${theme.dim(`(ID: ${newId})`)}`,
+        theme.dim('  You are now in the clone. The original session is preserved.'),
+      ].join('\n'));
+      return `session:${newId}`;
+    }
+
+    case '/migrate-sessions': {
+      const out = await migrateLegacySessions();
+      const lines = ['', theme.textBold('  Session migration'), ''];
+      if (out.migrated.length > 0) {
+        lines.push(`  ${theme.success(`Migrated ${out.migrated.length} session(s) to JSONL:`)}`);
+        for (const f of out.migrated) {
+          lines.push(`    ${theme.dim(f)} ${icons.arrow} ${theme.accent(f.replace(/\.json$/, '.jsonl'))}`);
+        }
+        lines.push(theme.dim(`    Original .json files renamed to .json.legacy (kept for rollback).`));
+      }
+      if (out.skipped.length > 0) {
+        lines.push(`  ${theme.dim(`Skipped ${out.skipped.length} (already migrated or unsupported)`)}`);
+      }
+      if (out.errors.length > 0) {
+        lines.push(`  ${theme.error(`Errors on ${out.errors.length} file(s):`)}`);
+        for (const e of out.errors) {
+          lines.push(`    ${theme.error(e.file)}: ${e.error}`);
+        }
+      }
+      if (out.migrated.length === 0 && out.errors.length === 0) {
+        lines.push(`  ${theme.dim('Nothing to migrate. All sessions are already in JSONL format (or none exist).')}`);
+      }
+      lines.push('');
+      tui.showInfo(lines.join('\n'));
+      return;
     }
 
     case '/projects': {

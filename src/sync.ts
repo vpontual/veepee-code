@@ -29,7 +29,7 @@ export class SyncManager {
     const files = await readdir(sessionsDir);
     const targets = sessionId
       ? files.filter(f => f.startsWith(sessionId))
-      : files.filter(f => f.endsWith('.json'));
+      : files.filter(f => f.endsWith('.json') || f.endsWith('.jsonl') || f.endsWith('.leaf'));
 
     for (const file of targets) {
       const content = await readFile(join(sessionsDir, file), 'utf-8');
@@ -59,21 +59,35 @@ export class SyncManager {
     let updated = 0;
 
     for (const remote of remoteFiles) {
-      if (!remote.name.endsWith('.json')) continue;
+      const isJson = remote.name.endsWith('.json');
+      const isJsonl = remote.name.endsWith('.jsonl');
+      const isLeaf = remote.name.endsWith('.leaf');
+      if (!isJson && !isJsonl && !isLeaf) continue;
       if (sessionId && !remote.name.startsWith(sessionId)) continue;
 
       const localPath = join(sessionsDir, remote.name);
 
-      // Conflict resolution: compare updatedAt, newer wins
+      // Conflict resolution: compare updatedAt for .json. JSONL/leaf files
+      // are append-only so the remote-modified timestamp is the right
+      // tiebreaker — overwrite if remote is newer.
       if (existsSync(localPath)) {
-        try {
-          const localData = JSON.parse(await readFile(localPath, 'utf-8'));
-          if (localData.updatedAt && remote.lastModified) {
-            const localTime = new Date(localData.updatedAt).getTime();
-            const remoteTime = new Date(remote.lastModified).getTime();
-            if (localTime >= remoteTime) continue; // local is newer
+        if (isJson) {
+          try {
+            const localData = JSON.parse(await readFile(localPath, 'utf-8'));
+            if (localData.updatedAt && remote.lastModified) {
+              const localTime = new Date(localData.updatedAt).getTime();
+              const remoteTime = new Date(remote.lastModified).getTime();
+              if (localTime >= remoteTime) continue;
+            }
+          } catch { /* overwrite on parse error */ }
+        } else {
+          // JSONL / leaf: trust mtime
+          if (remote.lastModified) {
+            const { stat } = await import('fs/promises');
+            const localStat = await stat(localPath).catch(() => null);
+            if (localStat && localStat.mtime.getTime() >= new Date(remote.lastModified).getTime()) continue;
           }
-        } catch { /* overwrite on parse error */ }
+        }
       }
 
       // Download

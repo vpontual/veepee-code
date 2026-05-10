@@ -1,4 +1,35 @@
-import type { AppState, AppAction } from './types.js';
+import type { AppState, AppAction, TreeViewItem, TreeViewFilter } from './types.js';
+
+/** Filter the active-path tree-view items by mode. Pure helper so both
+ *  reducer and component agree on what's visible. */
+export function filteredTreeItems(items: TreeViewItem[], filter: TreeViewFilter): TreeViewItem[] {
+  switch (filter) {
+    case 'all':
+      return items;
+    case 'user-only':
+      return items.filter(i => i.type === 'message' && i.role === 'user');
+    case 'labeled-only':
+      return items.filter(i => i.labels.length > 0);
+    case 'default':
+    default:
+      // Hide: tool messages (results), bare model/mode-change events, custom
+      // entries (knowledge state etc.). Show: user, assistant, system, meta,
+      // compaction, label.
+      return items.filter(i => {
+        if (i.type === 'message' && i.role === 'tool') return false;
+        if (i.type === 'model_change' || i.type === 'mode_change') return false;
+        if (i.type === 'custom') return false;
+        return true;
+      });
+  }
+}
+
+const FILTER_CYCLE: TreeViewFilter[] = ['default', 'user-only', 'labeled-only', 'all'];
+
+function nextFilter(cur: TreeViewFilter): TreeViewFilter {
+  const idx = FILTER_CYCLE.indexOf(cur);
+  return FILTER_CYCLE[(idx + 1) % FILTER_CYCLE.length];
+}
 
 export const initialState: AppState = {
   view: 'welcome',
@@ -38,6 +69,12 @@ export const initialState: AppState = {
   permissionToolName: '',
   queuedInput: '',
   queuedCursor: 0,
+  pendingMessages: { steering: [], followUp: [] },
+  treeViewActive: false,
+  treeViewItems: [],
+  treeViewIndex: 0,
+  treeViewFilter: 'default',
+  treeViewLabelInput: { active: false, text: '', cursor: 0 },
   toolsShown: false,
   allModelNames: [],
   renderTick: 0,
@@ -207,6 +244,129 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case 'SET_QUEUED_INPUT':
       return { ...state, queuedInput: action.text, queuedCursor: action.cursor };
+
+    case 'QUEUE_STEERING': {
+      const text = action.text.trim();
+      if (!text) return state;
+      return {
+        ...state,
+        queuedInput: '',
+        queuedCursor: 0,
+        pendingMessages: {
+          ...state.pendingMessages,
+          steering: [...state.pendingMessages.steering, text],
+        },
+      };
+    }
+
+    case 'QUEUE_FOLLOWUP': {
+      const text = action.text.trim();
+      if (!text) return state;
+      return {
+        ...state,
+        queuedInput: '',
+        queuedCursor: 0,
+        pendingMessages: {
+          ...state.pendingMessages,
+          followUp: [...state.pendingMessages.followUp, text],
+        },
+      };
+    }
+
+    case 'POP_PENDING_TO_INPUT': {
+      // Pop most-recent across both queues (last-pushed wins). Restores it
+      // to the typing buffer so the user can edit or re-queue.
+      const { steering, followUp } = state.pendingMessages;
+      let text: string | undefined;
+      let nextSteering = steering;
+      let nextFollowUp = followUp;
+      if (followUp.length > 0) {
+        text = followUp[followUp.length - 1];
+        nextFollowUp = followUp.slice(0, -1);
+      } else if (steering.length > 0) {
+        text = steering[steering.length - 1];
+        nextSteering = steering.slice(0, -1);
+      }
+      if (text === undefined) return state;
+      return {
+        ...state,
+        queuedInput: text,
+        queuedCursor: text.length,
+        pendingMessages: { steering: nextSteering, followUp: nextFollowUp },
+      };
+    }
+
+    case 'CLEAR_PENDING':
+      return {
+        ...state,
+        pendingMessages: { steering: [], followUp: [] },
+      };
+
+    case 'DRAIN_STEERING':
+      return {
+        ...state,
+        pendingMessages: { ...state.pendingMessages, steering: [] },
+      };
+
+    case 'DRAIN_FOLLOWUP':
+      return {
+        ...state,
+        pendingMessages: { ...state.pendingMessages, followUp: [] },
+      };
+
+    case 'TREE_VIEW_OPEN':
+      return {
+        ...state,
+        treeViewActive: true,
+        treeViewItems: action.items,
+        treeViewIndex: 0,
+        treeViewFilter: 'default',
+        treeViewLabelInput: { active: false, text: '', cursor: 0 },
+      };
+
+    case 'TREE_VIEW_CLOSE':
+      return {
+        ...state,
+        treeViewActive: false,
+        treeViewItems: [],
+        treeViewIndex: 0,
+        treeViewLabelInput: { active: false, text: '', cursor: 0 },
+      };
+
+    case 'TREE_VIEW_NAV': {
+      const visible = filteredTreeItems(state.treeViewItems, state.treeViewFilter);
+      if (visible.length === 0) return state;
+      const next = Math.max(0, Math.min(visible.length - 1, state.treeViewIndex + action.delta));
+      return { ...state, treeViewIndex: next };
+    }
+
+    case 'TREE_VIEW_SET_INDEX': {
+      const visible = filteredTreeItems(state.treeViewItems, state.treeViewFilter);
+      if (visible.length === 0) return state;
+      const next = Math.max(0, Math.min(visible.length - 1, action.index));
+      return { ...state, treeViewIndex: next };
+    }
+
+    case 'TREE_VIEW_CYCLE_FILTER': {
+      const filter = nextFilter(state.treeViewFilter);
+      // Reset index to 0 on filter change — the previous selection may not
+      // exist in the new filtered view; clean reset is simpler than trying
+      // to track the same logical entry across filter modes.
+      return { ...state, treeViewFilter: filter, treeViewIndex: 0 };
+    }
+
+    case 'TREE_VIEW_LABEL_INPUT':
+      return {
+        ...state,
+        treeViewLabelInput: {
+          active: action.active,
+          text: action.text ?? '',
+          cursor: action.cursor ?? (action.text?.length ?? 0),
+        },
+      };
+
+    case 'TREE_VIEW_REPLACE_ITEMS':
+      return { ...state, treeViewItems: action.items };
 
     case 'SET_MODEL_LIST':
       return { ...state, allModelNames: action.models };

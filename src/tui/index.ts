@@ -6,7 +6,15 @@ import { theme, icons } from './theme.js';
 import { enterAltScreen, exitAltScreen } from './screen.js';
 import { loadUserCommands } from '../user-commands.js';
 import { completeFileMention } from './file-complete.js';
-import type { Message, TurnTracker, CommandDef, ModelItem, PermissionOption } from './types.js';
+import type { Message, TurnTracker, CommandDef, ModelItem, PermissionOption, TreeViewItem } from './types.js';
+import { filteredTreeItems } from './reducer.js';
+
+/** Result of a /tree picker invocation. The host (slash command) handles
+ *  the actual mutation (rewind via setLeaf, label via .label()) so the TUI
+ *  stays decoupled from session storage. */
+export type TreeViewResult =
+  | { action: 'rewind'; entryId: string }
+  | { action: 'label'; entryId: string; name: string };
 
 function stripAnsi(str: string): string {
   // eslint-disable-next-line no-control-regex
@@ -80,6 +88,10 @@ const COMMANDS: CommandDef[] = [
   { name: '/sessions', args: '', description: 'List all saved sessions' },
   { name: '/resume', args: '<name>', description: 'Resume a saved session' },
   { name: '/rename', args: '<name>', description: 'Rename current session' },
+  { name: '/tree', args: '', description: 'Open the tree picker — arrow nav, Enter rewind, Ctrl+O filter, Shift+L bookmark (JSONL only)' },
+  { name: '/clone', args: '[name]', description: 'Duplicate the current branch into a new session (JSONL only)' },
+  { name: '/label', args: '<name>', description: 'Bookmark the current leaf entry (JSONL only)' },
+  { name: '/migrate-sessions', args: '', description: 'Convert all legacy .json sessions to .jsonl tree format (one-shot)' },
   { name: '/add-dir', args: '<path>', description: 'Add a working directory' },
   { name: '/worktree', args: '[cmd]', description: 'Git worktree isolation (create/list/cleanup)' },
   { name: '/effort', args: '<level>', description: 'Set effort level (low/medium/high)' },
@@ -134,6 +146,7 @@ export class TUI {
   private rejectInput: ((reason: Error) => void) | null = null;
   private permissionResolve: ((value: string) => void) | null = null;
   private modelSelectorResolve: ((value: { name: string; action: 'use' | 'default' } | null) => void) | null = null;
+  private treeViewResolve: ((value: TreeViewResult | null) => void) | null = null;
   private abortHandler: (() => void) | null = null;
   /** Called when the user types /clear while the agent is running. The owner
    *  is expected to abort + wipe history. Falls back to abortHandler when
@@ -477,6 +490,28 @@ export class TUI {
     });
   }
 
+  /** Show the /tree picker. Resolves with the user's action (rewind or
+   *  label) or null on cancel. Caller is responsible for performing the
+   *  actual JSONL mutation, then re-invoking with refreshed items if it
+   *  wants to keep the picker open after a label. */
+  showTreeView(items: TreeViewItem[]): Promise<TreeViewResult | null> {
+    this.dispatch({ type: 'TREE_VIEW_OPEN', items });
+    // Position the cursor on the current leaf if we can find it
+    const leafIdx = items.findIndex(i => i.isLeaf);
+    if (leafIdx >= 0) {
+      this.dispatch({ type: 'TREE_VIEW_SET_INDEX', index: leafIdx });
+    }
+    return new Promise(resolve => {
+      this.treeViewResolve = resolve;
+    });
+  }
+
+  /** Replace items in an open picker without closing it (e.g. after a label
+   *  was added — callers want to see the new ★ marker). */
+  refreshTreeView(items: TreeViewItem[]): void {
+    this.dispatch({ type: 'TREE_VIEW_REPLACE_ITEMS', items });
+  }
+
   setModelList(models: Array<{ name: string; parameterSize: string }>): void {
     this.dispatch({
       type: 'SET_MODEL_LIST',
@@ -590,6 +625,42 @@ export class TUI {
     this.dispatch({ type: 'SET_VIEW', view: 'conversation' });
   }
 
+  /** Drain the steering queue. Returns array in submission order, oldest
+   *  first. Called by the agent host between tool batches and the next LLM
+   *  call so steering messages are injected at the right boundary. */
+  takeSteering(): string[] {
+    const state = this.getState();
+    if (!state || state.pendingMessages.steering.length === 0) return [];
+    const items = [...state.pendingMessages.steering];
+    this.dispatch({ type: 'DRAIN_STEERING' });
+    return items;
+  }
+
+  /** Drain the follow-up queue. Returns array in submission order. Host calls
+   *  this on idle (between turns) — typically before the next `getInput()`. */
+  takeFollowUp(): string[] {
+    const state = this.getState();
+    if (!state || state.pendingMessages.followUp.length === 0) return [];
+    const items = [...state.pendingMessages.followUp];
+    this.dispatch({ type: 'DRAIN_FOLLOWUP' });
+    return items;
+  }
+
+  /** Read pending counts without draining — useful for status displays. */
+  peekPending(): { steering: number; followUp: number } {
+    const state = this.getState();
+    return {
+      steering: state?.pendingMessages.steering.length ?? 0,
+      followUp: state?.pendingMessages.followUp.length ?? 0,
+    };
+  }
+
+  /** Programmatically push to the follow-up queue (used to re-queue extras
+   *  after a one-at-a-time take). */
+  queueFollowUp(text: string): void {
+    if (text.trim()) this.dispatch({ type: 'QUEUE_FOLLOWUP', text });
+  }
+
   /** Needed by src/index.ts for benchmark progress — direct access to messages array */
   get messages(): Message[] {
     return this.getState()?.messages || [];
@@ -607,6 +678,127 @@ export class TUI {
     const key = raw;
     const state = this.getState();
     if (!state) return;
+
+    // Tree-view picker takes precedence over everything except global Ctrl+C.
+    if (state.treeViewActive && this.treeViewResolve) {
+      // Ctrl+C cancels (matches model selector convention)
+      if (key === '\x03') {
+        const resolve = this.treeViewResolve;
+        this.treeViewResolve = null;
+        this.dispatch({ type: 'TREE_VIEW_CLOSE' });
+        resolve(null);
+        return;
+      }
+      const visible = filteredTreeItems(state.treeViewItems, state.treeViewFilter);
+
+      // Sub-state: collecting a label name. Sub-routes ALL keys until Esc/Enter.
+      if (state.treeViewLabelInput.active) {
+        const li = state.treeViewLabelInput;
+        if (key === '\x1b') {
+          this.dispatch({ type: 'TREE_VIEW_LABEL_INPUT', active: false });
+          return;
+        }
+        if (key === '\r' || key === '\n') {
+          const name = li.text.trim();
+          if (!name) {
+            this.dispatch({ type: 'TREE_VIEW_LABEL_INPUT', active: false });
+            return;
+          }
+          const target = visible[state.treeViewIndex];
+          if (!target) {
+            this.dispatch({ type: 'TREE_VIEW_LABEL_INPUT', active: false });
+            return;
+          }
+          const resolve = this.treeViewResolve;
+          this.treeViewResolve = null;
+          this.dispatch({ type: 'TREE_VIEW_CLOSE' });
+          resolve({ action: 'label', entryId: target.id, name });
+          return;
+        }
+        if (key === '\x7f' || key === '\b') {
+          if (li.cursor > 0) {
+            const t = li.text.slice(0, li.cursor - 1) + li.text.slice(li.cursor);
+            this.dispatch({ type: 'TREE_VIEW_LABEL_INPUT', active: true, text: t, cursor: li.cursor - 1 });
+          }
+          return;
+        }
+        if (key === '\x1b[D') {
+          this.dispatch({ type: 'TREE_VIEW_LABEL_INPUT', active: true, text: li.text, cursor: Math.max(0, li.cursor - 1) });
+          return;
+        }
+        if (key === '\x1b[C') {
+          this.dispatch({ type: 'TREE_VIEW_LABEL_INPUT', active: true, text: li.text, cursor: Math.min(li.text.length, li.cursor + 1) });
+          return;
+        }
+        if (key.length === 1 && key.charCodeAt(0) >= 32 && key.charCodeAt(0) !== 127) {
+          const t = li.text.slice(0, li.cursor) + key + li.text.slice(li.cursor);
+          this.dispatch({ type: 'TREE_VIEW_LABEL_INPUT', active: true, text: t, cursor: li.cursor + 1 });
+          return;
+        }
+        return;
+      }
+
+      // Esc or `q` cancels
+      if (key === '\x1b' || key === 'q') {
+        const resolve = this.treeViewResolve;
+        this.treeViewResolve = null;
+        this.dispatch({ type: 'TREE_VIEW_CLOSE' });
+        resolve(null);
+        return;
+      }
+      // Up / k
+      if (key === '\x1b[A' || key === 'k') {
+        this.dispatch({ type: 'TREE_VIEW_NAV', delta: -1 });
+        return;
+      }
+      // Down / j
+      if (key === '\x1b[B' || key === 'j') {
+        this.dispatch({ type: 'TREE_VIEW_NAV', delta: 1 });
+        return;
+      }
+      // PgUp / PgDn
+      if (key === '\x1b[5~') {
+        this.dispatch({ type: 'TREE_VIEW_NAV', delta: -10 });
+        return;
+      }
+      if (key === '\x1b[6~') {
+        this.dispatch({ type: 'TREE_VIEW_NAV', delta: 10 });
+        return;
+      }
+      // Home / End
+      if (key === '\x1b[H' || key === 'g') {
+        this.dispatch({ type: 'TREE_VIEW_SET_INDEX', index: 0 });
+        return;
+      }
+      if (key === '\x1b[F' || key === 'G') {
+        this.dispatch({ type: 'TREE_VIEW_SET_INDEX', index: visible.length - 1 });
+        return;
+      }
+      // Ctrl+O cycles filter
+      if (key === '\x0f') {
+        this.dispatch({ type: 'TREE_VIEW_CYCLE_FILTER' });
+        return;
+      }
+      // Shift+L (capital L) opens label-name input
+      if (key === 'L') {
+        if (visible.length > 0) {
+          this.dispatch({ type: 'TREE_VIEW_LABEL_INPUT', active: true, text: '', cursor: 0 });
+        }
+        return;
+      }
+      // Enter rewinds to highlighted entry
+      if (key === '\r' || key === '\n') {
+        const target = visible[state.treeViewIndex];
+        if (!target) return;
+        const resolve = this.treeViewResolve;
+        this.treeViewResolve = null;
+        this.dispatch({ type: 'TREE_VIEW_CLOSE' });
+        resolve({ action: 'rewind', entryId: target.id });
+        return;
+      }
+      // Swallow everything else so stray characters don't leak through
+      return;
+    }
 
     // Model selector mode
     if (state.modelSelectorActive && this.modelSelectorResolve) {
@@ -1109,9 +1301,21 @@ export class TUI {
     const state = this.getState();
     if (!state) return;
 
-    // Enter while the agent is running: intercept /stop and /clear as
-    // mid-run interrupts. Anything else falls through to type-ahead so
-    // the user can keep composing the next prompt.
+    // Alt+Enter while streaming: commit current typing buffer to FOLLOW-UP
+    // queue. Delivered after the agent finishes the current turn (idle).
+    // (Shift+Enter — `\x1b[13;2u` / `\x1b[27;2;13~` — keeps inserting newlines
+    // into the typing buffer below; only Alt+Enter triggers follow-up.)
+    if (key === '\x1b\r' || key === '\x1b\n' || key === '\x1b[13;3u') {
+      const text = state.queuedInput.trim();
+      if (text) {
+        this.dispatch({ type: 'QUEUE_FOLLOWUP', text });
+      }
+      return;
+    }
+
+    // Enter while streaming: intercept /stop and /clear, otherwise commit
+    // current typing buffer to STEERING queue (delivered between the
+    // current tool batch and the next LLM call, so it interrupts the plan).
     if (key === '\r' || key === '\n') {
       const cmd = state.queuedInput.trim();
       if (cmd === '/stop') {
@@ -1132,8 +1336,32 @@ export class TUI {
         }
         return;
       }
-      // Plain Enter with non-command text: leave it queued for the next
-      // input prompt — matches existing type-ahead behavior.
+      if (cmd) {
+        this.dispatch({ type: 'QUEUE_STEERING', text: cmd });
+      }
+      return;
+    }
+
+    // Alt+Up while streaming: pop the most recently queued message back to
+    // the typing buffer so the user can edit or discard.
+    if (key === '\x1b\x1b[A' || key === '\x1b[1;3A') {
+      this.dispatch({ type: 'POP_PENDING_TO_INPUT' });
+      return;
+    }
+
+    // Bare Escape while streaming: abort AND restore any pending queued
+    // messages to the typing buffer (joined with blank lines). Lets the user
+    // pull back queued steering/follow-up to edit before re-submitting. If
+    // nothing is queued, behaves as a plain abort.
+    if (key === '\x1b') {
+      const { steering, followUp } = state.pendingMessages;
+      const joined = [...steering, ...followUp, state.queuedInput.trim()].filter(Boolean).join('\n\n');
+      this.dispatch({ type: 'CLEAR_PENDING' });
+      this.dispatch({ type: 'SET_QUEUED_INPUT', text: joined, cursor: joined.length });
+      if (this.abortHandler) {
+        this.abortHandler();
+        this.showInfo(theme.warning('Aborted. Queued messages restored to editor.'));
+      }
       return;
     }
 
@@ -1153,8 +1381,10 @@ export class TUI {
       return;
     }
 
-    // Newlines
-    if (key === '\x1b\r' || key === '\x1b\n' || key === '\x1b[13;2u' || key === '\x1b[27;2;13~') {
+    // Shift+Enter while streaming: insert newline into the typing buffer
+    // for multi-line composition. (Alt+Enter handled above as follow-up
+    // queue, plain Enter handled as steering queue.)
+    if (key === '\x1b[13;2u' || key === '\x1b[27;2;13~') {
       const newText = state.queuedInput.slice(0, state.queuedCursor) + '\n' + state.queuedInput.slice(state.queuedCursor);
       this.dispatch({ type: 'SET_QUEUED_INPUT', text: newText, cursor: state.queuedCursor + 1 });
       return;

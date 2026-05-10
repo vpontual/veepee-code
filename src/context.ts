@@ -496,6 +496,18 @@ export class ContextManager {
     return [...this.messages];
   }
 
+  /** Replace the message history wholesale. Used by `/tree` rewinds — after
+   *  the JSONL session moves its leaf, the context's in-memory messages
+   *  must match the new active path so subsequent turns continue from there.
+   *  Resets per-turn state but preserves the KnowledgeState (callers may
+   *  refresh it separately from the rewound entry's `knowledge` data). */
+  replaceMessages(messages: Message[]): void {
+    this.messages = messages.slice();
+    this.lastTurnToolCalls = 0;
+    this._pendingToolCalls = undefined;
+    this._pendingToolResults = [];
+  }
+
   getKnowledgeState(): KnowledgeState {
     return this.knowledgeState;
   }

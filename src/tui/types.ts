@@ -42,6 +42,18 @@ export interface PermissionOption {
   value: string;
 }
 
+export type TreeViewFilter = 'all' | 'default' | 'user-only' | 'labeled-only';
+
+export interface TreeViewItem {
+  id: string;
+  pathIndex: number;         // position in the active path (0-based)
+  type: 'meta' | 'message' | 'compaction' | 'label' | 'model_change' | 'mode_change' | 'custom';
+  preview: string;           // pre-rendered, ~60 chars
+  role?: string;             // for messages: user/assistant/tool/system
+  isLeaf: boolean;           // is this the current active leaf?
+  labels: string[];          // names of any labels attached to this entry
+}
+
 export type AppView = 'welcome' | 'conversation' | 'waiting';
 
 export interface AppState {
@@ -82,8 +94,16 @@ export interface AppState {
   permissionMenuSelection: number;
   permissionToolName: string;
   // Input queueing
-  queuedInput: string;
+  queuedInput: string;     // typing buffer while agent runs (not yet committed)
   queuedCursor: number;
+  // Pending messages committed for delivery (steering = mid-turn, followUp = on idle)
+  pendingMessages: { steering: string[]; followUp: string[] };
+  // /tree picker state
+  treeViewActive: boolean;
+  treeViewItems: TreeViewItem[];
+  treeViewIndex: number;        // index INTO THE FILTERED VIEW
+  treeViewFilter: TreeViewFilter;
+  treeViewLabelInput: { active: boolean; text: string; cursor: number };
   // Misc
   toolsShown: boolean;
   allModelNames: Array<{ name: string; size: string }>;
@@ -119,6 +139,19 @@ export type AppAction =
   | { type: 'SET_PERMISSION'; options: PermissionOption[]; selection?: number; toolName?: string }
   | { type: 'CLEAR_PERMISSION' }
   | { type: 'SET_QUEUED_INPUT'; text: string; cursor: number }
+  | { type: 'QUEUE_STEERING'; text: string }
+  | { type: 'QUEUE_FOLLOWUP'; text: string }
+  | { type: 'POP_PENDING_TO_INPUT' }
+  | { type: 'CLEAR_PENDING' }
+  | { type: 'DRAIN_STEERING' }
+  | { type: 'DRAIN_FOLLOWUP' }
+  | { type: 'TREE_VIEW_OPEN'; items: TreeViewItem[] }
+  | { type: 'TREE_VIEW_CLOSE' }
+  | { type: 'TREE_VIEW_NAV'; delta: number }
+  | { type: 'TREE_VIEW_SET_INDEX'; index: number }
+  | { type: 'TREE_VIEW_CYCLE_FILTER' }
+  | { type: 'TREE_VIEW_LABEL_INPUT'; active: boolean; text?: string; cursor?: number }
+  | { type: 'TREE_VIEW_REPLACE_ITEMS'; items: TreeViewItem[] }
   | { type: 'SET_MODEL_LIST'; models: Array<{ name: string; size: string }> }
   | { type: 'CLEAR_MESSAGES' }
   | { type: 'SET_TOOLS_SHOWN'; shown: boolean }

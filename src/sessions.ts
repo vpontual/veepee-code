@@ -1,10 +1,11 @@
 import { writeFile, readFile, readdir, mkdir } from 'fs/promises';
 import { resolve, join } from 'path';
 import { existsSync } from 'fs';
-import type { Message } from 'ollama';
+import type { Message, ToolCall } from 'ollama';
 import type { AgentMode } from './agent.js';
 import type { KnowledgeStateData } from './knowledge.js';
 import { theme, icons } from './tui/theme.js';
+import { JsonlSession } from './sessions/jsonl.js';
 
 export interface Session {
   id: string;
@@ -44,8 +45,16 @@ export async function saveSession(
   cwd: string,
   existingId?: string,
   knowledgeState?: KnowledgeStateData,
+  options?: { jsonl?: boolean },
 ): Promise<Session> {
   await mkdir(SESSIONS_DIR, { recursive: true });
+
+  // JSONL path: write/append entries to a `<id>-<slug>.jsonl` file. Branches
+  // and labels live inside that single file. KnowledgeState is folded in via
+  // a `knowledge` custom entry (see jsonl.ts AppendableEntry shape).
+  if (options?.jsonl) {
+    return saveSessionJsonl(name, messages, model, mode, cwd, existingId, knowledgeState);
+  }
 
   const now = new Date().toISOString();
   const toolCallCount = messages.filter(m => m.tool_calls && m.tool_calls.length > 0).length;
@@ -82,13 +91,245 @@ export async function saveSession(
   return session;
 }
 
-/** Load a session by ID */
+/** JSONL save path: append-only writes to a single tree-session file.
+ *
+ * Strategy: if the file doesn't exist, create it and write every in-memory
+ * message as its own entry. If it exists, diff the in-memory message count
+ * against the stored active path; append only the new tail. This makes
+ * /save idempotent and incremental — the JSONL file accumulates branches
+ * across /tree rewinds without rewriting history.
+ *
+ * Falls through to the legacy JSON path when the file extension is `.json`
+ * (an existing session loaded as legacy continues that way).
+ */
+async function saveSessionJsonl(
+  name: string,
+  messages: Message[],
+  model: string,
+  mode: AgentMode,
+  cwd: string,
+  existingId?: string,
+  knowledgeState?: KnowledgeStateData,
+): Promise<Session> {
+  const id = existingId || generateId();
+  const filename = `${id}-${slugify(name)}.jsonl`;
+  const filepath = join(SESSIONS_DIR, filename);
+
+  let session: JsonlSession;
+  if (existsSync(filepath)) {
+    session = JsonlSession.open(filepath);
+    session.updateMeta({ name, model, mode });
+    // Compute diff: how many on-disk messages are already on the active
+    // path vs how many we have in memory? Append only the tail.
+    const stored = session.getMessages();
+    const newTail = messages.slice(stored.length);
+    appendMessageEntries(session, newTail);
+  } else {
+    // Look for legacy file we might be migrating from — rare path: an old
+    // session id was passed but we want JSONL. Re-create with the messages
+    // we have; legacy file is left alone (caller can /sessions list both).
+    const matchedLegacy = await findExistingFileForId(id);
+    if (matchedLegacy && matchedLegacy.endsWith('.json')) {
+      // Rename legacy out of the way so /sessions doesn't show duplicates.
+      const { rename } = await import('fs/promises');
+      await rename(matchedLegacy, matchedLegacy + '.legacy').catch(() => {});
+    }
+    session = JsonlSession.create(filepath, { name, cwd, model, mode });
+    appendMessageEntries(session, messages);
+  }
+
+  if (knowledgeState) {
+    session.append({ type: 'custom', namespace: 'knowledge', data: knowledgeState });
+  }
+
+  const meta = session.getMeta();
+  const toolCallCount = messages.filter(m => m.tool_calls && m.tool_calls.length > 0).length;
+  return {
+    id,
+    name,
+    model,
+    mode,
+    cwd,
+    messages,
+    knowledgeState,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt ?? meta.createdAt,
+    messageCount: messages.length,
+    toolCallCount,
+  };
+}
+
+function appendMessageEntries(session: JsonlSession, msgs: Message[]): void {
+  for (const m of msgs) {
+    const role = (m.role || 'user') as 'user' | 'assistant' | 'tool' | 'system';
+    const content = m.content ?? '';
+    const toolCalls = (m as unknown as { tool_calls?: ToolCall[] }).tool_calls;
+    const toolName = (m as unknown as { tool_name?: string }).tool_name;
+    const entry: Parameters<typeof session.append>[0] = {
+      type: 'message',
+      role,
+      content,
+    };
+    if (toolCalls && toolCalls.length > 0) (entry as { toolCalls?: ToolCall[] }).toolCalls = toolCalls;
+    if (toolName) (entry as { toolName?: string }).toolName = toolName;
+    session.append(entry);
+  }
+}
+
+async function findExistingFileForId(id: string): Promise<string | null> {
+  if (!existsSync(SESSIONS_DIR)) return null;
+  const files = await readdir(SESSIONS_DIR).catch(() => []);
+  const match = files.find(f => f.startsWith(id));
+  return match ? join(SESSIONS_DIR, match) : null;
+}
+
+/** Load a JsonlSession instance by id (returns null if not JSONL or missing). */
+export async function loadJsonlSession(id: string): Promise<JsonlSession | null> {
+  const file = await findExistingFileForId(id);
+  if (!file || !file.endsWith('.jsonl')) return null;
+  try {
+    return JsonlSession.open(file);
+  } catch {
+    return null;
+  }
+}
+
+/** Migrate all legacy `.json` sessions in SESSIONS_DIR to `.jsonl`. The
+ *  original file is renamed to `.json.legacy` so it's preserved but no
+ *  longer shows up in `listSessions()` or sync. Idempotent — sessions
+ *  already in JSONL format or already migrated are skipped. */
+export async function migrateLegacySessions(): Promise<{ migrated: string[]; skipped: string[]; errors: Array<{ file: string; error: string }> }> {
+  const result = { migrated: [] as string[], skipped: [] as string[], errors: [] as Array<{ file: string; error: string }> };
+  if (!existsSync(SESSIONS_DIR)) return result;
+
+  const files = await readdir(SESSIONS_DIR);
+  const { rename } = await import('fs/promises');
+
+  for (const f of files) {
+    // Skip non-legacy: not .json, or already a .json.legacy backup
+    if (!f.endsWith('.json')) {
+      result.skipped.push(f);
+      continue;
+    }
+    const fullPath = join(SESSIONS_DIR, f);
+    try {
+      const data = await readFile(fullPath, 'utf-8');
+      const session = JSON.parse(data) as Session;
+      // Already-migrated check: if a .jsonl exists for this id, skip.
+      const existingJsonl = files.find(x => x.startsWith(session.id) && x.endsWith('.jsonl'));
+      if (existingJsonl) {
+        result.skipped.push(f);
+        continue;
+      }
+      const newPath = join(SESSIONS_DIR, `${session.id}-${slugify(session.name)}.jsonl`);
+      const j = JsonlSession.create(newPath, {
+        name: session.name,
+        cwd: session.cwd,
+        model: session.model,
+        mode: session.mode,
+        createdAt: session.createdAt,
+      });
+      appendMessageEntries(j, session.messages);
+      if (session.knowledgeState) {
+        j.append({ type: 'custom', namespace: 'knowledge', data: session.knowledgeState });
+      }
+      // Rename original out of the way (preserves it for rollback)
+      await rename(fullPath, fullPath + '.legacy').catch(() => {});
+      result.migrated.push(f);
+    } catch (err) {
+      result.errors.push({ file: f, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return result;
+}
+
+/**
+ * Per-turn auto-append for JSONL sessions. Closes the loop on "no lost work
+ * after a crash" by appending new messages (diff against on-disk active path)
+ * after every agent turn — without requiring an explicit `/save`.
+ *
+ * Behavior:
+ *  - currentSessionId null → create a new JSONL session (auto-named from the
+ *    first user message) and return its id+name so the caller can update its
+ *    `currentSessionId` state.
+ *  - currentSessionId points at a JSONL → diff-append new messages, refresh
+ *    model/mode metadata if changed, append KS as a `knowledge` custom entry.
+ *  - currentSessionId points at a legacy `.json` → skip (caller can /save
+ *    manually). Returns null. Existing legacy session is left alone — we don't
+ *    convert behind the user's back.
+ *
+ * Idempotent if no new messages have been added since the last append.
+ */
+export async function autoAppendJsonlTurn(args: {
+  currentSessionId: string | null;
+  cwd: string;
+  model: string;
+  mode: AgentMode;
+  messages: Message[];
+  knowledgeState?: KnowledgeStateData;
+}): Promise<{ id: string; name: string } | null> {
+  const { currentSessionId, cwd, model, mode, messages, knowledgeState } = args;
+  if (messages.length === 0) return null;
+
+  // Existing JSONL → diff and append.
+  if (currentSessionId) {
+    const file = await findExistingFileForId(currentSessionId);
+    if (file && file.endsWith('.jsonl')) {
+      try {
+        const existing = JsonlSession.open(file);
+        const stored = existing.getMessages();
+        const newTail = messages.slice(stored.length);
+        if (newTail.length > 0) appendMessageEntries(existing, newTail);
+        const meta = existing.getMeta();
+        if (meta.model !== model || meta.mode !== mode) {
+          existing.updateMeta({ model, mode });
+        }
+        if (knowledgeState) {
+          existing.append({ type: 'custom', namespace: 'knowledge', data: knowledgeState });
+        }
+        return { id: currentSessionId, name: meta.name };
+      } catch {
+        return null;
+      }
+    }
+    if (file && file.endsWith('.json')) {
+      // Legacy session — don't auto-convert. User can /save manually.
+      return null;
+    }
+  }
+
+  // Fresh session — auto-create a new JSONL.
+  await mkdir(SESSIONS_DIR, { recursive: true });
+  const name = autoName(messages);
+  const id = currentSessionId ?? generateId();
+  const filename = `${id}-${slugify(name)}.jsonl`;
+  const filepath = join(SESSIONS_DIR, filename);
+  const session = JsonlSession.create(filepath, { name, cwd, model, mode });
+  appendMessageEntries(session, messages);
+  if (knowledgeState) {
+    session.append({ type: 'custom', namespace: 'knowledge', data: knowledgeState });
+  }
+  return { id, name };
+}
+
+/** Load a session by ID. Auto-detects format by file extension — `.jsonl`
+ *  files are loaded via JsonlSession and projected back to the legacy
+ *  Session shape; `.json` files are parsed as before. */
 export async function loadSession(id: string): Promise<Session | null> {
   if (!existsSync(SESSIONS_DIR)) return null;
 
   const files = await readdir(SESSIONS_DIR);
-  const match = files.find(f => f.startsWith(id));
+  const match = files.find(f => f.startsWith(id) && (f.endsWith('.json') || f.endsWith('.jsonl')));
   if (!match) return null;
+
+  if (match.endsWith('.jsonl')) {
+    try {
+      const session = JsonlSession.open(join(SESSIONS_DIR, match));
+      return projectJsonlToSession(id, session);
+    } catch {
+      return null;
+    }
+  }
 
   try {
     const data = await readFile(join(SESSIONS_DIR, match), 'utf-8');
@@ -98,7 +339,37 @@ export async function loadSession(id: string): Promise<Session | null> {
   }
 }
 
-/** List all saved sessions, newest first */
+/** Project a JsonlSession's active path to a legacy Session shape so callers
+ *  that expect Session don't need to know about the storage format. */
+function projectJsonlToSession(id: string, j: JsonlSession): Session {
+  const meta = j.getMeta();
+  const messages = j.getMessages();
+  const toolCallCount = messages.filter(m => (m as unknown as { tool_calls?: unknown[] }).tool_calls?.length).length;
+  // Recover knowledgeState from the most recent `knowledge` custom entry on
+  // the active path, if any.
+  let knowledgeState: KnowledgeStateData | undefined;
+  for (const e of j.getActivePath()) {
+    if (e.type === 'custom' && (e as unknown as { namespace?: string }).namespace === 'knowledge') {
+      knowledgeState = (e as unknown as { data: KnowledgeStateData }).data;
+    }
+  }
+  return {
+    id,
+    name: meta.name,
+    model: meta.model,
+    mode: meta.mode as AgentMode,
+    cwd: meta.cwd,
+    messages,
+    knowledgeState,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt ?? meta.createdAt,
+    messageCount: messages.length,
+    toolCallCount,
+  };
+}
+
+/** List all saved sessions, newest first. Includes both `.json` (legacy) and
+ *  `.jsonl` (tree) formats. */
 export async function listSessions(): Promise<Session[]> {
   if (!existsSync(SESSIONS_DIR)) return [];
 
@@ -106,6 +377,17 @@ export async function listSessions(): Promise<Session[]> {
   const sessions: Session[] = [];
 
   for (const f of files) {
+    if (f.endsWith('.jsonl')) {
+      try {
+        const j = JsonlSession.open(join(SESSIONS_DIR, f));
+        // Filename: <id>-<slug>.jsonl
+        const id = f.split('-')[0];
+        sessions.push(projectJsonlToSession(id, j));
+      } catch {
+        // skip corrupt files
+      }
+      continue;
+    }
     if (!f.endsWith('.json')) continue;
     try {
       const data = await readFile(join(SESSIONS_DIR, f), 'utf-8');

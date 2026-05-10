@@ -14,6 +14,7 @@ interface InputBoxProps {
   hasResolveInput: boolean;  // whether getInput() is active
   queuedInput: string;
   queuedCursor: number;
+  pendingMessages: { steering: string[]; followUp: string[] };
   cols: number;
 }
 
@@ -51,7 +52,7 @@ function renderWithCursor(text: string, cursorPos: number, width: number): strin
 
 export function InputBox({
   input, modelName, modelSize, modelRole, providerName,
-  isWaiting, hasResolveInput, queuedInput, queuedCursor, cols,
+  isWaiting, hasResolveInput, queuedInput, queuedCursor, pendingMessages, cols,
 }: InputBoxProps): React.ReactElement {
   const boxWidth = cols - 4;
   const contentWidth = boxWidth - 4;
@@ -111,8 +112,33 @@ export function InputBox({
   // Hints
   const hints = `${theme.textBold('tab')} ${theme.muted('tools')}  ${theme.textBold('ctrl+p')} ${theme.muted('commands')}  ${theme.textBold('/help')} ${theme.muted('help')}`;
 
+  // Pending message panel — shown above the input box when steering or
+  // follow-up messages are queued during streaming. Steering = sky blue
+  // (interrupt mid-turn). Follow-up = sage green (deliver on idle).
+  const panelLines: React.ReactElement[] = [];
+  const ellipsize = (s: string): string => {
+    const flat = s.replace(/\n/g, ' ');
+    const max = Math.max(20, contentWidth - 14);
+    return flat.length > max ? flat.slice(0, max - 1) + '…' : flat;
+  };
+  for (const msg of pendingMessages.steering) {
+    panelLines.push(
+      <Text key={`s-${panelLines.length}`}>
+        {chalk.hex('#85C7F2')('  ↪ steering: ')}{theme.dim('"')}{ellipsize(msg)}{theme.dim('"')}
+      </Text>,
+    );
+  }
+  for (const msg of pendingMessages.followUp) {
+    panelLines.push(
+      <Text key={`f-${panelLines.length}`}>
+        {chalk.hex('#7EC8A0')('  ↪ follow-up: ')}{theme.dim('"')}{ellipsize(msg)}{theme.dim('"')}
+      </Text>,
+    );
+  }
+
   return (
     <Box flexDirection="column" paddingLeft={2}>
+      {panelLines}
       <Text>{topBorder}</Text>
       <Text>{theme.borderFocused(box.v)} {displayLine} {theme.borderFocused(box.v)}</Text>
       <Text>{theme.borderFocused(box.v)} {modelPadded} {theme.borderFocused(box.v)}</Text>

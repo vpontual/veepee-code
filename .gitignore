@@ -14,7 +14,8 @@ VEEPEE.md
 .veepee/
 
 # Runtime artifacts (sessions, benchmark runs, generated config)
-sessions/
+# Anchor to repo root so the src/sessions/ source directory is NOT shadowed.
+/sessions/
 capabilities.json
 permissions.json
 vcode.config.json

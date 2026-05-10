@@ -62,6 +62,7 @@ export function WelcomeScreen({ state, rows, cols, hasResolveInput }: WelcomeScr
         hasResolveInput={hasResolveInput}
         queuedInput={state.queuedInput}
         queuedCursor={state.queuedCursor}
+        pendingMessages={state.pendingMessages}
         cols={cols}
       />
 

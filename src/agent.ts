@@ -443,10 +443,19 @@ export class Agent {
   /** Run the agent loop for a user message, yielding events as they occur */
   async *run(
     userMessage: string,
-    options?: { permissionMode?: PermissionMode; allowedTools?: string[] | null },
+    options?: {
+      permissionMode?: PermissionMode;
+      allowedTools?: string[] | null;
+      /** Called between tool batches and the next LLM call. Returned strings
+       *  are added to context as user messages, in order, before the next
+       *  `ollama.chat()` invocation. Used to deliver "steering" messages
+       *  the user submitted mid-turn without aborting the run. */
+      onTurnBoundary?: () => string[] | Promise<string[]>;
+    },
   ): AsyncGenerator<AgentEvent> {
     const permissionMode = options?.permissionMode || 'interactive';
     const allowedTools = options?.allowedTools ? new Set(options.allowedTools) : null;
+    const onTurnBoundary = options?.onTurnBoundary;
     this.abortController = new AbortController();
 
     // UserPromptSubmit hook — fires on raw user input, before any expansion
@@ -541,6 +550,24 @@ export class Agent {
         if (newModel) {
           this.context.setSystemPrompt(newModel);
           yield { type: 'model_switch', from: this.modelManager.getCurrentModel(), to: newModel };
+        }
+
+        // Steering boundary: drain any messages the user submitted mid-turn
+        // and inject them as user messages before the next LLM call. Runs
+        // AFTER tool results have been added to context, BEFORE the next
+        // ollama.chat. Pre-empts whatever the model would have done next.
+        if (onTurnBoundary) {
+          try {
+            const steering = await onTurnBoundary();
+            for (const msg of steering) {
+              const trimmed = msg.trim();
+              if (!trimmed) continue;
+              this.context.addUser(`[USER STEERING] ${trimmed}\n\n(The user changed direction mid-turn. Re-evaluate based on this new input before continuing.)`);
+              yield { type: 'thinking', content: `Steering: ${trimmed.slice(0, 80)}${trimmed.length > 80 ? '…' : ''}` };
+            }
+          } catch {
+            // Steering callback failures are non-fatal — keep running.
+          }
         }
       }
 

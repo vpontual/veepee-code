@@ -7,6 +7,7 @@ import { StatusBar } from './StatusBar.js';
 import { CommandMenu } from './CommandMenu.js';
 import { ModelCompletion } from './ModelCompletion.js';
 import { ModelSelector } from './ModelSelector.js';
+import { TreeView } from './TreeView.js';
 import type { AppState } from '../types.js';
 
 interface ConversationProps {
@@ -20,7 +21,8 @@ export function Conversation({ state, rows, cols, hasResolveInput }: Conversatio
   // Layout calculation
   const statusBarHeight = 1;
   const hintsHeight = 1;
-  const inputBoxHeight = 4;
+  const pendingHeight = state.pendingMessages.steering.length + state.pendingMessages.followUp.length;
+  const inputBoxHeight = 4 + pendingHeight;
   const totalBottomHeight = inputBoxHeight + hintsHeight + statusBarHeight;
   const trackerHeight = state.turnTracker?.active
     ? Math.min(state.turnTracker.toolCalls.length + 1, 8)
@@ -84,6 +86,15 @@ export function Conversation({ state, rows, cols, hasResolveInput }: Conversatio
         cols={cols}
         maxVisible={menuMaxVisible}
       />
+      <TreeView
+        active={state.treeViewActive}
+        items={state.treeViewItems}
+        index={state.treeViewIndex}
+        filter={state.treeViewFilter}
+        labelInput={state.treeViewLabelInput}
+        cols={cols}
+        maxVisible={menuMaxVisible}
+      />
 
       {/* Input box */}
       <InputBox
@@ -96,6 +107,7 @@ export function Conversation({ state, rows, cols, hasResolveInput }: Conversatio
         hasResolveInput={hasResolveInput}
         queuedInput={state.queuedInput}
         queuedCursor={state.queuedCursor}
+        pendingMessages={state.pendingMessages}
         cols={cols}
       />
 
