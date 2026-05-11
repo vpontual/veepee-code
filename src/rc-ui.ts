@@ -1,5 +1,5 @@
 /** Inline HTML/CSS/JS for the Remote Connect web UI — mobile-first, dark theme */
-export function getRcHtml(port: number): string {
+export function getRcHtml(port: number, requiresAuth = true): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -297,6 +297,7 @@ header select {
 
 <script>
 const API_BASE = window.location.origin;
+const REQUIRES_AUTH = ${requiresAuth ? 'true' : 'false'};
 let token = localStorage.getItem('vcode_rc_token') || '';
 let eventSource = null;
 let streaming = false;
@@ -306,6 +307,10 @@ let historyResetPending = false;
 // ─── Auth ───
 function authenticate() {
   token = document.getElementById('token-input').value.trim();
+  if (!REQUIRES_AUTH) {
+    showApp();
+    return;
+  }
   if (!token) return;
 
   fetch(API_BASE + '/api/status', {
@@ -322,8 +327,10 @@ function authenticate() {
   });
 }
 
-// Auto-login if token exists
-if (token) {
+// Auto-login if token exists, or skip auth when the server is configured open.
+if (!REQUIRES_AUTH) {
+  showApp();
+} else if (token) {
   fetch(API_BASE + '/api/status', {
     headers: { 'Authorization': 'Bearer ' + token }
   }).then(r => {

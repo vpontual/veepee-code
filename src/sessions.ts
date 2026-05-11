@@ -36,6 +36,39 @@ function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
 }
 
+function messageKey(message: Message): string {
+  return JSON.stringify({
+    role: message.role,
+    content: message.content || '',
+    tool_calls: message.tool_calls || [],
+  });
+}
+
+function findNewMessageTail(stored: Message[], current: Message[]): Message[] {
+  if (current.length === 0) return [];
+  if (stored.length === 0) return current;
+
+  const storedKeys = stored.map(messageKey);
+  const currentKeys = current.map(messageKey);
+  const maxOverlap = Math.min(storedKeys.length, currentKeys.length);
+
+  for (let overlap = maxOverlap; overlap > 0; overlap--) {
+    let matches = true;
+    const storedStart = storedKeys.length - overlap;
+    for (let i = 0; i < overlap; i++) {
+      if (storedKeys[storedStart + i] !== currentKeys[i]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return current.slice(overlap);
+  }
+
+  // A reset or clear can leave no overlap with the stored active path. Keep
+  // saving the new context instead of dropping it based on the old file length.
+  return current;
+}
+
 /** Save current session to disk */
 export async function saveSession(
   name: string,
@@ -119,10 +152,10 @@ async function saveSessionJsonl(
   if (existsSync(filepath)) {
     session = JsonlSession.open(filepath);
     session.updateMeta({ name, model, mode });
-    // Compute diff: how many on-disk messages are already on the active
-    // path vs how many we have in memory? Append only the tail.
+    // Compute diff by overlap. Resumed sessions keep only a sliding window in
+    // memory, while the JSONL file stores the full active path.
     const stored = session.getMessages();
-    const newTail = messages.slice(stored.length);
+    const newTail = findNewMessageTail(stored, messages);
     appendMessageEntries(session, newTail);
   } else {
     // Look for legacy file we might be migrating from — rare path: an old
@@ -278,7 +311,7 @@ export async function autoAppendJsonlTurn(args: {
       try {
         const existing = JsonlSession.open(file);
         const stored = existing.getMessages();
-        const newTail = messages.slice(stored.length);
+        const newTail = findNewMessageTail(stored, messages);
         if (newTail.length > 0) appendMessageEntries(existing, newTail);
         const meta = existing.getMeta();
         if (meta.model !== model || meta.mode !== mode) {

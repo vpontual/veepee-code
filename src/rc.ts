@@ -61,9 +61,13 @@ export function registerRcRoutes(
   handleRequest: (req: IncomingMessage, res: ServerResponse, url: URL) => Promise<boolean>;
   installPermissionHandler: () => void;
   onRemoteMessage: (handler: (message: string, events: AsyncGenerator<AgentEvent>) => void) => void;
+  onRemoteCommand: (handler: (message: string) => Promise<void>) => void;
+  onSessionChange: (handler: (sessionId: string, name: string) => void) => void;
 } {
 
   let remoteMessageHandler: ((message: string, events: AsyncGenerator<AgentEvent>) => void) | null = null;
+  let remoteCommandHandler: ((message: string) => Promise<void>) | null = null;
+  let sessionChangeHandler: ((sessionId: string, name: string) => void) | null = null;
 
   /** Check auth for RC routes */
   function checkAuth(req: IncomingMessage): boolean {
@@ -108,7 +112,7 @@ export function registerRcRoutes(
     // Serve web UI HTML
     if (path === '/rc' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(getRcHtml(apiPort));
+      res.end(getRcHtml(apiPort, !!apiToken));
       return true;
     }
 
@@ -170,6 +174,18 @@ export function registerRcRoutes(
 
       // Acknowledge receipt immediately
       sendJson(res, 200, { ok: true });
+
+      if (data.message.trim().startsWith('/')) {
+        broadcast('user_message', { content: data.message });
+        if (!remoteCommandHandler) {
+          broadcast('error_event', { error: 'Command handler is not ready' });
+          return true;
+        }
+        remoteCommandHandler(data.message.trim())
+          .then(() => broadcast('done', {}))
+          .catch(err => broadcast('error_event', { error: String(err) }));
+        return true;
+      }
 
       // Run agent asynchronously — events broadcast to BOTH SSE clients and TUI
       // (agent.run() adds the user message to context internally)
@@ -253,6 +269,7 @@ export function registerRcRoutes(
         }
       }
 
+      sessionChangeHandler?.(session.id, session.name);
       sendJson(res, 200, { ok: true, name: session.name, messageCount: session.messageCount });
       return true;
     }
@@ -355,6 +372,12 @@ export function registerRcRoutes(
     installPermissionHandler,
     onRemoteMessage: (handler: (message: string, events: AsyncGenerator<AgentEvent>) => void) => {
       remoteMessageHandler = handler;
+    },
+    onRemoteCommand: (handler: (message: string) => Promise<void>) => {
+      remoteCommandHandler = handler;
+    },
+    onSessionChange: (handler: (sessionId: string, name: string) => void) => {
+      sessionChangeHandler = handler;
     },
   };
 }

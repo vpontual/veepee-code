@@ -54,8 +54,8 @@ export function InputBox({
   input, modelName, modelSize, modelRole, providerName,
   isWaiting, hasResolveInput, queuedInput, queuedCursor, pendingMessages, cols,
 }: InputBoxProps): React.ReactElement {
-  const boxWidth = cols - 4;
-  const contentWidth = boxWidth - 4;
+  const boxWidth = Math.max(20, cols - 4);
+  const contentWidth = Math.max(10, boxWidth - 4);
 
   // Build input line content
   const isQueuing = isWaiting && queuedInput.length > 0;
@@ -65,7 +65,7 @@ export function InputBox({
   if (isQueuing) {
     // Queued text with indicator + cursor
     const label = chalk.hex('#E8A87C')('⏳ ');
-    const availWidth = contentWidth - 3; // account for emoji+space
+    const availWidth = Math.max(1, contentWidth - 3); // account for emoji+space
     const truncated = queuedInput.length > availWidth ? queuedInput.slice(0, availWidth - 1) + '…' : queuedInput;
     const textPart = truncated.replace(/\n/g, '↵');
     // Insert cursor

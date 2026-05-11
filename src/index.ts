@@ -382,12 +382,17 @@ async function main() {
   let rcHandler: ((req: import('http').IncomingMessage, res: import('http').ServerResponse, url: URL) => Promise<boolean>) | undefined;
   let rcInstallPermissions: (() => void) | undefined;
   let rcOnRemoteMessage: ((handler: (message: string, events: AsyncGenerator<import('./agent.js').AgentEvent>) => void) => void) | undefined;
+  let rcOnRemoteCommand: ((handler: (message: string) => Promise<void>) => void) | undefined;
+  let rcOnSessionChange: ((handler: (sessionId: string, name: string) => void) => void) | undefined;
+  let currentSessionId: string | null = null;
 
   if (rcEnabled) {
     const rc = registerRcRoutes(agent, permissions, preview, parseInt(cliPort || String(config.apiPort), 10), apiToken);
     rcHandler = rc.handleRequest;
     rcInstallPermissions = rc.installPermissionHandler;
     rcOnRemoteMessage = rc.onRemoteMessage;
+    rcOnRemoteCommand = rc.onRemoteCommand;
+    rcOnSessionChange = rc.onSessionChange;
   }
 
   // Start API server
@@ -519,6 +524,7 @@ async function main() {
             break;
         }
       }
+      await persistTurn();
     });
   }
 
@@ -533,6 +539,11 @@ async function main() {
 
   // Wire Ctrl+C abort
   tui.setAbortHandler(() => agent.abort());
+  tui.setClearHandler(() => {
+    agent.clear();
+    permissions.resetSession();
+    tui.showInfo(theme.warning('Conversation cleared.'));
+  });
   // /clear typed mid-run: abort + wipe history in one gesture.
   tui.setClearOnRunHandler(() => {
     agent.abort();
@@ -671,7 +682,6 @@ async function main() {
     }
   }
   // Handle --resume / -c CLI arguments
-  let currentSessionId: string | null = null;
   const continueFlag = process.argv.includes('-c') || process.argv.includes('--continue');
   const resumeArg = process.argv.find(a => a === '--resume' || a.startsWith('--resume='));
   if (resumeArg) {
@@ -780,6 +790,33 @@ async function main() {
 
   // Main loop
   let sessionStart = Date.now();
+
+  async function persistTurn(): Promise<void> {
+    if (!config.useJsonlSessions) return;
+    try {
+      const result = await autoAppendJsonlTurn({
+        currentSessionId,
+        cwd: process.cwd(),
+        model: modelManager.getCurrentModel(),
+        mode: agent.getMode(),
+        messages: agent.getContext().getAllMessages(),
+        knowledgeState: agent.getContext().getKnowledgeState().getData(),
+      });
+      if (result && currentSessionId !== result.id) {
+        currentSessionId = result.id;
+        await setProjectSession(process.cwd(), result.id, result.name);
+      }
+    } catch {
+      // Manual /save remains available if best-effort auto-save fails.
+    }
+  }
+
+  if (rcOnSessionChange) {
+    rcOnSessionChange((sessionId, name) => {
+      currentSessionId = sessionId;
+      setProjectSession(process.cwd(), sessionId, name).catch(() => {});
+    });
+  }
 
   while (true) {
     // Update stats
@@ -933,7 +970,19 @@ async function main() {
         agent.getContext().messageCount(),
         Date.now() - sessionStart,
       );
+
+      await persistTurn();
     };
+
+    if (rcOnRemoteCommand) {
+      rcOnRemoteCommand(async (message) => {
+        tui.addCommandMessage(`[RC] ${message}`);
+        const result = await handleCommand(message, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId, sandbox, preview, syncManager, lspManager, runTurn);
+        if (typeof result === 'string' && result.startsWith('session:')) {
+          currentSessionId = result.slice(8) || null;
+        }
+      });
+    }
 
     // Inline bash. `!!cmd` runs silently (output shown but not sent to LLM);
     // `!cmd` runs and forwards captured output to the LLM as the next user
@@ -982,33 +1031,6 @@ async function main() {
     // Run agent
     await runTurn(trimmed);
 
-    // Per-turn JSONL auto-append (P0 deferral). Closes the loop on "no lost
-    // work after a crash" — every turn flushes new messages to the JSONL
-    // file. First turn auto-creates a session if none exists. Legacy `.json`
-    // sessions are left alone so users can opt in by enabling the flag.
-    if (config.useJsonlSessions) {
-      try {
-        const result = await autoAppendJsonlTurn({
-          currentSessionId,
-          cwd: process.cwd(),
-          model: modelManager.getCurrentModel(),
-          mode: agent.getMode(),
-          messages: agent.getContext().getAllMessages(),
-          knowledgeState: agent.getContext().getKnowledgeState().getData(),
-        });
-        if (result) {
-          // First-turn auto-create: persist the new id in projects.json so
-          // auto-resume works on the next launch.
-          if (currentSessionId !== result.id) {
-            currentSessionId = result.id;
-            await setProjectSession(process.cwd(), result.id, result.name);
-          }
-        }
-      } catch {
-        // Auto-append is best-effort — surface nothing on failure so the
-        // user's chat flow stays uninterrupted. Manual /save still works.
-      }
-    }
   }
 
   // Cleanup

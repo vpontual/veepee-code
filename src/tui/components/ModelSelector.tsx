@@ -20,7 +20,7 @@ interface ModelSelectorProps {
 export function ModelSelector({ active, items, selectedIndex, cols, maxVisible }: ModelSelectorProps): React.ReactElement | null {
   if (!active || items.length === 0) return null;
 
-  const boxWidth = cols - 4;
+  const boxWidth = Math.max(20, cols - 4);
   const visibleCount = Math.min(items.length, maxVisible);
 
   // Window around selected item

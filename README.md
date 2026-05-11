@@ -126,7 +126,7 @@ Connect a remote agent (via `/setup wizard remote` or `vcode.config.json`) to au
 
 ## Configuration
 
-All configuration lives in `~/.veepee-code/vcode.config.json`. Run `/setup wizard` to configure interactively, or edit the file directly.
+All configuration lives in `~/.veepee-code/settings.json`. Run `/setup wizard` to configure interactively, or edit the file directly. Older `vcode.config.json` files are treated as migration input.
 
 Key settings:
 

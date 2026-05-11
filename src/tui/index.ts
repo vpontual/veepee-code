@@ -148,6 +148,7 @@ export class TUI {
   private modelSelectorResolve: ((value: { name: string; action: 'use' | 'default' } | null) => void) | null = null;
   private treeViewResolve: ((value: TreeViewResult | null) => void) | null = null;
   private abortHandler: (() => void) | null = null;
+  private clearHandler: (() => void) | null = null;
   /** Called when the user types /clear while the agent is running. The owner
    *  is expected to abort + wipe history. Falls back to abortHandler when
    *  unset. */
@@ -342,6 +343,10 @@ export class TUI {
 
   setAbortHandler(handler: () => void): void {
     this.abortHandler = handler;
+  }
+
+  setClearHandler(handler: () => void): void {
+    this.clearHandler = handler;
   }
 
   /** Set the handler used when the user types /clear while the agent is
@@ -1160,6 +1165,7 @@ export class TUI {
     // Ctrl+L — clear
     if (key === '\x0c') {
       this.dispatch({ type: 'CLEAR_MESSAGES' });
+      this.clearHandler?.();
       return;
     }
 
@@ -1400,9 +1406,14 @@ export class TUI {
       return;
     }
 
-    // Paste detection
-    if (key.length > 1 && key.includes('\n') && !key.startsWith('\x1b')) {
-      const cleanPaste = key.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    // Paste detection: accept single-line and multi-line clipboard chunks.
+    if (key.length > 1 && !key.startsWith('\x1b') && !key.includes('\x1b')) {
+      const cleanPaste = key
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '');
+      if (cleanPaste.length === 0) return;
       const newText = state.queuedInput.slice(0, state.queuedCursor) + cleanPaste + state.queuedInput.slice(state.queuedCursor);
       this.dispatch({ type: 'SET_QUEUED_INPUT', text: newText, cursor: state.queuedCursor + cleanPaste.length });
     }

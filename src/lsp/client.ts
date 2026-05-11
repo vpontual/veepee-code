@@ -122,6 +122,8 @@ export class LspClient {
 
     // Many servers send window/workDoneProgress/create requests; ack them.
     conn.onRequest('window/workDoneProgress/create', () => null);
+    conn.onRequest('client/registerCapability', () => null);
+    conn.onRequest('client/unregisterCapability', () => null);
 
     conn.onNotification(PublishDiagnosticsNotification.type, (params) => {
       this.diagnostics.set(params.uri, params.diagnostics);

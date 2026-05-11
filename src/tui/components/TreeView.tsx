@@ -22,6 +22,11 @@ const FILTER_LABELS: Record<TreeViewFilter, string> = {
   all: 'all',
 };
 
+function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
 function renderRow(item: TreeViewItem, width: number): string {
   const idx = String(item.pathIndex).padStart(3);
   let typeTag: string;
@@ -60,10 +65,9 @@ function renderRow(item: TreeViewItem, width: number): string {
   const line = `${idx}  ${typeTag}  ${body}${labels}${leafTag}`;
   // truncate to width (best-effort — chalk codes count toward visual width
   // calculation in stripped form). Clip the body, not the prefix.
-  const stripped = line.replace(/\[[0-9;]*m/g, '');
+  const stripped = stripAnsi(line);
   if (stripped.length <= width) return line;
-  // Crude clip: take stripped char count, slice raw to that point.
-  return line.slice(0, width - 1) + '…';
+  return stripped.slice(0, Math.max(0, width - 1)) + '…';
 }
 
 export function TreeView({
@@ -71,8 +75,8 @@ export function TreeView({
 }: TreeViewProps): React.ReactElement | null {
   if (!active) return null;
   const visible = filteredTreeItems(items, filter);
-  const boxWidth = cols - 4;
-  const contentWidth = boxWidth - 4;
+  const boxWidth = Math.max(20, cols - 4);
+  const contentWidth = Math.max(10, boxWidth - 4);
 
   const title = ` Tree — ${visible.length}/${items.length} entries  •  filter: ${FILTER_LABELS[filter]} `;
   const titleBorder = box.h.repeat(2);
@@ -106,7 +110,7 @@ export function TreeView({
         const pointer = isSelected ? `${icons.arrow} ` : '  ';
         const row = renderRow(it, contentWidth - 2);
         const padded = (pointer + row).slice(0, contentWidth);
-        const fill = ' '.repeat(Math.max(0, contentWidth - padded.replace(/\[[0-9;]*m/g, '').length));
+        const fill = ' '.repeat(Math.max(0, contentWidth - stripAnsi(padded).length));
         if (isSelected) {
           return (
             <Text key={it.id}>

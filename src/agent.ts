@@ -868,6 +868,8 @@ export class Agent {
           yield { type: 'thinking', content: 'Plan auto-saved to .veepee/plan.md' };
         }
 
+        yield* this._fireHooks('Stop', { cwd: process.cwd(), messageCount: this.context.messageCount() });
+
         this.abortController = null;
 
         // Restore original model if we switched for vision
@@ -1092,9 +1094,8 @@ export class Agent {
       }
     }
 
-    // Stop hook — fires when the assistant finishes a turn cleanly. Early
-    // returns from error paths above bypass this (intentional — Stop should
-    // imply a successful turn boundary, not an aborted one).
+    // Stop hook for successful tool-using turns. The no-tool success path
+    // returns earlier and fires Stop before yielding its done event.
     yield* this._fireHooks('Stop', { cwd: process.cwd(), messageCount: this.context.messageCount() });
   }
 

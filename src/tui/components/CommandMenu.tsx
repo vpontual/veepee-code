@@ -25,7 +25,7 @@ interface CommandMenuProps {
 export function CommandMenu({ visible, commands, selection, cols }: CommandMenuProps): React.ReactElement | null {
   if (!visible || commands.length === 0) return null;
 
-  const boxWidth = cols - 4;
+  const boxWidth = Math.max(20, cols - 4);
   const menuMaxVisible = Math.min(commands.length, 12);
 
   // Scroll window: keep selection visible within the viewport
@@ -46,7 +46,7 @@ export function CommandMenu({ visible, commands, selection, cols }: CommandMenuP
         const actualIndex = scrollStart + i;
         const isSelected = actualIndex === selection;
         const nameStr = cmd.name.padEnd(22);
-        const descStr = truncateStr(cmd.description, boxWidth - 28);
+        const descStr = truncateStr(cmd.description, Math.max(1, boxWidth - 28));
 
         if (isSelected) {
           const line = ` ${theme.brandBold(nameStr)} ${theme.text(descStr)}`;

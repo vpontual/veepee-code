@@ -41,12 +41,20 @@ async function appendLspDiagnostics(
 ): Promise<string> {
   if (!lspManager) return '';
   try {
-    if (!lspManager.matchByPath(filePath)) return '';
+    const label = lspManager.matchByPath(filePath);
+    if (!label) return '';
     await notifyLSPs(lspManager, filePath);
     const block = formatDiagnostics(lspManager.getAllDiagnostics(), filePath);
+    const failure = lspManager.failureReason(label);
+    if (!block && failure) {
+      return `\n\n<lsp_status>\nWarning: LSP diagnostics unavailable: ${failure}\n</lsp_status>`;
+    }
     return block ? `\n\n${block}` : '';
-  } catch {
-    return '';
+  } catch (err) {
+    const label = lspManager.matchByPath(filePath);
+    const reason = label ? lspManager.failureReason(label) : null;
+    const message = reason || (err instanceof Error ? err.message : String(err));
+    return message ? `\n\n<lsp_status>\nWarning: LSP diagnostics unavailable: ${message}\n</lsp_status>` : '';
   }
 }
 
