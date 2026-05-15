@@ -70,6 +70,7 @@ interface McpToolCallResult {
 interface McpTransport {
   send(msg: JsonRpcRequest | JsonRpcNotification): Promise<void>;
   onMessage(handler: (msg: JsonRpcResponse | JsonRpcNotification) => void): void;
+  onClose?(handler: (err: Error) => void): void;
   close(): Promise<void>;
 }
 
@@ -79,6 +80,7 @@ class StdioTransport implements McpTransport {
   private proc: ChildProcess;
   private buffer = '';
   private handler: ((msg: JsonRpcResponse | JsonRpcNotification) => void) | null = null;
+  private closeHandlers: Array<(err: Error) => void> = [];
 
   constructor(serverName: string, command: string, args: string[] = [], env?: Record<string, string>, cwd?: string) {
     this.proc = spawn(command, args, {
@@ -115,6 +117,16 @@ class StdioTransport implements McpTransport {
 
     this.proc.on('error', (err) => {
       process.stderr.write(`[mcp:${serverName}] process error: ${err.message}\n`);
+      const e = new Error(`process error: ${err.message}`);
+      for (const h of this.closeHandlers) h(e);
+    });
+
+    // Reject pending requests immediately when process dies instead of waiting for timeout.
+    this.proc.on('close', (code) => {
+      if (code !== 0 && code !== null) {
+        const err = new Error(`process exited with code ${code}`);
+        for (const h of this.closeHandlers) h(err);
+      }
     });
   }
 
@@ -127,6 +139,10 @@ class StdioTransport implements McpTransport {
 
   onMessage(handler: (msg: JsonRpcResponse | JsonRpcNotification) => void): void {
     this.handler = handler;
+  }
+
+  onClose(handler: (err: Error) => void): void {
+    this.closeHandlers.push(handler);
   }
 
   async close(): Promise<void> {
@@ -287,6 +303,93 @@ class SseTransport implements McpTransport {
   }
 }
 
+// ─── Streamable HTTP transport ─────────────────────────────────────────
+//
+// Modern remote MCP servers often expose a single HTTP endpoint (commonly
+// `/mcp`) that accepts JSON-RPC POSTs and returns either JSON or SSE-encoded
+// messages. vcode only needs request/response methods for discovery and tool
+// calls here, so we post each outbound message and route any response payload
+// back through the same onMessage handler used by stdio/SSE.
+
+class StreamableHttpTransport implements McpTransport {
+  private handler: ((msg: JsonRpcResponse | JsonRpcNotification) => void) | null = null;
+  private sessionId: string | null = null;
+
+  constructor(
+    private serverName: string,
+    private url: string,
+    private headers: Record<string, string> = {},
+  ) {}
+
+  async send(msg: JsonRpcRequest | JsonRpcNotification): Promise<void> {
+    const res = await fetch(this.url, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json, text/event-stream',
+        'Content-Type': 'application/json',
+        'MCP-Protocol-Version': PROTOCOL_VERSION,
+        ...(this.sessionId ? { 'Mcp-Session-Id': this.sessionId } : {}),
+        ...this.headers,
+      },
+      body: JSON.stringify(msg),
+    });
+
+    this.sessionId = res.headers.get('mcp-session-id') ?? this.sessionId;
+
+    if (res.status === 202 || res.status === 204) return;
+    if (!res.ok) {
+      throw new Error(`MCP HTTP POST ${res.status}: ${await res.text().catch(() => res.statusText)}`);
+    }
+
+    const contentType = res.headers.get('content-type') ?? '';
+    const body = await res.text();
+    if (!body.trim()) return;
+
+    if (contentType.includes('text/event-stream') || body.includes('\nevent:') || body.startsWith('event:')) {
+      this.parseSseBody(body);
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(body) as JsonRpcResponse | JsonRpcNotification | Array<JsonRpcResponse | JsonRpcNotification>;
+      for (const item of Array.isArray(parsed) ? parsed : [parsed]) {
+        this.handler?.(item);
+      }
+    } catch {
+      process.stderr.write(`[mcp:${this.serverName}] non-JSON HTTP response: ${body.slice(0, 200)}\n`);
+    }
+  }
+
+  onMessage(handler: (msg: JsonRpcResponse | JsonRpcNotification) => void): void {
+    this.handler = handler;
+  }
+
+  async close(): Promise<void> {
+    // Stateless per-request transport.
+  }
+
+  private parseSseBody(body: string): void {
+    for (const raw of body.split(/\n\n+/)) {
+      const lines = raw.split('\n');
+      const dataParts: string[] = [];
+      for (const line of lines) {
+        if (line.startsWith(':')) continue;
+        const colonIdx = line.indexOf(':');
+        const field = colonIdx >= 0 ? line.slice(0, colonIdx) : line;
+        const value = colonIdx >= 0 ? line.slice(colonIdx + 1).replace(/^ /, '') : '';
+        if (field === 'data') dataParts.push(value);
+      }
+      const data = dataParts.join('\n').trim();
+      if (!data) continue;
+      try {
+        this.handler?.(JSON.parse(data));
+      } catch {
+        process.stderr.write(`[mcp:${this.serverName}] non-JSON HTTP SSE data: ${data.slice(0, 200)}\n`);
+      }
+    }
+  }
+}
+
 // ─── Client ────────────────────────────────────────────────────────────
 
 export class McpClient {
@@ -298,12 +401,24 @@ export class McpClient {
   constructor(public readonly serverName: string, transport: McpTransport) {
     this.transport = transport;
     this.transport.onMessage((msg) => this.handleMessage(msg));
+    // Reject in-flight requests immediately if the process dies unexpectedly.
+    this.transport.onClose?.((err: Error) => {
+      if (this.pending.size === 0) return;
+      for (const [, p] of this.pending) {
+        clearTimeout(p.timer);
+        p.reject(err);
+      }
+      this.pending.clear();
+      this.connected = false;
+    });
   }
 
   static async connect(serverName: string, cfg: McpServerConfig): Promise<McpClient> {
     let transport: McpTransport;
     if ('command' in cfg) {
       transport = new StdioTransport(serverName, cfg.command, cfg.args, cfg.env, cfg.cwd);
+    } else if (cfg.transport === 'http') {
+      transport = new StreamableHttpTransport(serverName, cfg.url, cfg.headers);
     } else {
       transport = new SseTransport(serverName, cfg.url, cfg.headers);
     }

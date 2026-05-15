@@ -17,7 +17,7 @@ import { resolve, relative } from 'path';
 import { existsSync, readFileSync } from 'fs';
 
 export interface AgentEvent {
-  type: 'text' | 'tool_call' | 'tool_result' | 'model_switch' | 'thinking' | 'done' | 'error' | 'permission_denied' | 'reset_stream' | 'hook_output';
+  type: 'text' | 'tool_call' | 'tool_result' | 'model_switch' | 'thinking' | 'info' | 'done' | 'error' | 'permission_denied' | 'reset_stream' | 'hook_output';
   content?: string;
   name?: string;
   args?: Record<string, unknown>;
@@ -478,7 +478,7 @@ export class Agent {
         this.context.setSystemPrompt(visionModel);
         yield { type: 'model_switch', content: 'Switching to vision model for image analysis', from: visionModelSwitch, to: visionModel };
       } else if (!visionModel) {
-        yield { type: 'thinking', content: 'No vision model available — image will be described by path only' };
+        yield { type: 'info', content: 'No vision model available — image will be described by path only' };
       }
     }
 
@@ -531,16 +531,16 @@ export class Agent {
         },
       );
       if (compacted) {
-        yield { type: 'thinking', content: 'Compacted conversation to free context space' };
+        yield { type: 'info', content: 'Compacted conversation to free context space' };
         for (const r of retryEvents) {
-          yield { type: 'thinking', content: `Compacting harder (attempt ${r.attempt}) — projected ${r.projected} > ${Math.round(r.limit * 0.85)} cutoff` };
+          yield { type: 'info', content: `Compacting harder (attempt ${r.attempt}) — projected ${r.projected} > ${Math.round(r.limit * 0.85)} cutoff` };
         }
 
         // Recover saved plan after compaction so the model doesn't lose it
         const savedPlan = await this.loadSavedPlan();
         if (savedPlan) {
           this.context.addUser('[System: Context was compacted. Your implementation plan from .veepee/plan.md is below — immediately execute the next incomplete step without waiting for user input]\n\n' + savedPlan);
-          yield { type: 'thinking', content: 'Restored plan from .veepee/plan.md' };
+          yield { type: 'info', content: 'Restored plan from .veepee/plan.md' };
         }
       }
     }
@@ -572,7 +572,7 @@ export class Agent {
               const trimmed = msg.trim();
               if (!trimmed) continue;
               this.context.addUser(`[USER STEERING] ${trimmed}\n\n(The user changed direction mid-turn. Re-evaluate based on this new input before continuing.)`);
-              yield { type: 'thinking', content: `Steering: ${trimmed.slice(0, 80)}${trimmed.length > 80 ? '…' : ''}` };
+              yield { type: 'info', content: `Steering: ${trimmed.slice(0, 80)}${trimmed.length > 80 ? '…' : ''}` };
             }
           } catch {
             // Steering callback failures are non-fatal — keep running.
@@ -865,7 +865,7 @@ export class Agent {
         // Auto-save plans to disk so they survive compaction
         const planSaved = await this.autoSavePlan(fullContent);
         if (planSaved) {
-          yield { type: 'thinking', content: 'Plan auto-saved to .veepee/plan.md' };
+          yield { type: 'info', content: 'Plan auto-saved to .veepee/plan.md' };
         }
 
         yield* this._fireHooks('Stop', { cwd: process.cwd(), messageCount: this.context.messageCount() });
@@ -1080,15 +1080,15 @@ export class Agent {
           },
         );
         if (compacted) {
-          yield { type: 'thinking', content: 'Compacted conversation to free context space' };
+          yield { type: 'info', content: 'Compacted conversation to free context space' };
           for (const r of retryEvents) {
-            yield { type: 'thinking', content: `Compacting harder (attempt ${r.attempt}) — projected ${r.projected} > ${Math.round(r.limit * 0.85)} cutoff` };
+            yield { type: 'info', content: `Compacting harder (attempt ${r.attempt}) — projected ${r.projected} > ${Math.round(r.limit * 0.85)} cutoff` };
           }
 
           const savedPlan = await this.loadSavedPlan();
           if (savedPlan) {
             this.context.addUser('[System: Context was compacted. Your implementation plan from .veepee/plan.md is below — immediately execute the next incomplete step without waiting for user input]\n\n' + savedPlan);
-            yield { type: 'thinking', content: 'Restored plan from .veepee/plan.md' };
+            yield { type: 'info', content: 'Restored plan from .veepee/plan.md' };
           }
         }
       }

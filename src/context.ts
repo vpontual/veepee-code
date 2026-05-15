@@ -121,6 +121,46 @@ function loadLlamaMd(cwd: string): string {
   return lines.join('\n');
 }
 
+// ─── Pinky Operator Context Loader ───────────────────────────────────────────
+// Pinky is VP's cross-machine context: ~/Nextcloud/pinky/PINKY.md indexes the
+// fleet (which IP is "the VM", which is Palomino, etc.) and identity/*.md
+// captures profile, hard rules, and voice. Synced every 15min by
+// pinky-sync.timer; this loader just makes the files visible to the model.
+
+function loadPinky(): string {
+  const root = join(process.env.HOME || '~', 'Nextcloud', 'pinky');
+  if (!existsSync(root)) return '';
+
+  const files: Array<{ label: string; path: string }> = [
+    { label: 'PINKY.md (cross-machine index)', path: join(root, 'PINKY.md') },
+    { label: 'identity/profile.md', path: join(root, 'identity', 'profile.md') },
+    { label: 'identity/rules.md', path: join(root, 'identity', 'rules.md') },
+    { label: 'identity/voice.md', path: join(root, 'identity', 'voice.md') },
+  ];
+
+  const sections: string[] = [];
+  for (const { label, path } of files) {
+    if (!existsSync(path)) continue;
+    try {
+      const content = readFileSync(path, 'utf-8').trim();
+      if (content) sections.push(`### ${label}\n\n${content}`);
+    } catch { /* ignore */ }
+  }
+
+  if (sections.length === 0) return '';
+
+  return [
+    '\n## Operator Context (Pinky)',
+    '',
+    'Cross-machine identity, hard rules, and fleet map. Treat as eager-load context:',
+    'consult before assuming what "the VM", "the Pi", "the fleet" mean, or how the user',
+    'wants to be addressed and written to. Project instructions below may override.',
+    '',
+    sections.join('\n\n'),
+    '',
+  ].join('\n');
+}
+
 // ─── System Prompt ───────────────────────────────────────────────────────────
 // Synthesized from: Claude Code, OpenCode, Codex, Gemini CLI, RooCode, Llama Rider
 
@@ -130,7 +170,7 @@ const SYSTEM_PROMPT = `You are VEEPEE Code, a CLI coding assistant powered by lo
 - Date: {{DATE}} | Model: {{MODEL}} (cutoff: ~{{CUTOFF}}) | Mode: {{MODE}}
 - CWD: {{CWD}} | Platform: {{PLATFORM}}
 {{PROJECT_INFO}}
-{{PROJECT_TREE}}{{LLAMA_MD}}{{SHELL_HISTORY}}
+{{PROJECT_TREE}}{{PINKY}}{{LLAMA_MD}}{{SHELL_HISTORY}}
 ## Rules
 
 **Cutoff: {{CUTOFF}}.** For anything post-cutoff (versions, events, APIs, news), use web_search BEFORE answering. Never say "as of my last update."
@@ -355,6 +395,9 @@ export class ContextManager {
     // Include project tree on first build (like RooCode's environment_details)
     const projectTree = this.getProjectTreeCached();
 
+    // Load pinky operator context (cross-machine identity + fleet map)
+    const pinky = loadPinky();
+
     // Load VEEPEE.md project instructions (like CLAUDE.md, GEMINI.md, OpenCode.md, AGENTS.md)
     const llamaMd = loadLlamaMd(process.cwd());
 
@@ -372,6 +415,7 @@ export class ContextManager {
       .replace(/\{\{MODE\}\}/g, modeLabel)
       .replace(/\{\{PROJECT_INFO\}\}/g, projectInfoLine ? `- Project: ${projectInfoLine}` : '')
       .replace(/\{\{PROJECT_TREE\}\}/g, projectTree)
+      .replace(/\{\{PINKY\}\}/g, pinky)
       .replace(/\{\{LLAMA_MD\}\}/g, llamaMd)
       .replace(/\{\{CODING_GUIDANCE\}\}/g, codingGuidance)
       .replace(/\{\{SHELL_HISTORY\}\}/g, this.shellHistoryBlock)

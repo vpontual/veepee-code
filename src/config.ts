@@ -75,8 +75,9 @@ export type McpServerConfig =
       disabled?: boolean;
     }
   | {
-      /** SSE/HTTP transport — alternative for hosted servers. */
+      /** HTTP-based transport — `sse` by default for legacy configs. */
       url: string;
+      transport?: 'sse' | 'http';
       headers?: Record<string, string>;
       allow?: string[];
       disabled?: boolean;

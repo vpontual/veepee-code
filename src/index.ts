@@ -75,6 +75,13 @@ async function main() {
     process.exit(0);
   }
 
+  // ACP server mode — spawned by Zed/JetBrains as an ACP subprocess
+  if (process.argv[2] === 'acp') {
+    const { startAcpServer } = await import('./acp.js');
+    await startAcpServer();
+    return;
+  }
+
   // Run setup wizard on first launch or with --wizard flag
   const forceWizard = process.argv.includes('--wizard');
   if (forceWizard || needsWizard()) {
@@ -508,6 +515,9 @@ async function main() {
           case 'thinking':
             tui.showThinking(event.content || '...');
             break;
+          case 'info':
+            tui.showThinking(event.content || '');
+            break;
           case 'reset_stream':
             tui.resetStream();
             break;
@@ -922,6 +932,10 @@ async function main() {
 
           case 'thinking':
             tui.showThinking(event.content || '...');
+            break;
+
+          case 'info':
+            tui.showThinking(event.content || '');
             break;
 
           case 'reset_stream':
