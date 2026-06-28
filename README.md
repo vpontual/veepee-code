@@ -251,8 +251,8 @@ Configure fleet servers in `~/.veepee-code/vcode.config.json`:
 
 ```json
 "fleet": [
-  { "name": "dgx-spark", "url": "http://10.0.154.246:11434" },
-  { "name": "orin-agx",  "url": "http://10.0.154.245:11434" }
+  { "name": "dgx-spark", "url": "http://10.0.154.246:8000" },
+  { "name": "orin-agx",  "url": "http://10.0.154.245:8000" }
 ]
 ```
 

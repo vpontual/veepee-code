@@ -15,7 +15,7 @@
   "subagent": null,
   "_subagent_example": {
     "_comment": "Optional: constrain the `task` tool. allowedModels prevents typos triggering Ollama loads on fleets with pinned-per-server models. maxConcurrent overrides the default cap of 4. Both fields optional.",
-    "allowedModels": ["Qwen/Qwen3.6-35B-A3B-FP8", "gemma4:26b-a4b", "qwen3:8b"],
+    "allowedModels": ["Qwen/Qwen3.6-35B-A3B-FP8", "nvidia/Qwen3.6-35B-A3B-NVFP4", "gemma4:26b-a4b", "qwen3:8b", "qwen3:4b-nano2"],
     "maxConcurrent": 4
   },
   "remote": null,
@@ -26,8 +26,8 @@
     "allow": ["read_pdf", "vision", "browser", "download", "spawn_agent", "agentlens", "semantic_memory"]
   },
   "fleet": [
-    { "name": "dgx-spark", "url": "http://10.0.154.246:11434" },
-    { "name": "orin-agx",  "url": "http://10.0.154.245:11434" },
+    { "name": "dgx-spark", "url": "http://10.0.154.246:8000" },
+    { "name": "orin-agx",  "url": "http://10.0.154.245:8000" },
     { "name": "nano-1",    "url": "http://10.0.154.234:11434" }
   ]
 }

@@ -103,8 +103,8 @@ The repo ships an example config at `vcode.config.example.json`:
   "apiHost": "127.0.0.1",
   "searxngUrl": null,
   "fleet": [
-    { "name": "dgx-spark", "url": "http://10.0.154.246:11434" },
-    { "name": "orin-agx",  "url": "http://10.0.154.245:11434" },
+    { "name": "dgx-spark", "url": "http://10.0.154.246:8000" },
+    { "name": "orin-agx",  "url": "http://10.0.154.245:8000" },
     { "name": "nano-1",    "url": "http://10.0.154.234:11434" }
   ]
 }
@@ -123,8 +123,8 @@ A fuller config with the optional fields might look like:
 
 ```json
 {
-  "proxyUrl": "http://10.0.153.99:11434",
-  "dashboardUrl": "http://10.0.153.99:3334",
+  "proxyUrl": "https://llm-api.casarp.us",
+  "dashboardUrl": "https://llm.casarp.us",
   "model": null,
   "autoSwitch": true,
   "maxModelSize": 40,
@@ -154,8 +154,8 @@ A fuller config with the optional fields might look like:
   "modelStick": false,
   "shellHistoryContext": true,
   "fleet": [
-    { "name": "dgx-spark", "url": "http://10.0.154.246:11434" },
-    { "name": "orin-agx",  "url": "http://10.0.154.245:11434" }
+    { "name": "dgx-spark", "url": "http://10.0.154.246:8000" },
+    { "name": "orin-agx",  "url": "http://10.0.154.245:8000" }
   ]
 }
 ```

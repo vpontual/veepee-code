@@ -160,7 +160,7 @@ npx tsx scripts/extract-corpus.ts --limit 50
 npx tsx scripts/replay-corpus.ts \
   --candidate qwen3-coder:30b \
   --judge gpt-oss:120b \
-  --proxy http://10.0.153.99:11434
+  --proxy https://llm-api.casarp.us
 ```
 
 Rubric items (all binary pass/fail): usable output / real_tools / addressed_intent / no_fabrication. Exits non-zero if pass rate < 80%.
@@ -176,7 +176,7 @@ npx tsx scripts/extract-git-history.ts --limit 40
 # Replay against candidate — worktree checkout + typecheck verdict per commit
 npx tsx scripts/replay-git-history.ts \
   --candidate qwen3-coder:30b \
-  --proxy http://10.0.153.99:11434
+  --proxy https://llm-api.casarp.us
 ```
 
 Verdict per commit: `PASS` (typechecks after candidate edits) / `COMPILE` (edits don't typecheck) / `NOOP` (candidate didn't edit anything) / `ERROR` (timeout or crash). Exits non-zero if pass rate < 50%.

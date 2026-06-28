@@ -57,5 +57,5 @@ Edit `~/.veepee-code/benchmarks/roster.json`:
 
 - Benchmark: `npx tsx scripts/benchmark.ts --server dgx-spark --models qwen3-coder-next:latest,qwen3.5:35b,gemma4:26b --force`
 - Git-history corpus: `npx tsx scripts/extract-git-history.ts --limit 20`
-- Replay per model: `npx tsx scripts/replay-git-history.ts --candidate <model> --proxy http://10.0.154.246:11434 --limit 20`
+- Replay per model: `npx tsx scripts/replay-git-history.ts --candidate <model> --proxy http://10.0.154.246:8000 --limit 20`
 - Reports saved to `benchmarks/git-corpus/replay-<model>-2026-04-15.json` (gitignored; regenerable)
