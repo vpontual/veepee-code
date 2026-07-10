@@ -74,7 +74,7 @@ export class SubAgent {
   private maxTurns: number;
 
   constructor(config: Config, registry: ToolRegistry, roster: ModelRoster | null, role: LegacyRole) {
-    this.ollama = new Ollama({ host: config.proxyUrl });
+    this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
     this.registry = registry;
     this.role = role;
     this.maxTurns = role === 'search' ? 3 : 5;
@@ -235,7 +235,7 @@ class GenericSubAgent {
     allowedTools: string[] | null,
     maxTurns: number,
   ) {
-    this.ollama = new Ollama({ host: config.proxyUrl });
+    this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
     this.registry = registry;
     this.model = model;
     this.allowedTools = allowedTools ? new Set(allowedTools) : null;

@@ -198,7 +198,7 @@ export class RalphEngine {
 
   private async *streamModel(model: string, prompt: string): AsyncGenerator<string> {
     const { Ollama } = await import('ollama');
-    const ollama = new Ollama({ host: this.config.proxyUrl });
+    const ollama = new Ollama({ host: this.config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
     const stream = await ollama.chat({
       model,
       messages: [{ role: 'user', content: prompt }],

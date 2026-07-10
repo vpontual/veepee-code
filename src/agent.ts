@@ -98,7 +98,7 @@ export class Agent {
   private modelStick = false; // when true, mode switches don't change the model
 
   constructor(config: Config, registry: ToolRegistry, modelManager: ModelManager, permissions: PermissionManager) {
-    this.ollama = new Ollama({ host: config.proxyUrl });
+    this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
     this.context = new ContextManager();
     this.modelManager = modelManager;
     this.registry = registry;

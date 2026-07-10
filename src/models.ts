@@ -524,7 +524,7 @@ export class ModelManager {
     if (toProbe.length === 0) return { probed: 0, updated: [] };
 
     const { Ollama } = await import('ollama');
-    const ollama = new Ollama({ host: this.config.proxyUrl });
+    const ollama = new Ollama({ host: this.config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
 
     const PROBE_TOOL = {
       type: 'function' as const,

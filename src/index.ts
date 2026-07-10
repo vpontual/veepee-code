@@ -94,6 +94,9 @@ async function main() {
   // Check for -p / --print mode (non-interactive, output to stdout)
   const printIdx = process.argv.findIndex(a => a === '-p' || a === '--print');
   const printQuery = printIdx >= 0 ? process.argv[printIdx + 1] : null;
+  // Headless server mode: run the API + RC without the TUI (always-on hosting,
+  // e.g. on archman behind HAProxy; also the shared tool/skill engine for the mesh).
+  const serveMode = process.argv.includes('--serve') || process.argv.includes('--headless');
 
   // Discover models — if it fails, offer to run the setup wizard
   let modelManager = new ModelManager(config);
@@ -420,6 +423,20 @@ async function main() {
   // Wait a tick for port fallback to resolve, then use actual bound port
   await new Promise(r => setTimeout(r, 50));
   const actualApiPort = api.port;
+
+  // Headless: serve the API + RC without a TUI. Interactive permissions route to
+  // RC (phone) when a client is connected; the /v1 API path uses auto_allow;
+  // everything else denies by default (safe unattended). The HTTP server keeps
+  // the process alive, so we simply return here and skip TUI initialization.
+  if (serveMode) {
+    permissions.setPromptHandler(async () => 'deny');
+    if (rcInstallPermissions) rcInstallPermissions();
+    console.error(
+      `[VEEPEE Code] headless server: http://${apiHost}:${actualApiPort} · ` +
+      `model=${defaultModel} · RC=${rcEnabled ? 'on' : 'off'} · tools=${registry.count()}`,
+    );
+    return;
+  }
 
   // Initialize TUI
   profiler.mark('api server started');
@@ -2414,7 +2431,7 @@ async function handleCommand(
 
       // ── Phase 2: Ask model to produce VEEPEE.md content (no tools needed) ──
       const { Ollama } = await import('ollama');
-      const ollama = new Ollama({ host: config.proxyUrl });
+      const ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
 
       const synthesisPrompt = `Based on the project data below, write the content of a VEEPEE.md file (~150 lines). This file is loaded into an AI coding assistant's system prompt, so it must be specific and actionable.
 

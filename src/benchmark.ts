@@ -555,7 +555,7 @@ export class Benchmarker {
     private proxyUrl: string,
     fleet: Array<{ name: string; url: string }> = [],
   ) {
-    this.ollama = new Ollama({ host: proxyUrl });
+    this.ollama = new Ollama({ host: proxyUrl, headers: { "x-ollama-source": "vcode" } });
     this.resultsDir = resolve(process.env.HOME || '~', '.veepee-code', 'benchmarks');
     this.fleet = fleet;
   }
@@ -1039,7 +1039,7 @@ export class Benchmarker {
       // ── Fleet mode: hit each server directly, key results as model@server ──
       for (const server of this.fleet) {
         options.onStatusUpdate?.(`\n── Server: ${server.name} (${server.url}) ──`);
-        const serverOllama = new Ollama({ host: server.url });
+        const serverOllama = new Ollama({ host: server.url, headers: { "x-ollama-source": "vcode" } });
 
         // Fetch model list directly from this server
         let serverModelNames: string[];

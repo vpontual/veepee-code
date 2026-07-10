@@ -59,7 +59,7 @@ export class MoeEngine {
   private models: MoeModel[] = [];
 
   constructor(config: Config, roster: ModelRoster | null) {
-    this.ollama = new Ollama({ host: config.proxyUrl });
+    this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
 
     // Build the 3-model panel from roster or defaults
     // Each should ideally route to different hardware via the proxy
