@@ -133,6 +133,8 @@ Key settings:
 | Setting | Description |
 |---------|-------------|
 | `proxyUrl` | Ollama API endpoint |
+| `llmBackend` | `"ollama"` (default, `/api/chat` via `proxyUrl`) or `"openai"` (direct to a vLLM `/v1` server) |
+| `openaiBaseUrl` | Base URL for the `openai` backend (e.g. `http://host:8000`); `/v1` auto-appended |
 | `model` | Force a specific model (null = auto) |
 | `lockModel` | Pin to one model, disable discovery/auto-switch (set via `/setup wizard model` or edit directly) |
 | `reviewModel` | Different-family model for `/review <prompt>` — one-turn cross-family second opinion. Null = `/review` prints a hint to set it. |

@@ -685,7 +685,10 @@ Modified: ${renderList(writes)}
   }
 
   addToolResult(toolName: string, result: string, filePath?: string): void {
-    this.messages.push({ role: 'tool', content: result });
+    // `tool_name` lets the openai /v1 adapter match this result to the right
+    // assistant tool_call id by name (results can be stored out of call order).
+    // The Ollama path ignores the extra field.
+    this.messages.push({ role: 'tool', content: result, tool_name: toolName } as Message);
     if (toolName === 'read_file' && filePath) {
       this.filesRead.add(filePath);
     }

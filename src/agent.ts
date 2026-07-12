@@ -1,6 +1,7 @@
 import { Ollama } from 'ollama';
 import type { Message, ToolCall } from 'ollama';
 import type { Config } from './config.js';
+import { OpenAIChatClient } from './openai-adapter.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { PermissionManager } from './permissions.js';
 import type { BenchmarkResult } from './benchmark.js';
@@ -96,9 +97,19 @@ export class Agent {
   private abortController: AbortController | null = null;
   private effort: EffortLevel = 'medium';
   private modelStick = false; // when true, mode switches don't change the model
+  private openaiBackend = false; // true when using the OpenAIChatClient adapter
 
   constructor(config: Config, registry: ToolRegistry, modelManager: ModelManager, permissions: PermissionManager) {
-    this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
+    // Backend transport: "openai" talks straight to a vLLM /v1 server
+    // (bypassing the llm-gateway + Ollama format); "ollama" (default) uses the
+    // gateway. The adapter is duck-compatible with the Ollama `.chat()` surface
+    // the agent loop consumes, so it's cast to the same field type.
+    if (config.llmBackend === 'openai' && config.openaiBaseUrl) {
+      this.ollama = new OpenAIChatClient(config.openaiBaseUrl, config.openaiApiKey ?? undefined) as unknown as Ollama;
+      this.openaiBackend = true;
+    } else {
+      this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
+    }
     this.context = new ContextManager();
     this.modelManager = modelManager;
     this.registry = registry;
@@ -670,6 +681,9 @@ export class Agent {
               stream: true,
               think: useThinking,
               keep_alive: '30m',
+              // Only the openai adapter consumes `signal`; never send it to the
+              // Ollama client (it would serialize into the request body).
+              ...(this.openaiBackend && this.abortController ? { signal: this.abortController.signal } : {}),
               options: {
                 ...samplingPreset,
                 ...(numCtx ? { num_ctx: numCtx } : {}),

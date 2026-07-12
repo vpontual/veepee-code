@@ -4,6 +4,17 @@ import type { LspServerConfig } from './lsp/config.js';
 
 export interface Config {
   proxyUrl: string;
+  /** LLM backend transport. "ollama" (default) = Ollama-format `/api/chat`
+   *  via `proxyUrl` (the llm-gateway). "openai" = talk DIRECTLY to a
+   *  vLLM/OpenAI-compatible server's `/v1/chat/completions` at `openaiBaseUrl`,
+   *  bypassing the gateway. Opt-in; default preserves current behavior. */
+  llmBackend: 'ollama' | 'openai';
+  /** Base URL for the openai backend (e.g. "http://10.0.154.246:8000" or
+   *  ".../v1"). Only used when llmBackend === "openai". */
+  openaiBaseUrl: string | null;
+  /** Bearer token for the openai backend, if it requires one (vLLM usually
+   *  does not). Only used when llmBackend === "openai". */
+  openaiApiKey: string | null;
   dashboardUrl: string;
   model: string | null;
   lockModel: string | null;
@@ -113,6 +124,9 @@ export interface HookEntry {
 
 export interface ConfigFile {
   proxyUrl?: string;
+  llmBackend?: 'ollama' | 'openai';
+  openaiBaseUrl?: string | null;
+  openaiApiKey?: string | null;
   dashboardUrl?: string;
   model?: string | null;
   lockModel?: string | null;
@@ -144,6 +158,9 @@ export interface ConfigFile {
 
 const DEFAULTS: Config = {
   proxyUrl: 'http://localhost:11434',
+  llmBackend: 'ollama',
+  openaiBaseUrl: null,
+  openaiApiKey: null,
   dashboardUrl: '',
   model: null,
   lockModel: null,
@@ -377,6 +394,9 @@ export function loadConfig(configPath?: string): Config {
 
   return {
     proxyUrl: merged.proxyUrl ?? DEFAULTS.proxyUrl,
+    llmBackend: merged.llmBackend ?? DEFAULTS.llmBackend,
+    openaiBaseUrl: merged.openaiBaseUrl ?? DEFAULTS.openaiBaseUrl,
+    openaiApiKey: merged.openaiApiKey ?? DEFAULTS.openaiApiKey,
     dashboardUrl: merged.dashboardUrl ?? DEFAULTS.dashboardUrl,
     model: merged.model ?? DEFAULTS.model,
     lockModel: merged.lockModel ?? DEFAULTS.lockModel,

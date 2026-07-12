@@ -30,6 +30,18 @@ All fields below live in `~/.veepee-code/vcode.config.json`. Run `vcode --wizard
 | `dashboardUrl` | `""` | URL of the Ollama Fleet Manager dashboard. Used for enhanced model discovery (loaded models, capabilities, server status). Optional. |
 | `fleet` | `[]` | Array of `{name, url}` objects pointing to individual Ollama servers. When non-empty, the benchmark hits each server directly instead of going through the proxy. Used by the `/benchmark` command and `scripts/benchmark.ts`. |
 
+### LLM Backend
+
+By default VEEPEE Code speaks the **Ollama** wire format (`/api/chat`) to `proxyUrl` (typically the llm-gateway). Set `llmBackend` to `"openai"` to instead talk **directly** to a vLLM (or any OpenAI-compatible) server's documented `/v1/chat/completions` route, bypassing the gateway and the Ollama translation entirely.
+
+| Field | Default | Description |
+|----------|---------|-------------|
+| `llmBackend` | `"ollama"` | Transport for the main agent loop. `"ollama"` → Ollama `/api/chat` via `proxyUrl`. `"openai"` → OpenAI `/v1/chat/completions` at `openaiBaseUrl`. Opt-in; the default preserves existing behavior. |
+| `openaiBaseUrl` | `null` | Base URL of the OpenAI-compatible server, e.g. `"http://10.0.154.246:8000"` (a bare host is fine — `/v1` is appended automatically; `".../v1"` is also accepted). Required when `llmBackend` is `"openai"`. Pair with `lockModel` set to a model the server actually serves. |
+| `openaiApiKey` | `null` | Bearer token for the OpenAI backend, if it requires one. vLLM usually does not — leave `null`. |
+
+When `llmBackend` is `"openai"`: thinking is toggled via `chat_template_kwargs.enable_thinking`; tool-call `arguments` and the message history are translated to/from the strict `/v1` shape (synthesized `id`/`tool_call_id`, string-encoded arguments); and streaming requests are aborted on interrupt so they are never orphaned. The subagent (`task` tool) and model-discovery paths still use `proxyUrl`, so keep it valid as a fallback.
+
 ### Model Preferences
 
 | Field | Default | Description |
