@@ -279,7 +279,14 @@ export class ContextManager {
   private systemPrompt: string = '';
   private mode: AgentMode = 'act';
   private currentModel = '';
-  private contextLimit = 32768; // model's context window in tokens
+  // Compaction window (tokens). This is when vcode starts summarizing away context — NOT
+  // a model limit. The DGX serves the 35B at max-model-len 262144 and its KV cache is
+  // preallocated for that regardless, so a bigger window costs only prefill latency on
+  // large contexts, never DGX stability. 32K made vcode compact real repos away almost
+  // immediately (the daily-driver bottleneck); 128K holds multi-file work while leaving 2×
+  // headroom under the 262K hard limit for the compaction math. Models with a benchmarked
+  // optimalContextSize still override this via setContextLimit().
+  private contextLimit = 131072; // daily-driver window; DGX serves up to 262144
   private lastPromptTokens = 0; // actual prompt tokens from last Ollama response
   private filesRead = new Set<string>();
   private filesWritten = new Set<string>();
