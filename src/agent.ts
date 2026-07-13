@@ -82,6 +82,31 @@ export type AgentMode = 'act' | 'plan' | 'chat';
 export type EffortLevel = 'low' | 'medium' | 'high';
 export type PermissionMode = 'interactive' | 'auto_allow';
 
+/** Minimum narration length (chars) that counts as "analyzed instead of acting". */
+export const FORCE_ACT_MIN_CHARS = 200;
+
+/** Injected when the model narrates in ACT mode without calling any tool (Tier 3 #1). */
+export const FORCE_ACT_NUDGE =
+  '[SYSTEM] You produced analysis but called no tool — and this is an ACT task, so nothing ' +
+  'has changed yet. Stop narrating and take your first concrete action NOW: call a tool ' +
+  '(read_file / edit_file / bash / grep / …) based on your best current hypothesis. If the task ' +
+  'is genuinely already complete, or truly needs no tools, say so explicitly in one short sentence instead.';
+
+/** Pure decision: should the loop force one more ACT turn instead of accepting a no-tool-call
+ *  completion? The DGX (and Qwen3.6 on vLLM) reason WITHOUT <think> tags, so on open-ended
+ *  tasks the model narrates to the token cap and stops having changed nothing — zero tool
+ *  calls, byte-identical files. This catches that: fire only in act mode, only when nothing
+ *  was done yet this message, only once, and only for a substantive narration (not a terse
+ *  reply). The nudge's escape hatch caps a false positive at one extra turn. */
+export function shouldForceAct(opts: {
+  mode: AgentMode; hasActedThisMessage: boolean; alreadyForced: boolean; content: string;
+}): boolean {
+  if (opts.mode !== 'act') return false;
+  if (opts.hasActedThisMessage) return false;
+  if (opts.alreadyForced) return false;
+  return opts.content.trim().length >= FORCE_ACT_MIN_CHARS;
+}
+
 export class Agent {
   private ollama: Ollama;
   private context: ContextManager;
@@ -561,6 +586,10 @@ export class Agent {
     const recentSteps: SignedStep[] = [];
     const MAX_TURNS_WITHOUT_OUTPUT = 15;
     let turnsWithoutUserContent = 0;
+    // Tier 3 #1: force-act guard — track whether the model has taken ANY action this
+    // message, and whether we've already nudged it to stop narrating and act.
+    let hasActedThisMessage = false;
+    let forcedActOnce = false;
 
     for (let turn = 0; ; turn++) {
       // Check if model should switch (only after the first turn of a message)
@@ -873,6 +902,15 @@ export class Agent {
 
       // If no tool calls, the turn is complete
       if (toolCalls.length === 0) {
+        // Tier 3 #1: in ACT mode, if the model narrated without ever calling a tool, it
+        // analyzed instead of acting (the no-<think> budget leak). Force one more turn to
+        // act — once — rather than "completing" with nothing done.
+        if (shouldForceAct({ mode: this.mode, hasActedThisMessage, alreadyForced: forcedActOnce, content: fullContent })) {
+          forcedActOnce = true;
+          this.context.addUser(FORCE_ACT_NUDGE);
+          yield { type: 'info', content: 'Nudged: act instead of narrate' };
+          continue;
+        }
         // Save knowledge state to disk (non-blocking)
         this.context.getKnowledgeState().save().catch(() => {});
 
@@ -901,6 +939,10 @@ export class Agent {
         };
         return;
       }
+
+      // Reaching here means the model called a tool -> it took an action this message,
+      // so the force-act guard should never fire on a later no-tool-call summary turn.
+      hasActedThisMessage = true;
 
       // Execute tool calls — parallelize independent read-only calls
       const READ_ONLY_TOOLS = new Set(['read_file', 'glob', 'grep', 'list_files', 'system_info', 'web_search', 'web_fetch']);

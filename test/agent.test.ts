@@ -323,3 +323,39 @@ describe('Agent <think>-tag stream processing', () => {
     expect(afterTexts).toEqual([]);
   });
 });
+
+// --- Tier 3 #1: force-act guard (shouldForceAct) ---
+import { shouldForceAct, FORCE_ACT_MIN_CHARS } from '../src/agent.js';
+
+describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', () => {
+  const long = 'x'.repeat(FORCE_ACT_MIN_CHARS);
+  const base = { mode: 'act' as const, hasActedThisMessage: false, alreadyForced: false, content: long };
+
+  it('fires: act mode, nothing done, not yet forced, substantive narration', () => {
+    expect(shouldForceAct(base)).toBe(true);
+  });
+  it('does NOT fire when the model already took an action this message', () => {
+    expect(shouldForceAct({ ...base, hasActedThisMessage: true })).toBe(false);
+  });
+  it('does NOT fire twice (already forced)', () => {
+    expect(shouldForceAct({ ...base, alreadyForced: true })).toBe(false);
+  });
+  it('does NOT fire in plan mode', () => {
+    expect(shouldForceAct({ ...base, mode: 'plan' })).toBe(false);
+  });
+  it('does NOT fire in chat mode', () => {
+    expect(shouldForceAct({ ...base, mode: 'chat' })).toBe(false);
+  });
+  it('does NOT fire on a terse reply (below the char threshold)', () => {
+    expect(shouldForceAct({ ...base, content: 'x'.repeat(FORCE_ACT_MIN_CHARS - 1) })).toBe(false);
+  });
+  it('fires exactly at the threshold boundary', () => {
+    expect(shouldForceAct({ ...base, content: 'x'.repeat(FORCE_ACT_MIN_CHARS) })).toBe(true);
+  });
+  it('does NOT fire on whitespace-padded short content (trims first)', () => {
+    expect(shouldForceAct({ ...base, content: '   hi   ' + ' '.repeat(FORCE_ACT_MIN_CHARS) })).toBe(false);
+  });
+  it('does NOT fire on empty content', () => {
+    expect(shouldForceAct({ ...base, content: '' })).toBe(false);
+  });
+});
