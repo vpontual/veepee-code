@@ -42,6 +42,7 @@ import { registerLspTools } from './tools/lsp.js';
 import { LspManager } from './lsp/manager.js';
 
 import { registerWebTools } from './tools/web.js';
+import { buildDeepResearchTool } from './deep-research.js';
 import { registerDevOpsTools } from './tools/devops.js';
 import { discoverRemoteTools } from './tools/remote.js';
 import { connectAndDiscover as connectMcpServers, closeAll as closeMcpClients, type McpClient } from './mcp.js';
@@ -158,6 +159,7 @@ async function main() {
   const lspManager = new LspManager(config.lsp);
   for (const tool of registerCodingTools(ignoreManager, fileTracker, lspManager)) registry.register(tool);
   for (const tool of registerWebTools(config)) registry.register(tool);
+  registry.register(buildDeepResearchTool(config));
   for (const tool of registerDevOpsTools()) registry.register(tool);
   for (const tool of registerLspTools(lspManager)) registry.register(tool);
   profiler.mark('tools registered');
