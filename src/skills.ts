@@ -40,6 +40,14 @@ export interface Skill {
   content: string;
   source: 'global' | 'project';
   path: string;
+  /** Toolset-conditional gating (frontmatter `requires-tools` /
+   *  `fallback-for-tools`). `requiresTools`: hide from the index unless ALL of
+   *  these tools are registered on this node. `fallbackForTools`: hide when ANY
+   *  is registered (a fallback skill that yields to a better native tool). Lets
+   *  a skill that says "use the browser MCP" not surface on a node without it,
+   *  and a curl-fallback disappear where the native tool exists. */
+  requiresTools?: string[];
+  fallbackForTools?: string[];
 }
 
 // ─── Frontmatter parser ────────────────────────────────────────────────
@@ -119,6 +127,8 @@ function loadFromDir(dir: string, source: 'global' | 'project'): Skill[] {
       tags: parseList(meta.tags),
       model: meta.model,
       allowedTools: parseList(meta['allowed-tools']),
+      requiresTools: parseList(meta['requires-tools']),
+      fallbackForTools: parseList(meta['fallback-for-tools']),
       content: body.trim(),
       source,
       path,
@@ -145,8 +155,15 @@ export function loadSkills(cwd: string = process.cwd()): Skill[] {
 // loaded into the system prompt. That's the whole point: cheap menu, paid
 // content only when used.
 
-export function buildSkillInvokeTool(cwd: string = process.cwd()): ToolDef | null {
-  const skills = loadSkills(cwd);
+export function buildSkillInvokeTool(cwd: string = process.cwd(), activeTools: string[] = []): ToolDef | null {
+  const active = new Set(activeTools);
+  // Toolset-conditional gating: a skill needing tools this node lacks, or a
+  // fallback superseded by an available native tool, is kept out of the index.
+  const skills = loadSkills(cwd).filter((s) => {
+    if (s.requiresTools && s.requiresTools.some((t) => !active.has(t))) return false;
+    if (s.fallbackForTools && s.fallbackForTools.some((t) => active.has(t))) return false;
+    return true;
+  });
   if (skills.length === 0) return null;
 
   // Index fits in the tool description. Each line is short (~50-80 chars).

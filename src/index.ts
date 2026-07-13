@@ -43,6 +43,7 @@ import { LspManager } from './lsp/manager.js';
 
 import { registerWebTools } from './tools/web.js';
 import { buildDeepResearchTool } from './deep-research.js';
+import { buildAskUserTool } from './tools/interaction.js';
 import { registerDevOpsTools } from './tools/devops.js';
 import { discoverRemoteTools } from './tools/remote.js';
 import { connectAndDiscover as connectMcpServers, closeAll as closeMcpClients, type McpClient } from './mcp.js';
@@ -160,6 +161,7 @@ async function main() {
   for (const tool of registerCodingTools(ignoreManager, fileTracker, lspManager)) registry.register(tool);
   for (const tool of registerWebTools(config)) registry.register(tool);
   registry.register(buildDeepResearchTool(config));
+  registry.register(buildAskUserTool());
   for (const tool of registerDevOpsTools()) registry.register(tool);
   for (const tool of registerLspTools(lspManager)) registry.register(tool);
   profiler.mark('tools registered');
@@ -207,7 +209,7 @@ async function main() {
   // Skills — register the skill_invoke meta-tool ONLY when at least one
   // skill is on disk. Skill bodies stay on disk; only the index is in the
   // tool description. See src/skills.ts for the lazy-load rationale.
-  const skillTool = buildSkillInvokeTool();
+  const skillTool = buildSkillInvokeTool(process.cwd(), registry.names());
   if (skillTool) {
     registry.register(skillTool);
     // Count is not exposed by buildSkillInvokeTool — peek via the loader.
