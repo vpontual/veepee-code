@@ -2,6 +2,56 @@ import type { Tool as OllamaTool } from 'ollama';
 import type { ToolDef, ToolResult, ToolSource } from './types.js';
 import { toOllamaTool } from './types.js';
 
+/** Unwrap ZodOptional/Default/Nullable/Effects to the base type name (e.g. 'ZodBoolean'). */
+function unwrapType(field: unknown): string | undefined {
+  let f = field as { _def?: { typeName?: string; innerType?: unknown; schema?: unknown } } | undefined;
+  const seen = new Set<unknown>();
+  while (f?._def && !seen.has(f)) {
+    seen.add(f);
+    const tn = f._def.typeName;
+    if (tn === 'ZodOptional' || tn === 'ZodNullable' || tn === 'ZodDefault') { f = f._def.innerType as typeof f; continue; }
+    if (tn === 'ZodEffects') { f = f._def.schema as typeof f; continue; }
+    return tn;
+  }
+  return f?._def?.typeName;
+}
+
+/** Coerce the model's common type mistakes (booleans/numbers emitted as strings —
+ *  replace_all: "true", limit: "5") to the type the schema expects, BEFORE validation.
+ *  Only touches a field whose base type is boolean/number, so it never rewrites a field
+ *  that legitimately wants the string. Turns a hard-reject into a working tool call. */
+function coerceArgs(schema: unknown, args: Record<string, unknown>): Record<string, unknown> {
+  const shape = (schema as { shape?: Record<string, unknown> })?.shape;
+  if (!shape || typeof args !== 'object' || args === null) return args;
+  const out: Record<string, unknown> = { ...args };
+  for (const [key, val] of Object.entries(out)) {
+    const tn = unwrapType(shape[key]);
+    if (tn === 'ZodBoolean' && typeof val === 'string') {
+      const s = val.trim().toLowerCase();
+      if (s === 'true') out[key] = true;
+      else if (s === 'false') out[key] = false;
+    } else if (tn === 'ZodNumber' && typeof val === 'string' && val.trim() !== '' && Number.isFinite(Number(val))) {
+      out[key] = Number(val);
+    }
+  }
+  return out;
+}
+
+/** A validation error the model can actually act on: which field, what was wrong, what it
+ *  sent, and an explicit instruction to retry — instead of a bare zod message it hallucinates
+ *  a cause for and abandons the tool over. */
+function describeArgError(name: string, args: Record<string, unknown>,
+    error: { issues: Array<{ path: (string | number)[]; message: string }> }): string {
+  const parts = error.issues.map(i => {
+    const key = i.path[0];
+    const path = i.path.join('.') || '(root)';
+    const got = key !== undefined ? args[key as string] : undefined;
+    const gotDesc = got === undefined ? 'missing' : `${typeof got} ${JSON.stringify(got)?.slice(0, 40)}`;
+    return `'${path}': ${i.message} (got ${gotDesc})`;
+  });
+  return `Invalid arguments for ${name}: ${parts.join('; ')}. Fix the argument types and call ${name} again.`;
+}
+
 export class ToolRegistry {
   private tools = new Map<string, ToolDef>();
 
@@ -96,13 +146,10 @@ export class ToolRegistry {
     }
 
     try {
-      const parsed = tool.schema.safeParse(args);
+      const coerced = coerceArgs(tool.schema, args);
+      const parsed = tool.schema.safeParse(coerced);
       if (!parsed.success) {
-        return {
-          success: false,
-          output: '',
-          error: `Invalid arguments for ${name}: ${parsed.error.issues.map(i => i.message).join(', ')}`,
-        };
+        return { success: false, output: '', error: describeArgError(name, coerced, parsed.error) };
       }
       return await tool.execute(parsed.data as Record<string, unknown>);
     } catch (err) {

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, utimesSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { registerCodingTools } from '../src/tools/coding.js';
 import { toOllamaTool } from '../src/tools/types.js';
@@ -396,5 +397,47 @@ describe('multi_edit', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('found 2 times');
     expect(readFileSync(p, 'utf-8')).toBe('foo\nfoo\n');
+  });
+});
+
+describe('ToolRegistry arg coercion (Tier 3 #2)', () => {
+  function makeRegistry() {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'toggle',
+      description: 'test tool with a bool + number',
+      schema: z.object({
+        flag: z.boolean().optional().default(false),
+        count: z.number().optional(),
+        label: z.string(),
+      }),
+      execute: async (p) => ({ success: true, output: JSON.stringify(p) }),
+    });
+    return registry;
+  }
+
+  it('coerces stringified booleans the model commonly emits', async () => {
+    const r = await makeRegistry().execute('toggle', { flag: 'true', label: 'x' });
+    expect(r.success).toBe(true);
+    expect(JSON.parse(r.output)).toMatchObject({ flag: true, label: 'x' });
+  });
+
+  it('coerces stringified numbers', async () => {
+    const r = await makeRegistry().execute('toggle', { count: '5', label: 'x' });
+    expect(r.success).toBe(true);
+    expect(JSON.parse(r.output)).toMatchObject({ count: 5 });
+  });
+
+  it('does NOT rewrite a field that legitimately wants a string', async () => {
+    const r = await makeRegistry().execute('toggle', { label: 'true' });
+    expect(r.success).toBe(true);
+    expect(JSON.parse(r.output)).toMatchObject({ label: 'true' });
+  });
+
+  it('returns an actionable, retry-instructing error on genuinely bad args', async () => {
+    const r = await makeRegistry().execute('toggle', { flag: 'maybe', label: 42 });
+    expect(r.success).toBe(false);
+    expect(r.error).toContain("call toggle again");
+    expect(r.error).toMatch(/'label'/);
   });
 });
