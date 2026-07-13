@@ -782,6 +782,12 @@ export class Agent {
             return;
           }
 
+          // Gateway-split reasoning arrives in the Ollama `thinking` field: the DGX
+          // runs reasoning-parser OFF, so llm-gateway splits `[trace]</think>[answer]`
+          // and emits the trace here. Render it collapsed instead of leaking inline.
+          const think = (chunk.message as { thinking?: string }).thinking;
+          if (think) yield { type: 'thinking', content: think };
+
           if (chunk.message.content) {
             const text = chunk.message.content;
             fullContent += text;
