@@ -107,6 +107,28 @@ export function shouldForceAct(opts: {
   return opts.content.trim().length >= FORCE_ACT_MIN_CHARS;
 }
 
+/** Tools that change code (leave the workspace in a state that ought to be verified). */
+export const CODE_MUTATION_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit']);
+
+/** Injected when the model finishes a code change without ever running it (Tier: daily-driver #1).
+ *  This is the self-repair trigger — it drives generate → run → fix. */
+export const FORCE_VERIFY_NUDGE =
+  '[SYSTEM] You changed code but never ran it — so you do not actually know it works, and vcode ' +
+  'confidently shipping a broken edit is exactly the failure to avoid. Before finishing: run the ' +
+  'project tests, a build/typecheck, or execute the code (via bash), read the output, and FIX ' +
+  'anything that fails. If there is genuinely no way to run it here, say what you would run and why ' +
+  'you cannot, in one sentence.';
+
+/** Pure decision: force a verify-and-fix turn instead of accepting completion. Fires in act
+ *  mode when code was changed and nothing has been run since the last edit, at most once. This
+ *  is the harness half of self-repair; the model figures out HOW to verify (it knows the project's
+ *  test/build command better than a hardcoded guess). Escape hatch caps a false positive at one turn. */
+export function shouldForceVerify(opts: {
+  mode: AgentMode; codeChangedUnverified: boolean; alreadyForced: boolean;
+}): boolean {
+  return opts.mode === 'act' && opts.codeChangedUnverified && !opts.alreadyForced;
+}
+
 export class Agent {
   private ollama: Ollama;
   private context: ContextManager;
@@ -590,6 +612,10 @@ export class Agent {
     // message, and whether we've already nudged it to stop narrating and act.
     let hasActedThisMessage = false;
     let forcedActOnce = false;
+    // Daily-driver #1 (self-repair): true once code is edited, cleared when the model runs
+    // something (bash) — so we can force a verify-and-fix turn if it finishes without running it.
+    let codeChangedUnverified = false;
+    let forcedVerifyOnce = false;
 
     for (let turn = 0; ; turn++) {
       // Check if model should switch (only after the first turn of a message)
@@ -911,6 +937,14 @@ export class Agent {
           yield { type: 'info', content: 'Nudged: act instead of narrate' };
           continue;
         }
+        // Daily-driver #1 (self-repair): changed code but never ran it -> force a
+        // verify-and-fix turn rather than shipping an unverified edit.
+        if (shouldForceVerify({ mode: this.mode, codeChangedUnverified, alreadyForced: forcedVerifyOnce })) {
+          forcedVerifyOnce = true;
+          this.context.addUser(FORCE_VERIFY_NUDGE);
+          yield { type: 'info', content: 'Nudged: verify your code change before finishing' };
+          continue;
+        }
         // Save knowledge state to disk (non-blocking)
         this.context.getKnowledgeState().save().catch(() => {});
 
@@ -943,6 +977,14 @@ export class Agent {
       // Reaching here means the model called a tool -> it took an action this message,
       // so the force-act guard should never fire on a later no-tool-call summary turn.
       hasActedThisMessage = true;
+      // Self-repair tracking: a code edit leaves work unverified; a bash run (tests/build/
+      // execute) clears it. Walk this turn's calls in order so edit→bash = verified,
+      // bash→edit = still unverified.
+      for (const call of toolCalls) {
+        const n = call.function.name;
+        if (CODE_MUTATION_TOOLS.has(n)) codeChangedUnverified = true;
+        else if (n === 'bash') codeChangedUnverified = false;
+      }
 
       // Execute tool calls — parallelize independent read-only calls
       const READ_ONLY_TOOLS = new Set(['read_file', 'glob', 'grep', 'list_files', 'system_info', 'web_search', 'web_fetch']);

@@ -325,7 +325,7 @@ describe('Agent <think>-tag stream processing', () => {
 });
 
 // --- Tier 3 #1: force-act guard (shouldForceAct) ---
-import { shouldForceAct, FORCE_ACT_MIN_CHARS } from '../src/agent.js';
+import { shouldForceAct, FORCE_ACT_MIN_CHARS, shouldForceVerify, CODE_MUTATION_TOOLS } from '../src/agent.js';
 
 describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', () => {
   const long = 'x'.repeat(FORCE_ACT_MIN_CHARS);
@@ -357,5 +357,30 @@ describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', ()
   });
   it('does NOT fire on empty content', () => {
     expect(shouldForceAct({ ...base, content: '' })).toBe(false);
+  });
+});
+
+// --- Daily-driver #1: self-repair force-verify guard (shouldForceVerify) ---
+describe('shouldForceVerify — force verify-and-fix after an unverified code change', () => {
+  const base = { mode: 'act' as const, codeChangedUnverified: true, alreadyForced: false };
+
+  it('fires: act mode, code changed and not yet run, not already forced', () => {
+    expect(shouldForceVerify(base)).toBe(true);
+  });
+  it('does NOT fire when nothing unverified (no edit, or a bash run cleared it)', () => {
+    expect(shouldForceVerify({ ...base, codeChangedUnverified: false })).toBe(false);
+  });
+  it('does NOT fire twice (already forced)', () => {
+    expect(shouldForceVerify({ ...base, alreadyForced: true })).toBe(false);
+  });
+  it('does NOT fire in plan mode', () => {
+    expect(shouldForceVerify({ ...base, mode: 'plan' })).toBe(false);
+  });
+  it('does NOT fire in chat mode', () => {
+    expect(shouldForceVerify({ ...base, mode: 'chat' })).toBe(false);
+  });
+  it('treats write/edit/multi_edit as code mutations (and not read_file/bash/grep)', () => {
+    for (const t of ['write_file', 'edit_file', 'multi_edit']) expect(CODE_MUTATION_TOOLS.has(t)).toBe(true);
+    for (const t of ['read_file', 'bash', 'grep', 'glob', 'git']) expect(CODE_MUTATION_TOOLS.has(t)).toBe(false);
   });
 });
