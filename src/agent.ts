@@ -1207,9 +1207,16 @@ export class Agent {
   async runSync(
     userMessage: string,
     options?: { permissionMode?: PermissionMode; allowedTools?: string[] | null },
-  ): Promise<{ content: string; toolCalls: Array<{ name: string; args: Record<string, unknown>; result: string }> }> {
+  ): Promise<{
+    content: string;
+    toolCalls: Array<{ name: string; args: Record<string, unknown>; result: string; success: boolean }>;
+    errors: string[];
+    stuck: boolean;
+  }> {
     let content = '';
-    const toolCallResults: Array<{ name: string; args: Record<string, unknown>; result: string }> = [];
+    const toolCallResults: Array<{ name: string; args: Record<string, unknown>; result: string; success: boolean }> = [];
+    const errors: string[] = [];
+    let stuck = false;
 
     for await (const event of this.run(userMessage, options)) {
       switch (event.type) {
@@ -1221,12 +1228,19 @@ export class Agent {
             name: event.name || '',
             args: event.args || {},
             result: event.content || event.error || '',
+            success: event.success !== false,
           });
           break;
+        case 'error': {
+          const em = String(event.error || event.content || '');
+          errors.push(em);
+          if (/stuck|no progress|no output|repeat/i.test(em)) stuck = true;
+          break;
+        }
       }
     }
 
-    return { content, toolCalls: toolCallResults };
+    return { content, toolCalls: toolCallResults, errors, stuck };
   }
 
   clear(): void {

@@ -61,6 +61,12 @@ export interface Config {
    *  Existing legacy `.json` sessions remain readable either way. Default
    *  false until the new format has been dogfooded for a release cycle. */
   useJsonlSessions: boolean;
+  /** Teacher-escalation self-learning: when a WEAK local student model fails a
+   *  run, a strong teacher (DGX Qwen3.6-35B) distills a reusable skill into
+   *  ~/.veepee-code/skills/ so the student succeeds next time. Off by default
+   *  (opt-in — it calls the teacher endpoint on student failures). See
+   *  src/teacher-escalation.ts. */
+  teacher: { enabled: boolean; endpoint: string; model: string; apiKey?: string | null } | null;
 }
 
 export interface SubagentConfig {
@@ -154,6 +160,7 @@ export interface ConfigFile {
   lsp?: Record<string, LspServerConfig> | null;
   extras?: string[];
   useJsonlSessions?: boolean;
+  teacher?: Config['teacher'];
 }
 
 const DEFAULTS: Config = {
@@ -188,6 +195,7 @@ const DEFAULTS: Config = {
   lsp: null,
   extras: [],
   useJsonlSessions: false,
+  teacher: null,
 };
 
 // ─── Settings hierarchy paths ─────────────────────────────────────────
@@ -424,6 +432,7 @@ export function loadConfig(configPath?: string): Config {
     lsp: merged.lsp ?? DEFAULTS.lsp,
     extras: merged.extras ?? DEFAULTS.extras,
     useJsonlSessions: merged.useJsonlSessions ?? DEFAULTS.useJsonlSessions,
+    teacher: merged.teacher ?? DEFAULTS.teacher,
   };
 }
 

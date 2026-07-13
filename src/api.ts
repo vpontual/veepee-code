@@ -2,6 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'http';
 import type { Agent } from './agent.js';
 import type { ModelManager } from './models.js';
 import type { ToolRegistry } from './tools/registry.js';
+import type { Config } from './config.js';
+import { escalateAndLearn, type TeacherConfig } from './teacher-escalation.js';
 
 interface ApiConfig {
   port: number;
@@ -13,6 +15,13 @@ interface ApiConfig {
   apiExecute?: boolean; // enable /api/execute endpoint
   rcEnabled?: boolean; // enable Remote Connect (wider CORS, 0.0.0.0 bind)
   rcRequestHandler?: (req: IncomingMessage, res: ServerResponse, url: URL) => Promise<boolean>;
+  teacher?: Config['teacher']; // teacher-escalation config (student-failure → DGX distills a skill)
+}
+
+/** Build the teacher config for escalateAndLearn, or null when disabled. */
+function teacherFrom(t: Config['teacher'] | undefined): TeacherConfig | null {
+  if (!t || !t.enabled || !t.endpoint || !t.model) return null;
+  return { enabled: true, endpoint: t.endpoint, model: t.model, apiKey: t.apiKey ?? null };
 }
 
 /**
@@ -114,12 +123,19 @@ export function startApiServer(config: ApiConfig): { port: number; connectionCou
 
           const model = modelManager.getCurrentModel();
           let toolCallIndex = -1;
+          // teacher-escalation: assemble the run outcome as events stream by
+          const _teacher = teacherFrom(config.teacher);
+          let _assistantText = '';
+          const _outcomeTools: Array<{ name: string; success: boolean; error?: string }> = [];
+          const _outcomeErrors: string[] = [];
+          let _outcomeStuck = false;
 
           for await (const event of agent.run(userContent, {
             permissionMode: 'auto_allow',
             allowedTools: clientToolNames,
           })) {
             if (event.type === 'text' && event.content) {
+              if (_teacher) _assistantText += event.content;
               const chunk = {
                 id: `chatcmpl-${Date.now()}`,
                 object: 'chat.completion.chunk',
@@ -158,6 +174,7 @@ export function startApiServer(config: ApiConfig): { port: number; connectionCou
               };
               res.write(`data: ${JSON.stringify(chunk)}\n\n`);
             } else if (event.type === 'tool_result') {
+              if (_teacher) _outcomeTools.push({ name: event.name || '', success: event.success !== false, error: event.success === false ? String(event.error || event.content || '') : undefined });
               // Tool results aren't part of OpenAI streaming spec, but useful for clients
               const chunk = {
                 id: `chatcmpl-${Date.now()}`,
@@ -192,10 +209,23 @@ export function startApiServer(config: ApiConfig): { port: number; connectionCou
               };
               res.write(`data: ${JSON.stringify(chunk)}\n\n`);
               res.write('data: [DONE]\n\n');
+            } else if (event.type === 'error' && _teacher) {
+              const em = String(event.error || event.content || '');
+              _outcomeErrors.push(em);
+              if (/stuck|no progress|no output|repeat/i.test(em)) _outcomeStuck = true;
             }
           }
 
           res.end();
+          // teacher-escalation: fire-and-forget after the client has the full
+          // response — a weak student's failure → the DGX distills a skill.
+          if (_teacher) {
+            escalateAndLearn(
+              { userMessage: userContent, studentModel: model, assistantText: _assistantText, toolCalls: _outcomeTools, errors: _outcomeErrors, stuck: _outcomeStuck },
+              _teacher,
+            ).then((r) => { if (r.escalated) console.error(`[teacher] ${r.reason} -> ${r.skillPath}`); })
+             .catch((e) => console.error('[teacher] escalation error:', e?.message || e));
+          }
           return;
         }
 
@@ -235,6 +265,24 @@ export function startApiServer(config: ApiConfig): { port: number; connectionCou
             total_tokens: 0,
           },
         });
+        // teacher-escalation (non-streaming): distill a skill if the student failed.
+        {
+          const _teacher = teacherFrom(config.teacher);
+          if (_teacher) {
+            escalateAndLearn(
+              {
+                userMessage: userContent,
+                studentModel: model,
+                assistantText: result.content,
+                toolCalls: result.toolCalls.map((t) => ({ name: t.name, success: t.success, error: t.success ? undefined : t.result })),
+                errors: result.errors,
+                stuck: result.stuck,
+              },
+              _teacher,
+            ).then((r) => { if (r.escalated) console.error(`[teacher] ${r.reason} -> ${r.skillPath}`); })
+             .catch((e) => console.error('[teacher] escalation error:', e?.message || e));
+          }
+        }
         return;
       }
 

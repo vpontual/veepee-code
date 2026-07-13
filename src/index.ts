@@ -418,6 +418,7 @@ async function main() {
     apiExecute: config.apiExecute,
     rcEnabled,
     rcRequestHandler: rcHandler,
+    teacher: config.teacher,
   });
 
   // Wait a tick for port fallback to resolve, then use actual bound port
