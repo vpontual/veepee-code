@@ -87,7 +87,7 @@ Messages are rendered with distinct visual styles:
 | Role | Visual |
 |------|--------|
 | **User** | Highlighted background (`#2A2A4A`) with blue left border (`│`) and white bold text |
-| **Assistant** | Markdown-rendered via marked-terminal (code blocks in terracotta, bold/italic/headings styled, links in sky blue) |
+| **Assistant** | Markdown rendered to ANSI by a hand-rolled pass in `MessageBlock.tsx` (chalk + wrap-ansi for ANSI-aware wrapping): bold, italic, inline code (terracotta), links (sky blue), headings, lists, blockquotes, `---`, and fenced code (syntax-highlighted via cli-highlight). Replaced marked-terminal, which broke with marked v15. |
 | **Tool call** | Terracotta diamond `◆` with tool name and truncated arguments |
 | **Tool result (success)** | Green checkmark `✓` with dimmed output preview (max 3-4 lines). `edit_file` results show red/green colored diffs. |
 | **Tool result (error)** | Red cross `✗` with error message |

@@ -6,7 +6,7 @@ weight: 15
 
 # Architecture
 
-VEEPEE Code is a TypeScript application built on Node.js 20+. It uses the Ollama JavaScript SDK for model inference, Zod for schema validation, marked + marked-terminal for markdown rendering, and Ink (React) for the TUI (with raw stdin bypassing Ink for keystroke handling). This document covers the technical design.
+VEEPEE Code is a TypeScript application built on Node.js 20+. It uses the Ollama JavaScript SDK for model inference, Zod for schema validation, a hand-rolled chalk + wrap-ansi markdown→ANSI renderer for TUI assistant output (marked + marked-terminal remain only as a legacy `render.ts` path), and Ink (React) for the TUI (with raw stdin bypassing Ink for keystroke handling). This document covers the technical design.
 
 ## File Structure
 
@@ -430,7 +430,7 @@ The TUI uses the alternate screen buffer (`\x1b[?1049h`) to preserve the user's 
 - Input: immediate on keystroke
 - Stream: token-by-token (Ink handles batching)
 
-**Markdown rendering:** Assistant messages are rendered through `marked + marked-terminal` (`render.ts`) with brand-colored code blocks (terracotta `#E8A87C`), bold, italic, headings, links, and horizontal rules.
+**Markdown rendering:** Assistant messages in the TUI are rendered by a hand-rolled markdown→ANSI pass in `tui/components/MessageBlock.tsx` (chalk + `wrap-ansi` for ANSI-aware wrapping) — bold, italic, inline code (terracotta `#E8A87C`), links, headings, lists, blockquotes, `---`, and fenced code (syntax-highlighted via `cli-highlight`). This replaced `marked-terminal`, which broke with `marked` v15 (stripped syntax with no ANSI, or threw, leaking raw `**`/backticks). `render.ts` retains a legacy `marked + marked-terminal` path (`renderMarkdown`) for non-TUI/console output.
 
 **Command palette:** Opens when `/` is typed as the first character or `Ctrl+P` is pressed. Renders above the input box as a bordered menu with filter-as-you-type, arrow key navigation, and immediate submission for argument-free commands.
 
@@ -508,7 +508,8 @@ Each agent turn:
 | `zod` | Schema validation for tool parameters |
 | `chalk` | Terminal color output |
 | `glob` | File pattern matching |
-| `marked` + `marked-terminal` | Markdown rendering for assistant output in the TUI |
+| `chalk` + `wrap-ansi` + `cli-highlight` | Hand-rolled markdown→ANSI rendering for TUI assistant output (`MessageBlock.tsx`) |
+| `marked` + `marked-terminal` | Legacy markdown rendering (`render.ts`, non-TUI); broke with marked v15 for the TUI |
 | `cli-highlight` | Syntax highlighting for code blocks |
 | `ink` + `ink-text-input` + `react` | TUI rendering (component-based, with raw stdin for keystrokes) |
 | `qrcode-terminal` | QR code rendering for Remote Connect |
