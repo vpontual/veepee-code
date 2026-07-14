@@ -93,7 +93,10 @@ async function teacherChat(teacher: TeacherConfig, messages: Array<{ role: strin
   });
   if (!r.ok) throw new Error(`teacher HTTP ${r.status}`);
   const j: any = await r.json();
-  return String(j?.choices?.[0]?.message?.content ?? '').trim();
+  // DGX vLLM with --reasoning-parser routes output into `reasoning` when thinking
+  // is off, leaving `content` empty; fall back so the teacher reply isn't blank.
+  const m = j?.choices?.[0]?.message ?? {};
+  return String(m.content || m.reasoning || '').trim();
 }
 
 const SKILL_SYSTEM = [

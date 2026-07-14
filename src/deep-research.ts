@@ -64,7 +64,10 @@ async function llm(cfg: RCfg, messages: Array<{ role: string; content: string }>
   });
   if (!r.ok) throw new Error(`LLM HTTP ${r.status}`);
   const j: any = await r.json();
-  return stripThinking(String(j?.choices?.[0]?.message?.content ?? ''));
+  // DGX vLLM with --reasoning-parser routes output into `reasoning` when thinking
+  // is off, leaving `content` empty; fall back so non-streaming calls aren't blank.
+  const m = j?.choices?.[0]?.message ?? {};
+  return stripThinking(String(m.content || m.reasoning || ''));
 }
 
 /** Tolerant JSON: slice to the first bracket, try parse, then light repairs. */
