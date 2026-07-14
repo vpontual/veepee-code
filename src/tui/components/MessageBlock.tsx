@@ -1,8 +1,7 @@
 import React from 'react';
 import { Text } from 'ink';
 import chalk from 'chalk';
-import { marked } from 'marked';
-import { markedTerminal } from 'marked-terminal';
+import wrapAnsi from 'wrap-ansi';
 import { highlight } from 'cli-highlight';
 import { theme, icons } from '../theme.js';
 import type { Message } from '../types.js';
@@ -47,46 +46,69 @@ function highlightCode(code: string, lang?: string): string {
   }
 }
 
-function setupMarkedTerminal(width: number): void {
-  marked.use(markedTerminal({
-    code: (code: string, lang?: string) => {
-      const highlighted = highlightCode(code, lang);
-      const border = chalk.dim('─'.repeat(Math.min(40, width - 4)));
-      const langTag = lang ? chalk.dim(` ${lang}`) : '';
-      return `${border}${langTag}\n${highlighted}\n${border}`;
-    },
-    codespan: chalk.hex('#E8A87C').bold,
-    strong: chalk.bold.white,
-    em: chalk.italic,
-    heading: chalk.bold.underline.white,
-    listitem: chalk.white,
-    link: chalk.hex('#85C7F2').underline,
-    paragraph: chalk.white,
-    hr: () => chalk.dim('─'.repeat(Math.min(40, width - 4))) + '\n',
-    blockquote: chalk.dim.italic,
-    width,
-    reflowText: true,
-    tab: 2,
-  }) as never);
+/**
+ * Inline markdown to ANSI for a single line of prose (no fences here).
+ * Handles inline code, bold (double star / double underscore), italic, links.
+ * marked-terminal was removed (broken with marked v15 — it stripped the syntax
+ * with no ANSI, or threw, leaking raw asterisks to the terminal). This hand-rolled
+ * pass is version-proof and paired with wrap-ansi for ANSI-aware wrapping.
+ */
+function mdInline(s: string): string {
+  // Protect inline code first so its contents aren't touched by other rules.
+  const codes: string[] = [];
+  s = s.replace(/`([^`]+)`/g, (_m, c) => {
+    codes.push(chalk.hex('#E8A87C').bold(c));
+    return `§${codes.length - 1}§`;
+  });
+  s = s.replace(/\*\*([^*]+)\*\*/g, (_m, t) => chalk.bold.white(t));
+  s = s.replace(/__([^_]+)__/g, (_m, t) => chalk.bold.white(t));
+  s = s.replace(/(?<![*\w])\*([^*\n]+)\*(?![*\w])/g, (_m, t) => chalk.italic(t));
+  s = s.replace(/(?<![_\w])_([^_\n]+)_(?![_\w])/g, (_m, t) => chalk.italic(t));
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, t) => chalk.hex('#85C7F2').underline(t));
+  return s.replace(/§(\d+)§/g, (_m, i) => codes[Number(i)]);
 }
 
 function formatAssistantMarkdown(content: string, maxWidth: number): string[] {
-  try {
-    setupMarkedTerminal(maxWidth);
-    const rendered = (marked.parse(content) as string).replace(/\n+$/, '');
-    const lines: string[] = [];
-    for (const line of rendered.split('\n')) {
-      const visualLen = stripAnsi(line).length;
-      if (visualLen <= maxWidth) {
-        lines.push(line);
-      } else {
-        lines.push(...wordWrap(stripAnsi(line), maxWidth));
-      }
+  const width = Math.max(8, maxWidth);
+  const out: string[] = [];
+  const wrap = (s: string, w = width): string[] => wrapAnsi(s, w, { hard: true, trim: false }).split('\n');
+  let inFence = false;
+  let fenceLang = '';
+  let codeBuf: string[] = [];
+  const flushCode = () => {
+    if (codeBuf.length === 0) { return; }
+    const border = chalk.dim('─'.repeat(Math.min(40, width)));
+    out.push(border + (fenceLang ? chalk.dim(` ${fenceLang}`) : ''));
+    for (const cl of highlightCode(codeBuf.join('\n'), fenceLang).split('\n')) { out.push(cl); }
+    out.push(border);
+    codeBuf = [];
+  };
+  for (const raw of content.split('\n')) {
+    const fence = raw.match(/^\s*```(\w*)\s*$/);
+    if (fence) {
+      if (inFence) { flushCode(); inFence = false; fenceLang = ''; }
+      else { inFence = true; fenceLang = fence[1] || ''; }
+      continue;
     }
-    return lines;
-  } catch {
-    return wordWrap(content, maxWidth).map(line => chalk.white(line));
+    if (inFence) { codeBuf.push(raw); continue; }
+    if (raw.trim() === '') { out.push(''); continue; }
+    const h = raw.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { out.push(...wrap(chalk.bold.underline.white(mdInline(h[2])))); continue; }
+    if (/^\s*([-*_])\1\1+\s*$/.test(raw)) { out.push(chalk.dim('─'.repeat(Math.min(40, width)))); continue; }
+    const bq = raw.match(/^\s*>\s?(.*)$/);
+    if (bq) { out.push(...wrap(chalk.dim.italic(`▏ ${mdInline(bq[1])}`))); continue; }
+    const li = raw.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+    if (li) {
+      const [, indent, mark, rest] = li;
+      const bullet = /^\d+\.$/.test(mark) ? chalk.hex('#85C7F2')(mark) : chalk.hex('#85C7F2')('•');
+      const wrapped = wrap(mdInline(rest), Math.max(4, width - indent.length - 2));
+      wrapped.forEach((wl, i) => out.push(`${indent}${i === 0 ? `${bullet} ` : '  '}${wl}`));
+      continue;
+    }
+    out.push(...wrap(mdInline(raw)));
   }
+  if (inFence) { flushCode(); }
+  return out;
 }
 
 export function formatMessage(msg: Message, maxWidth: number): string[] {
