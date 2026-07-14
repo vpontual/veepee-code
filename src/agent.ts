@@ -476,11 +476,17 @@ export class Agent {
    * QWEN_CODING_PRESET (Qwen-recommended values for thinking-mode coding).
    */
   private getEffortOptions(): { num_predict: number } {
+    // num_predict is a CEILING (reasoning + answer), not a target: a response that
+    // finishes naturally costs nothing extra, the cap only prevents truncation on
+    // long ones. In act/plan mode thinking is ON, so reasoning (~500-2000 tokens on
+    // Qwen3.6) eats into this budget BEFORE the answer — hence the generous headroom.
+    // Old values (256/1024/4096) predate thinking-mode and truncated answers; low=256
+    // couldn't even fit the reasoning, so it emitted no answer at all.
     switch (this.effort) {
-      case 'low': return { num_predict: 256 };
-      case 'high': return { num_predict: 4096 };
+      case 'low': return { num_predict: 1024 };
+      case 'high': return { num_predict: 8192 };
       case 'medium':
-      default: return { num_predict: 1024 };
+      default: return { num_predict: 3072 };
     }
   }
 
