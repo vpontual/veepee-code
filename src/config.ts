@@ -30,7 +30,14 @@ export interface Config {
   apiHost: string;
   apiToken: string | null;
   apiExecute: boolean;
+  /** SearXNG instance for the `web_search` tool + deep_research. Defaults to
+   *  the self-hosted homelab instance so web search works out of the box. */
   searxngUrl: string | null;
+  /** agentlens instance for the `web_fetch` tool — token-efficient page
+   *  extraction via `/parse?url=`. Defaults to the self-hosted homelab
+   *  instance. When null (or unreachable), web_fetch falls back to a raw
+   *  fetch + local HTML strip. */
+  agentlensUrl: string | null;
   progressBar: boolean;
   modelStick: boolean;
   sync: { url: string; user: string; pass: string; auto: boolean } | null;
@@ -146,6 +153,7 @@ export interface ConfigFile {
   apiToken?: string | null;
   apiExecute?: boolean;
   searxngUrl?: string | null;
+  agentlensUrl?: string | null;
   progressBar?: boolean;
   modelStick?: boolean;
   sync?: { url: string; user: string; pass: string; auto: boolean } | null;
@@ -180,7 +188,8 @@ const DEFAULTS: Config = {
   apiHost: '127.0.0.1',
   apiToken: null,
   apiExecute: false,
-  searxngUrl: null,
+  searxngUrl: 'http://10.0.153.99:8888',
+  agentlensUrl: 'http://10.0.153.99:7001',
   progressBar: true,
   modelStick: false,
   sync: null,
@@ -287,7 +296,8 @@ export function migrateEnvToJson(): boolean {
     apiHost: env.VEEPEE_CODE_API_HOST || '127.0.0.1',
     apiToken: env.VEEPEE_CODE_API_TOKEN || null,
     apiExecute: env.VEEPEE_CODE_API_EXECUTE === '1' || env.VEEPEE_CODE_API_EXECUTE === 'true',
-    searxngUrl: env.SEARXNG_URL || null,
+    searxngUrl: env.SEARXNG_URL || DEFAULTS.searxngUrl,
+    agentlensUrl: env.AGENTLENS_URL || DEFAULTS.agentlensUrl,
   };
 
   if (env.VEEPEE_CODE_SYNC_URL && env.VEEPEE_CODE_SYNC_USER && env.VEEPEE_CODE_SYNC_PASS) {
@@ -418,6 +428,7 @@ export function loadConfig(configPath?: string): Config {
     apiToken: merged.apiToken ?? DEFAULTS.apiToken,
     apiExecute: merged.apiExecute ?? DEFAULTS.apiExecute,
     searxngUrl: merged.searxngUrl ?? DEFAULTS.searxngUrl,
+    agentlensUrl: merged.agentlensUrl ?? DEFAULTS.agentlensUrl,
     progressBar: merged.progressBar ?? DEFAULTS.progressBar,
     modelStick: merged.modelStick ?? DEFAULTS.modelStick,
     sync: merged.sync ?? DEFAULTS.sync,

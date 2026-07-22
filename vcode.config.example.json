@@ -10,7 +10,8 @@
   "apiHost": "127.0.0.1",
   "apiToken": null,
   "apiExecute": false,
-  "searxngUrl": null,
+  "searxngUrl": "http://10.0.153.99:8888",
+  "agentlensUrl": "http://10.0.153.99:7001",
   "shellHistoryContext": false,
   "subagent": null,
   "_subagent_example": {

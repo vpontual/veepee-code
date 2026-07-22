@@ -5,7 +5,7 @@ import type { Config } from '../config.js';
 
 export function registerWebTools(config: Config): ToolDef[] {
   const tools: ToolDef[] = [
-    createWebFetchTool(),
+    createWebFetchTool(config.agentlensUrl),
     createHttpRequestTool(),
   ];
 
@@ -16,10 +16,69 @@ export function registerWebTools(config: Config): ToolDef[] {
   return tools;
 }
 
-function createWebFetchTool(): ToolDef {
+/** Extract a page via agentlens (`GET /parse?url=`), returning token-efficient
+ *  readable content. Returns null on any failure so the caller can fall back to
+ *  a raw fetch. agentlens response shape: { title, content, token_estimate, ... }. */
+async function agentlensParse(agentlensUrl: string, url: string): Promise<string | null> {
+  try {
+    const base = agentlensUrl.replace(/\/+$/, '');
+    const res = await fetch(`${base}/parse?url=${encodeURIComponent(url)}`, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { title?: string | null; content?: string | null };
+    const content = (data.content || '').trim();
+    if (!content) return null;
+    const title = (data.title || '').trim();
+    return title ? `# ${title}\n\n${content}` : content;
+  } catch {
+    return null;
+  }
+}
+
+/** Raw fetch + local HTML strip. Fallback when agentlens is unset/unreachable. */
+async function rawFetchText(url: string): Promise<string> {
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'veepee-code/0.3 (CLI coding assistant)',
+      'Accept': 'text/html,application/xhtml+xml,application/json,text/plain',
+    },
+    signal: AbortSignal.timeout(30000),
+  });
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return JSON.stringify(await res.json(), null, 2);
+  }
+
+  const html = await res.text();
+  // Basic HTML stripping — remove tags, decode entities, collapse whitespace
+  return html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')
+    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
+    .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function createWebFetchTool(agentlensUrl: string | null): ToolDef {
   return {
     name: 'web_fetch',
-    description: 'Fetch a web page and extract its text content. Strips HTML tags and returns readable text. Good for reading documentation, articles, or API responses.',
+    description: 'Fetch a web page and extract its readable text content. Uses agentlens for token-efficient extraction when configured (falls back to a raw fetch). Good for reading documentation, articles, or API responses.',
     schema: z.object({
       url: z.string().describe('The URL to fetch'),
       max_length: z.number().optional().describe('Maximum characters to return (default 10000)'),
@@ -29,42 +88,11 @@ function createWebFetchTool(): ToolDef {
         const url = params.url as string;
         const maxLen = (params.max_length as number) || 10000;
 
-        const res = await fetch(url, {
-          headers: {
-            'User-Agent': 'LlamaCode/0.1 (CLI coding assistant)',
-            'Accept': 'text/html,application/xhtml+xml,application/json,text/plain',
-          },
-          signal: AbortSignal.timeout(30000),
-        });
-
-        if (!res.ok) {
-          return fail(`HTTP ${res.status}: ${res.statusText}`);
-        }
-
-        const contentType = res.headers.get('content-type') || '';
-        let text: string;
-
-        if (contentType.includes('application/json')) {
-          const json = await res.json();
-          text = JSON.stringify(json, null, 2);
-        } else {
-          const html = await res.text();
-          // Basic HTML stripping — remove tags, decode entities, collapse whitespace
-          text = html
-            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-            .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')
-            .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
-            .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '')
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/&nbsp;/g, ' ')
-            .replace(/&amp;/g, '&')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'")
-            .replace(/\s+/g, ' ')
-            .trim();
+        // Prefer agentlens (token-efficient extraction). Fall back to a raw
+        // fetch + local HTML strip if it's unset or unreachable.
+        let text: string | null = agentlensUrl ? await agentlensParse(agentlensUrl, url) : null;
+        if (text === null) {
+          text = await rawFetchText(url);
         }
 
         if (text.length > maxLen) {
@@ -149,9 +177,10 @@ function createWebSearchTool(searxngUrl: string): ToolDef {
     execute: async (params) => {
       try {
         const maxResults = (params.max_results as number) || 5;
-        const url = `${searxngUrl}/search?q=${encodeURIComponent(params.query as string)}&format=json&engines=google,duckduckgo,brave&results=${maxResults}`;
+        const base = searxngUrl.replace(/\/+$/, '');
+        const url = `${base}/search?q=${encodeURIComponent(params.query as string)}&format=json&language=en`;
 
-        const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        const res = await fetch(url, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'veepee-code/0.3' } });
         if (!res.ok) return fail(`Search API returned ${res.status}`);
 
         const data = await res.json() as { results: Array<{ title: string; url: string; content: string }> };

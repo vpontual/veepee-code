@@ -69,6 +69,39 @@ export async function validateIntegrations(config: Config): Promise<IntegrationS
     requiredEnvVars: [],
   });
 
+  // ─── Web Fetch backend (agentlens) ────────────────────────────────
+  if (config.agentlensUrl) {
+    try {
+      const res = await fetch(`${config.agentlensUrl.replace(/\/+$/, '')}/parse?url=${encodeURIComponent('https://example.com')}`, { signal: AbortSignal.timeout(5000) });
+      results.push({
+        name: 'Web Fetch backend (agentlens)',
+        category: 'Web',
+        status: res.ok ? 'active' : 'error',
+        tools: ['web_fetch'],
+        message: res.ok ? 'Connected — token-efficient extraction' : `HTTP ${res.status} — falling back to raw fetch`,
+        requiredEnvVars: ['AGENTLENS_URL'],
+      });
+    } catch {
+      results.push({
+        name: 'Web Fetch backend (agentlens)',
+        category: 'Web',
+        status: 'error',
+        tools: ['web_fetch'],
+        message: `Cannot connect to ${config.agentlensUrl} — falling back to raw fetch`,
+        requiredEnvVars: ['AGENTLENS_URL'],
+      });
+    }
+  } else {
+    results.push({
+      name: 'Web Fetch backend (agentlens)',
+      category: 'Web',
+      status: 'missing_config',
+      tools: ['web_fetch'],
+      message: 'agentlensUrl unset — web_fetch uses a raw fetch + local HTML strip',
+      requiredEnvVars: ['AGENTLENS_URL'],
+    });
+  }
+
   // ─── Proxy connection ─────────────────────────────────────────────
   try {
     const res = await fetch(`${config.proxyUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
