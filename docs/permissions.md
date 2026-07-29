@@ -56,6 +56,19 @@ The subcommand must come first, and these flags disqualify the invocation anywhe
 
 They turn a read-only subcommand into code execution or a file write — `git -c core.pager='sh -c ...' log` runs an arbitrary command, and `git diff --output=FILE` writes to disk.
 
+## Ignore Files
+
+Paths can be blocked from the agent entirely with an ignore file. Two names are read, at both the global (`~/.veepee-code/`) and project level:
+
+| Filename | Convention |
+|---|---|
+| `.agentignore` | The cross-agent standard, shared with other tools |
+| `.veepeignore` | VEEPEE Code's own |
+
+Unlike instruction files these are **additive** — a repo with both blocks everything either one names. `.veepeignore` is read last, so its negations (`!pattern`) can un-block something the shared file denies.
+
+Patterns follow gitignore conventions: a trailing slash (`secrets/`) blocks the directory and everything under it, and a bare name (`node_modules`) blocks the entry and its contents. Symlinks are resolved before matching, so a link pointing at a blocked file is blocked too.
+
 ## Dangerous Patterns (Always Prompt)
 
 These patterns always require explicit approval, even if the tool has been permanently allowed. The list is hardcoded in `permissions.ts → DANGEROUS_PATTERNS`:

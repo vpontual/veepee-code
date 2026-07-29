@@ -6,7 +6,17 @@ weight: 13
 
 # VEEPEE.md Project Instructions
 
-VEEPEE.md is VEEPEE Code's equivalent of CLAUDE.md (Claude Code), AGENTS.md (Codex), GEMINI.md (Gemini CLI), or OpenCode.md. It is a markdown file containing project-specific instructions that are injected into every system prompt, ensuring the agent always has the right context about your project. Create one with the `/init` command.
+VEEPEE Code reads project instructions from the file your repo already has. It looks for these names, in order, and uses **the first one it finds** in each directory:
+
+| Filename | Convention |
+|---|---|
+| `VEEPEE.md` | VEEPEE Code's own |
+| `AGENTS.md` | The cross-agent standard (Codex, Zed, and others; endorsed by the AAIF and being standardised into ACP) |
+| `CLAUDE.md` | Claude Code |
+
+So a repo that already has an `AGENTS.md` or `CLAUDE.md` works with no extra file — you do not need to maintain a parallel copy. Create one with the `/init` command if the repo has none.
+
+**Only one file per directory is loaded.** These files are usually near-duplicates of each other (frequently literal symlinks), so loading two copies of the same guidance would waste context and invite contradictions. If the same content is found twice — through a symlink, or an identical copy at another level — it is loaded once.
 
 ## What Goes in VEEPEE.md
 
@@ -126,7 +136,7 @@ If a VEEPEE.md already exists, `/init` reads it and improves it -- keeping what 
 
 VEEPEE.md files are loaded from multiple locations and merged into the system prompt. Loading order (all are included if they exist):
 
-### 1. Global (`~/.veepee-code/VEEPEE.md`)
+### 1. Global (`~/.veepee-code/VEEPEE.md`, `AGENTS.md`, or `CLAUDE.md`)
 
 Instructions that apply to all projects. Good for personal preferences:
 
@@ -140,24 +150,26 @@ Instructions that apply to all projects. Good for personal preferences:
 - Always add tests when creating new functions
 ```
 
-### 2. Parent Directories (up to 5 levels)
+### 2. Parent Directories (up to the repository root)
 
-Instructions from parent directories. Useful for monorepo or workspace-level rules:
+Instructions from parent directories inside the same repository. Useful for monorepo or workspace-level rules:
 
 ```
-~/workspace/my-org/VEEPEE.md       # Applies to all projects in the org
-~/workspace/my-org/api/VEEPEE.md   # Applies to the API project
+~/workspace/monorepo/AGENTS.md            # Applies to the whole repo
+~/workspace/monorepo/packages/api/AGENTS.md   # Applies to the API package
 ```
 
-The loader walks up from the current directory, checking each parent for a VEEPEE.md file, up to 5 levels.
+The walk **stops at the repository root** — the first directory containing `.git`. Project instructions are scoped to the project: walking freely up to `$HOME` picks up whatever `CLAUDE.md` happens to live there, which on a typical machine is a large personal or environment document attached to every turn of every session. Anything genuinely user-wide belongs in the global slot, which is always loaded.
 
-### 3. Workspace (`./VEEPEE.md`)
+If no repository root is found, the walk gives up after 5 levels.
+
+### 3. Workspace (`./VEEPEE.md`, `./AGENTS.md`, or `./CLAUDE.md`)
 
 Instructions in the current working directory. Highest precedence.
 
 ## Precedence Rules
 
-All found VEEPEE.md files are included in the system prompt, with precedence noted:
+One file per level is included in the system prompt, with its filename and precedence noted:
 
 ```
 ## Project Instructions (VEEPEE.md)
@@ -167,10 +179,10 @@ mandates from the user.
 **Precedence:** Workspace > Parent > Global. These instructions override default
 behaviors but cannot override safety rules.
 
-### Source: global (~/.veepee-code/VEEPEE.md)
+### Source: global (VEEPEE.md)
 (global content here)
 
-### Source: parent (../../VEEPEE.md)
+### Source: parent (AGENTS.md)
 (parent content here)
 
 ### Source: workspace (VEEPEE.md)

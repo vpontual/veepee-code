@@ -55,6 +55,10 @@ function globToRegex(pattern: string): RegExp {
   return new RegExp(`(?:^|/)${re}$`);
 }
 
+/** Ignore-file names, loaded in order at each level. Later files win on
+ *  conflicts because patterns are applied in order and negations override. */
+export const IGNORE_FILENAMES = ['.agentignore', '.veepeignore'] as const;
+
 export class IgnoreManager {
   private patterns: Array<{ pattern: string; regex: RegExp; negated: boolean }> = [];
 
@@ -64,13 +68,17 @@ export class IgnoreManager {
       this.addPattern(p);
     }
 
-    // Load global ~/.veepee-code/.veepeignore
-    const globalPath = join(os.homedir(), '.veepee-code', '.veepeignore');
-    this.loadFile(globalPath);
-
-    // Load local {cwd}/.veepeignore (project-level overrides)
-    const localPath = join(cwd, '.veepeignore');
-    this.loadFile(localPath);
+    // `.agentignore` is the cross-agent convention (being standardised
+    // alongside AGENTS.md); `.veepeignore` stays supported for existing
+    // setups. Unlike instruction files these are ADDITIVE — a repo that has
+    // both means "block everything either one names", so both are loaded
+    // rather than first-wins. `.veepeignore` is loaded last at each level so
+    // its negations (`!pattern`) can override the shared file.
+    for (const dir of [join(os.homedir(), '.veepee-code'), cwd]) {
+      for (const name of IGNORE_FILENAMES) {
+        this.loadFile(join(dir, name));
+      }
+    }
   }
 
   private addPattern(raw: string): void {

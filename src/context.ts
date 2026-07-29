@@ -5,8 +5,8 @@ import { KnowledgeState } from './knowledge.js';
 import { detectProject, formatProjectInfo, getCodingGuidance } from './detect.js';
 import { getOutputStyle } from './output-styles.js';
 import { getRecentShellHistory, formatShellHistoryBlock } from './shellhistory.js';
-import { readdirSync, readFileSync, statSync, existsSync } from 'fs';
-import { join, relative } from 'path';
+import { readdirSync, readFileSync, statSync, existsSync, realpathSync } from 'fs';
+import { join, relative, resolve } from 'path';
 
 // ─── Model Knowledge Cutoffs ────────────────────────────────────────────────
 
@@ -59,57 +59,112 @@ function getProjectTree(cwd: string, maxFiles = 150, maxDepth = 3): string {
   return `\n## Project Structure\n\`\`\`\n${files.join('\n')}${truncated}\n\`\`\`\n`;
 }
 
-// ─── VEEPEE.md Loader ─────────────────────────────────────────────────────────
-// Like CLAUDE.md, GEMINI.md, OpenCode.md, AGENTS.md — project-specific instructions
-// Precedence: workspace VEEPEE.md > parent dir VEEPEE.md > ~/.veepee-code/VEEPEE.md
+// ─── Project Instructions Loader ──────────────────────────────────────────────
+//
+// Reads the project's agent-instruction file. `AGENTS.md` is the cross-agent
+// convention (endorsed by the AAIF, being standardised into ACP), and most
+// repos that have any agent guidance at all have it under that name or
+// `CLAUDE.md` — so reading only `VEEPEE.md` meant vcode was blind to
+// instructions every other agent in the same repo already follows, and forced
+// a parallel copy to be maintained.
+//
+// At each level the FIRST filename that exists wins, rather than concatenating
+// all of them: these files are usually near-duplicates of one another (often
+// literal symlinks), and loading two copies of the same guidance wastes context
+// and invites contradictions.
+//
+// Precedence across levels: workspace > parent dirs > global.
+
+/** How far up the tree to look before giving up, if no repo root is found. */
+const MAX_PARENT_LEVELS = 5;
+
+/** Instruction filenames, most-specific convention first. */
+export const INSTRUCTION_FILENAMES = ['VEEPEE.md', 'AGENTS.md', 'CLAUDE.md'] as const;
+
+/** First instruction file present in `dir`, or null. Returns the resolved path
+ *  and the basename so callers can report which convention was picked up. */
+export function findInstructionFile(dir: string): { path: string; name: string } | null {
+  for (const name of INSTRUCTION_FILENAMES) {
+    const p = join(dir, name);
+    if (existsSync(p)) return { path: p, name };
+  }
+  return null;
+}
+
+function readTrimmed(path: string): string | null {
+  try {
+    const content = readFileSync(path, 'utf-8').trim();
+    return content || null;
+  } catch {
+    return null;
+  }
+}
 
 function loadLlamaMd(cwd: string): string {
   const sections: Array<{ source: string; content: string }> = [];
+  // Guards against loading the same file twice when a parent walk revisits a
+  // directory, or when two conventions in one tree resolve to the same file.
+  const seenPaths = new Set<string>();
+  const seenContent = new Set<string>();
 
-  // 1. Global ~/.veepee-code/VEEPEE.md
-  const globalPath = join(process.env.HOME || '~', '.veepee-code', 'VEEPEE.md');
-  if (existsSync(globalPath)) {
-    try {
-      const content = readFileSync(globalPath, 'utf-8').trim();
-      if (content) sections.push({ source: 'global (~/.veepee-code/VEEPEE.md)', content });
-    } catch { /* ignore */ }
-  }
+  const push = (label: string, found: { path: string; name: string } | null): void => {
+    if (!found) return;
+    let real = found.path;
+    try { real = realpathSync(found.path); } catch { /* not a link */ }
+    if (seenPaths.has(real)) return;
+    const content = readTrimmed(found.path);
+    if (!content) return;
+    // A repo whose CLAUDE.md is a copy of its AGENTS.md should not be loaded
+    // twice at different levels.
+    if (seenContent.has(content)) return;
+    seenPaths.add(real);
+    seenContent.add(content);
+    sections.push({ source: `${label} (${found.name})`, content });
+  };
 
-  // 2. Walk up from cwd to find VEEPEE.md in parent directories (max 5 levels)
+  // 1. Global ~/.veepee-code/<file>
+  const globalDir = join(process.env.HOME || '~', '.veepee-code');
+  push('global', findInstructionFile(globalDir));
+
+  // 2. Walk up from cwd, stopping at the repository root (inclusive).
+  //
+  //    Project instructions are exactly that — scoped to the project. Walking
+  //    freely up to $HOME pulled in whatever CLAUDE.md happened to live there;
+  //    on this machine that is a 22KB homelab document, ~7.5k tokens attached
+  //    to every single turn of every session regardless of what was being
+  //    worked on. Anything genuinely user-wide belongs in the global slot
+  //    above, which is always loaded.
+  //
+  //    Nearest parent is pushed last so it outranks more distant ancestors.
+  const parents: Array<{ path: string; name: string }> = [];
   let dir = cwd;
   const visited = new Set<string>();
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < MAX_PARENT_LEVELS; i++) {
     if (visited.has(dir)) break;
     visited.add(dir);
-
-    const filePath = join(dir, 'VEEPEE.md');
-    if (existsSync(filePath) && dir !== cwd) {
-      try {
-        const content = readFileSync(filePath, 'utf-8').trim();
-        if (content) sections.push({ source: `parent (${relative(cwd, filePath) || filePath})`, content });
-      } catch { /* ignore */ }
+    if (dir !== cwd) {
+      const found = findInstructionFile(dir);
+      if (found) parents.push(found);
     }
-
-    const parent = join(dir, '..');
+    // Stop once this directory is a repo root — we have reached the project.
+    if (existsSync(join(dir, '.git'))) break;
+    const parent = resolve(dir, '..');
     if (parent === dir) break;
     dir = parent;
   }
-
-  // 3. Workspace VEEPEE.md (highest precedence)
-  const workspacePath = join(cwd, 'VEEPEE.md');
-  if (existsSync(workspacePath)) {
-    try {
-      const content = readFileSync(workspacePath, 'utf-8').trim();
-      if (content) sections.push({ source: 'workspace (VEEPEE.md)', content });
-    } catch { /* ignore */ }
+  for (const found of parents.reverse()) {
+    push('parent', found);
   }
+
+  // 3. Workspace (highest precedence)
+  push('workspace', findInstructionFile(cwd));
 
   if (sections.length === 0) return '';
 
-  // Build the instructions block
-  const lines = ['\n## Project Instructions (VEEPEE.md)',
+  const names = INSTRUCTION_FILENAMES.join(' / ');
+  const lines = [`\n## Project Instructions (${names})`,
     '',
-    'The following instructions are loaded from VEEPEE.md files. These are foundational mandates from the user.',
+    `The following instructions are loaded from ${names} files. These are foundational mandates from the user.`,
     '**Precedence:** Workspace > Parent > Global. These instructions override default behaviors but cannot override safety rules.',
     '',
   ];
