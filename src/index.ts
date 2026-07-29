@@ -54,6 +54,33 @@ import { createNotebookEditTool } from './tools/notebook.js';
 
 const VERSION = '0.3.0';
 
+/** Live child-process owners, so the exit paths below can shut them down.
+ *  Module-scoped because the signal handlers are registered outside main(). */
+let activeLspManager: LspManager | null = null;
+let activeMcpClients: McpClient[] = [];
+
+/**
+ * Stop the language servers before the process goes away.
+ *
+ * Every exit path calls process.exit(), which fires neither 'beforeExit' nor
+ * any await-able hook, so this has to be called explicitly at each one. Bounded
+ * so a wedged server can't stop vcode from quitting: the servers also get EOF
+ * on their stdin when we die, which is the backstop.
+ */
+async function shutdownLspServers(timeoutMs = 2500): Promise<void> {
+  const mgr = activeLspManager;
+  const mcp = activeMcpClients;
+  activeLspManager = null;
+  activeMcpClients = [];
+  if (!mgr && mcp.length === 0) return;
+  await Promise.race([
+    Promise.allSettled([
+      mgr ? mgr.shutdown() : Promise.resolve(),
+      closeMcpClients(mcp),
+    ]),
+    new Promise<void>((r) => setTimeout(r, timeoutMs)),
+  ]);
+}
 
 async function main() {
   const profiler = new Profiler(process.argv.includes('--profile'));
@@ -170,8 +197,12 @@ async function main() {
   // don't want session start to block on LSP init.
   lspManager.warmStart().catch(() => undefined);
   // Clean shutdown on orderly exit (matches MCP cleanup pattern at line ~185).
-  // SIGINT goes through the TUI; SIGTERM hits the existing handler below.
-  process.on('beforeExit', () => { void lspManager.shutdown(); });
+  // 'beforeExit' fires only when the event loop drains — which never happens
+  // here, because the LSP servers' stdio pipes and ink's raw-mode stdin are
+  // both active handles, and every real exit path calls process.exit(), which
+  // skips the event entirely. Register the manager for the explicit shutdown
+  // below instead.
+  activeLspManager = lspManager;
 
   // Discover remote tools (e.g. from Llama Rider)
   if (config.remote) {
@@ -202,8 +233,9 @@ async function main() {
       console.error(chalk.red('  MCP setup failed:'), err instanceof Error ? err.message : String(err));
     }
   }
-  // Clean up child processes on shutdown.
-  process.on('beforeExit', () => { void closeMcpClients(mcpClients); });
+  // Registered for the explicit shutdown path, not 'beforeExit' — that event
+  // never fires here, so these child processes were never being closed.
+  activeMcpClients = mcpClients;
   profiler.mark('mcp connected');
 
   // Skills — register the skill_invoke meta-tool ONLY when at least one
@@ -383,6 +415,10 @@ async function main() {
     }
 
     process.stdout.write('\n');
+    // Print mode warm-starts language servers like any other run, and is what
+    // vcode-dispatch spawns per job — stop them rather than relying on the
+    // process teardown to do it.
+    await shutdownLspServers();
     process.exit(0);
   }
 
@@ -474,7 +510,7 @@ async function main() {
     tui.setApiConnected(api.connectionCount > 0);
   }, 2000);
   tui.setApiConnected(api.connectionCount > 0);
-  process.on('beforeExit', () => clearInterval(apiPoll));
+  // (apiPoll is cleared by process exit; 'beforeExit' never fires here.)
 
   // Check for updates in background (non-blocking)
   setTimeout(() => {
@@ -1105,6 +1141,7 @@ async function main() {
     }
   }
   await sandbox.clean();
+  await shutdownLspServers();
   api.close();
   tui.stop();
   process.exit(0);
@@ -3215,7 +3252,11 @@ function getLocalIp(): string {
 
 // Handle signals gracefully
 process.on('SIGINT', () => { /* handled in TUI */ });
-process.on('SIGTERM', () => process.exit(0));
+process.on('SIGTERM', () => {
+  // Stop the language servers before going away; process.exit() on its own
+  // runs no cleanup at all.
+  void shutdownLspServers().finally(() => process.exit(0));
+});
 
 // Crash handlers — log and exit cleanly so the terminal isn't left in alt-screen
 process.on('uncaughtException', (err) => {

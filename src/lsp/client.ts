@@ -38,6 +38,20 @@ interface PendingWaiter {
   resolve: (diags: Diagnostic[]) => void;
 }
 
+/** File extension to LSP languageId. Servers key parsing behaviour off this,
+ *  so `.tsx` must be `typescriptreact`, not `typescript`. Anything unlisted
+ *  falls back to the server's own label. */
+const LANGUAGE_IDS: Record<string, string> = {
+  ts: 'typescript', tsx: 'typescriptreact',
+  js: 'javascript', jsx: 'javascriptreact', mjs: 'javascript', cjs: 'javascript',
+  py: 'python', pyi: 'python',
+  go: 'go', rs: 'rust', rb: 'ruby', java: 'java', kt: 'kotlin', swift: 'swift',
+  c: 'c', h: 'c', cc: 'cpp', cpp: 'cpp', cxx: 'cpp', hpp: 'cpp',
+  cs: 'csharp', php: 'php', lua: 'lua', sh: 'shellscript', bash: 'shellscript',
+  json: 'json', jsonc: 'jsonc', yaml: 'yaml', yml: 'yaml', toml: 'toml',
+  md: 'markdown', html: 'html', css: 'css', scss: 'scss', sql: 'sql',
+};
+
 export class LspClient {
   /** Language label this client serves — appears in diagnostic output. */
   readonly label: string;
@@ -51,6 +65,10 @@ export class LspClient {
 
   private diagnostics = new Map<string, Diagnostic[]>();
   private docVersions = new Map<string, number>();
+  /** Highest document version the server has published diagnostics for, per
+   *  URI. Lets waitForDiagnostics answer immediately when the notification
+   *  already arrived instead of parking for one that will never come. */
+  private lastDiagVersion = new Map<string, number>();
   private openDocs = new Set<string>();
   private pendingDiagWaiters = new Map<string, PendingWaiter[]>();
   private serverCapabilities: ServerCapabilities | null = null;
@@ -69,8 +87,14 @@ export class LspClient {
 
   private async boot(): Promise<void> {
     const env = { ...process.env, ...(this.cfg.env ?? {}) };
+    // `detached` makes the server its own process-group leader so shutdown can
+    // signal the whole tree. Language servers fan out: typescript-language-server
+    // runs two tsserver children, and a signal aimed at the wrapper alone leaves
+    // them orphaned. Closing our pipes still gives the server EOF if vcode dies
+    // abruptly, so the usual safety net is unaffected.
     const proc = spawn(this.cfg.command, this.cfg.args ?? [], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
       env,
     });
     this.proc = proc;
@@ -130,6 +154,7 @@ export class LspClient {
       // version may be undefined per LSP spec; use the doc's current version
       // as the gate when missing.
       const version = params.version ?? this.docVersions.get(params.uri) ?? 0;
+      this.lastDiagVersion.set(params.uri, version);
       this.flushWaiters(params.uri, version);
     });
 
@@ -213,7 +238,7 @@ export class LspClient {
     if (!this.openDocs.has(uri)) {
       // Server doesn't know about this file yet — fall back to didOpen so
       // we don't drop the diagnostic.
-      return this.openFile(uri, this.guessLanguageId(uri), content);
+      return this.openFile(uri, this.languageIdFor(uri), content);
     }
     const version = (this.docVersions.get(uri) ?? 0) + 1;
     this.docVersions.set(uri, version);
@@ -233,6 +258,15 @@ export class LspClient {
     if (!this.alive) return this.diagnostics.get(uri) ?? [];
 
     const expectedVersion = this.docVersions.get(uri) ?? 0;
+
+    // Already answered. Without this the waiter parks for a notification that
+    // has been and gone, and burns the entire timeout before returning the
+    // very diagnostics it is holding — the class comment claims the version
+    // gate covers this case, and this is what actually makes that true.
+    if ((this.lastDiagVersion.get(uri) ?? -1) >= expectedVersion) {
+      return this.diagnostics.get(uri) ?? [];
+    }
+
     return new Promise<Diagnostic[]>((resolve) => {
       const waiter: PendingWaiter = {
         expectedVersion,
@@ -319,13 +353,14 @@ export class LspClient {
     return Array.isArray(result) ? result as Location[] : [result as Location];
   }
 
-  /** Best-effort guess at the languageId for a URI by extension. */
-  private guessLanguageId(uri: string): string {
+  /** LSP languageId for a URI, by extension.
+   *
+   *  Both branches of this used to return `this.label`, so every file opened
+   *  under the server's label — a `.tsx` file was announced as `typescript`
+   *  rather than `typescriptreact`, which changes how servers parse it. */
+  languageIdFor(uri: string): string {
     const ext = uri.split('.').pop()?.toLowerCase() ?? '';
-    if (this.cfg.filetypes.includes(ext)) {
-      return this.label;
-    }
-    return this.label;
+    return LANGUAGE_IDS[ext] ?? this.label;
   }
 
   /**
@@ -357,8 +392,17 @@ export class LspClient {
       try { conn.dispose(); } catch { /* swallow */ }
     }
 
-    // Wait up to 2s for natural exit, then SIGTERM, then SIGKILL.
+    // Wait up to 2s for natural exit, then SIGTERM, then SIGKILL — each aimed
+    // at the process GROUP, so the server's own children go with it.
     if (proc.exitCode !== null) return;
+    const signalTree = (signal: NodeJS.Signals) => {
+      try {
+        if (proc.pid !== undefined) process.kill(-proc.pid, signal);
+      } catch {
+        // Group already gone; fall back to the direct child just in case.
+        try { proc.kill(signal); } catch { /* swallow */ }
+      }
+    };
     await new Promise<void>((resolve) => {
       const onExit = () => { cleanup(); resolve(); };
       const cleanup = () => {
@@ -367,8 +411,8 @@ export class LspClient {
         clearTimeout(killTimer);
       };
       proc.on('exit', onExit);
-      const termTimer = setTimeout(() => { try { proc.kill('SIGTERM'); } catch { /* swallow */ } }, 2000);
-      const killTimer = setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* swallow */ } resolve(); }, 3000);
+      const termTimer = setTimeout(() => signalTree('SIGTERM'), 2000);
+      const killTimer = setTimeout(() => { signalTree('SIGKILL'); cleanup(); resolve(); }, 3000);
     });
 
     this.flushAllWaiters();

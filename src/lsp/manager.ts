@@ -28,7 +28,15 @@ interface ManagedClient {
   client: LspClient | null;
   /** Set when boot fails so we don't retry on every call. Cleared on /lsp restart. */
   failedReason: string | null;
+  /** Auto-restarts attempted since the last success or manual restart. */
+  restarts: number;
 }
+
+/** How many times a server that booted successfully and then died may be
+ *  brought back automatically. A server that initializes and then crashes —
+ *  the usual shape of an OOM on a large repo — otherwise gets respawned on
+ *  every single edit, each spawn bringing its own child processes. */
+const MAX_AUTO_RESTARTS = 3;
 
 export class LspManager {
   private rootUri: string;
@@ -40,7 +48,7 @@ export class LspManager {
     if (servers) {
       for (const [label, cfg] of Object.entries(servers)) {
         if (cfg.enabled === false) continue;
-        this.servers.set(label, { cfg, client: null, failedReason: null });
+        this.servers.set(label, { cfg, client: null, failedReason: null, restarts: 0 });
       }
     }
   }
@@ -89,8 +97,19 @@ export class LspManager {
         return null;
       }
     } else if (!m.client.isAlive()) {
-      // Crashed — try one auto-restart.
+      // Crashed after a successful boot. Bounded, or a crash-looping server is
+      // respawned on every edit forever.
+      if (m.restarts >= MAX_AUTO_RESTARTS) {
+        m.failedReason =
+          `server died ${m.restarts} times (${m.client.deadMessage() ?? 'unknown reason'}); ` +
+          `not restarting again — run /lsp restart ${label} to retry`;
+        return null;
+      }
+      m.restarts++;
       try {
+        // Reap the dead client's process tree before replacing it, so a server
+        // that exited without taking its children with it doesn't leak them.
+        await m.client.shutdown().catch(() => undefined);
         m.client = await LspClient.start(label, m.cfg, this.rootUri);
         m.failedReason = null;
       } catch (err) {
@@ -115,6 +134,7 @@ export class LspManager {
     }
     m.client = null;
     m.failedReason = null;
+    m.restarts = 0;
     const c = await this.getClientByLabel(label);
     return !!c;
   }
@@ -150,7 +170,15 @@ export class LspManager {
       if (m.client) tasks.push(m.client.shutdown().catch(() => undefined));
     }
     await Promise.allSettled(tasks);
-    this.servers.clear();
+    // Release the clients but KEEP the configured servers. Clearing the map
+    // left the manager permanently dead — labels() empty and restart()
+    // returning false — which is wrong anywhere shutdown isn't immediately
+    // followed by process exit.
+    for (const m of this.servers.values()) {
+      m.client = null;
+      m.failedReason = null;
+      m.restarts = 0;
+    }
   }
 }
 
@@ -180,7 +208,7 @@ export async function notifyLSPs(manager: LspManager, filePath: string): Promise
 
   const uri = pathToFileUri(filePath);
   try {
-    await client.openFile(uri, client.label, content);
+    await client.openFile(uri, client.languageIdFor(uri), content);
     // openFile internally translates to didChange when the doc is already
     // known. Either way, the next publishDiagnostics carries the version
     // we just sent.
