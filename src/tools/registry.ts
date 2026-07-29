@@ -16,25 +16,76 @@ function unwrapType(field: unknown): string | undefined {
   return f?._def?.typeName;
 }
 
-/** Coerce the model's common type mistakes (booleans/numbers emitted as strings —
- *  replace_all: "true", limit: "5") to the type the schema expects, BEFORE validation.
- *  Only touches a field whose base type is boolean/number, so it never rewrites a field
- *  that legitimately wants the string. Turns a hard-reject into a working tool call. */
-function coerceArgs(schema: unknown, args: Record<string, unknown>): Record<string, unknown> {
-  const shape = (schema as { shape?: Record<string, unknown> })?.shape;
-  if (!shape || typeof args !== 'object' || args === null) return args;
-  const out: Record<string, unknown> = { ...args };
-  for (const [key, val] of Object.entries(out)) {
-    const tn = unwrapType(shape[key]);
-    if (tn === 'ZodBoolean' && typeof val === 'string') {
-      const s = val.trim().toLowerCase();
-      if (s === 'true') out[key] = true;
-      else if (s === 'false') out[key] = false;
-    } else if (tn === 'ZodNumber' && typeof val === 'string' && val.trim() !== '' && Number.isFinite(Number(val))) {
-      out[key] = Number(val);
-    }
+/** Peel wrappers and return the underlying schema node (not just its name). */
+function unwrapSchema(field: unknown): { _def?: Record<string, unknown>; shape?: unknown } | undefined {
+  let f = field as { _def?: { typeName?: string; innerType?: unknown; schema?: unknown } } | undefined;
+  const seen = new Set<unknown>();
+  while (f?._def && !seen.has(f)) {
+    seen.add(f);
+    const tn = f._def.typeName;
+    if (tn === 'ZodOptional' || tn === 'ZodNullable' || tn === 'ZodDefault') { f = f._def.innerType as typeof f; continue; }
+    if (tn === 'ZodEffects') { f = f._def.schema as typeof f; continue; }
+    break;
   }
-  return out;
+  return f as ReturnType<typeof unwrapSchema>;
+}
+
+/** Coerce one scalar the model got slightly wrong, given its expected type. */
+function coerceScalar(typeName: string | undefined, val: unknown): unknown {
+  if (typeName === 'ZodBoolean' && typeof val === 'string') {
+    const s = val.trim().toLowerCase();
+    if (s === 'true') return true;
+    if (s === 'false') return false;
+  } else if (typeName === 'ZodNumber' && typeof val === 'string' && val.trim() !== '' && Number.isFinite(Number(val))) {
+    return Number(val);
+  }
+  return val;
+}
+
+/**
+ * Coerce the model's common type mistakes (booleans/numbers emitted as strings —
+ * replace_all: "true", limit: "5") to the type the schema expects, BEFORE validation.
+ * Only touches a field whose base type is boolean/number, so it never rewrites a field
+ * that legitimately wants the string. Turns a hard-reject into a working tool call.
+ *
+ * Recurses into nested objects and array elements. It used to walk only the top
+ * level, so `multi_edit` — whose booleans live at `edits[N].replace_all` — was
+ * rejected outright for the one mistake this function exists to absorb. That
+ * cost a whole turn, and it showed up in the harness eval as
+ * "'edits.0.replace_all': Expected boolean, received string".
+ */
+function coerceArgs(schema: unknown, args: Record<string, unknown>): Record<string, unknown> {
+  const coerced = coerceValue(schema, args, 0);
+  return (coerced && typeof coerced === 'object' ? coerced : args) as Record<string, unknown>;
+}
+
+/** Depth cap: schemas this deep are not real, and it keeps a cyclic schema from hanging. */
+const MAX_COERCE_DEPTH = 6;
+
+function coerceValue(schema: unknown, val: unknown, depth: number): unknown {
+  if (depth > MAX_COERCE_DEPTH) return val;
+  const node = unwrapSchema(schema);
+  const typeName = node?._def?.typeName as string | undefined;
+
+  if (typeName === 'ZodObject') {
+    if (typeof val !== 'object' || val === null || Array.isArray(val)) return val;
+    const shape = (node as { shape?: Record<string, unknown> }).shape;
+    if (!shape) return val;
+    const out: Record<string, unknown> = { ...(val as Record<string, unknown>) };
+    for (const [key, child] of Object.entries(out)) {
+      if (!(key in shape)) continue;
+      out[key] = coerceValue(shape[key], child, depth + 1);
+    }
+    return out;
+  }
+
+  if (typeName === 'ZodArray') {
+    if (!Array.isArray(val)) return val;
+    const element = node?._def?.type;
+    return val.map((item) => coerceValue(element, item, depth + 1));
+  }
+
+  return coerceScalar(typeName, val);
 }
 
 /** A validation error the model can actually act on: which field, what was wrong, what it

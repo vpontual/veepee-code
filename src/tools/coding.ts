@@ -190,6 +190,99 @@ const LINE_NUMBERED = /^\s*\d+\s\s/;
 const stripLineNumbers = (s: string) =>
   s.split('\n').map((l) => l.replace(LINE_NUMBERED, '')).join('\n');
 
+/** Leading whitespace of a line. */
+const indentOf = (line: string) => /^[ \t]*/.exec(line)?.[0] ?? '';
+
+export interface DeindentedMatch {
+  startLine: number;
+  endLine: number;
+  /** Add this to the needle's indentation to get the file's. */
+  indentDelta: string;
+}
+
+/**
+ * Find regions matching `oldStr` when leading indentation is ignored.
+ *
+ * Only lines that are non-blank on both sides are compared, and the whole
+ * needle must line up — this is "the same code, indented differently", not a
+ * fuzzy similarity search.
+ */
+export function findDeindentedMatches(content: string, oldStr: string): DeindentedMatch[] {
+  const needle = oldStr.split('\n');
+  // A trailing newline in the needle produces an empty last element that would
+  // never match a real line; drop it and let the join handle the boundary.
+  while (needle.length > 1 && needle[needle.length - 1].trim() === '') needle.pop();
+  if (needle.length === 0 || needle.every((l) => l.trim() === '')) return [];
+
+  const lines = content.split('\n');
+  const out: DeindentedMatch[] = [];
+  for (let i = 0; i + needle.length <= lines.length; i++) {
+    let allMatch = true;
+    for (let j = 0; j < needle.length; j++) {
+      const a = needle[j].trim();
+      const b = lines[i + j].trim();
+      // Compare with whitespace runs collapsed so this stays a superset of the
+      // normal fuzzy match rather than a stricter, differently-behaving one.
+      if (normalizeWithMap(a).text !== normalizeWithMap(b).text) { allMatch = false; break; }
+    }
+    if (!allMatch) continue;
+
+    // Every line must be off by the SAME amount. A needle that flattened the
+    // region's relative indentation cannot be faithfully restored — re-indenting
+    // it uniformly would rewrite the block's structure, which in Python is a
+    // behaviour change and everywhere else is an ugly diff nobody asked for.
+    // Those fall through to describeMiss, which quotes the exact text instead.
+    let delta: string | null = null;
+    let uniform = true;
+    for (let j = 0; j < needle.length; j++) {
+      if (needle[j].trim() === '') continue;
+      const fileIndent = indentOf(lines[i + j]);
+      const needleIndent = indentOf(needle[j]);
+      // Only ADDING indentation is safe; if the file is less indented than the
+      // needle, re-indenting could dedent past column 0.
+      if (!fileIndent.startsWith(needleIndent)) { uniform = false; break; }
+      const d = fileIndent.slice(needleIndent.length);
+      if (delta === null) delta = d;
+      else if (d !== delta) { uniform = false; break; }
+    }
+    if (!uniform || delta === null) continue;
+    out.push({ startLine: i, endLine: i + needle.length - 1, indentDelta: delta });
+  }
+  return out;
+}
+
+/**
+ * How much more indented `matched` is than `needle`, if it is uniformly so.
+ *
+ * Returns '' when they already agree, or when the difference is not the same on
+ * every line — an uneven difference means the needle did not preserve the
+ * block's structure, and re-indenting it uniformly would rewrite that structure
+ * rather than restore it.
+ */
+export function uniformIndentDelta(matched: string, needle: string): string {
+  const a = matched.split('\n');
+  const b = needle.split('\n');
+  while (b.length > 1 && b[b.length - 1].trim() === '') b.pop();
+  if (a.length !== b.length) return '';
+  let delta: string | null = null;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].trim() === '' || b[i].trim() === '') continue;
+    const ai = indentOf(a[i]);
+    const bi = indentOf(b[i]);
+    if (!ai.startsWith(bi)) return '';
+    const d = ai.slice(bi.length);
+    if (delta === null) delta = d;
+    else if (d !== delta) return '';
+  }
+  return delta ?? '';
+}
+
+/** Re-indent every non-blank line of a replacement by `delta`. */
+export function reindent(text: string, delta: string): string {
+  if (!delta) return text;
+  return text.split('\n').map((l) => (l.trim() === '' ? l : delta + l)).join('\n');
+}
+
 /**
  * Explain a miss well enough that the next attempt succeeds.
  *
@@ -288,6 +381,26 @@ export function applySingleEdit(
   }
 
   if (spans.length === 0) {
+    // ── Last resort: match ignoring leading indentation ────────────────────
+    //
+    // read_file prints numbered lines ("   31      case 'x':"), so a model
+    // reconstructing the original has to strip exactly the right prefix. Get it
+    // slightly wrong and the leading whitespace no longer matches, which is why
+    // "old_string not found" was the most common tool failure in the eval —
+    // repeatedly, on files the model had just read.
+    //
+    // Applied only when EXACTLY ONE region matches ignoring indentation, and
+    // new_string is re-indented by the same delta so the file's own indentation
+    // wins rather than the model's guess. Ambiguity is still refused: this
+    // absorbs a formatting slip, it does not guess at intent.
+    const indentMatches = findDeindentedMatches(content, oldStr);
+    if (indentMatches.length === 1) {
+      const { startLine, endLine, indentDelta } = indentMatches[0];
+      const lines = content.split('\n');
+      const replacement = reindent(newStr, indentDelta);
+      const updated = [...lines.slice(0, startLine), ...replacement.split('\n'), ...lines.slice(endLine + 1)].join('\n');
+      return { ok: true, updated, matchCount: 1 };
+    }
     return { ok: false, error: describeMiss(content, oldStr, relPathForErrors) };
   }
 
@@ -301,7 +414,25 @@ export function applySingleEdit(
   const targets = replaceAll ? spans : spans.slice(0, 1);
   let updated = content;
   for (const { start, end } of [...targets].reverse()) {
-    updated = updated.slice(0, start) + newStr + updated.slice(end);
+    // Preserve the FILE's indentation, not the model's.
+    //
+    // Whitespace-insensitive matching means the needle can be indented
+    // differently from the region it matched — and writing new_string verbatim
+    // then silently reformats that region to the model's indentation. On a
+    // multi-line replacement inside a nested block that is a real, invisible
+    // reformat, and in Python it changes what the code means.
+    // The span can begin mid-line, so the first line's real indentation is not
+    // inside the slice. Rebuild it from the line start — and only re-indent at
+    // all when everything before the match on that line is whitespace, since a
+    // match starting after real code (`const |x = 1`) must not have indentation
+    // spliced into the middle of the line.
+    const lineStart = content.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+    const prefix = content.slice(lineStart, start);
+    const atLineStart = /^[ \t]*$/.test(prefix);
+    const delta = atLineStart
+      ? uniformIndentDelta(prefix + content.slice(start, end), oldStr)
+      : '';
+    updated = updated.slice(0, start) + (delta ? reindent(newStr, delta) : newStr) + updated.slice(end);
   }
   return { ok: true, updated, matchCount: targets.length };
 }

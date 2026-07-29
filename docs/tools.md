@@ -60,7 +60,28 @@ Edit a file by replacing an exact string match. The old_string must be unique in
 edit_file path="src/api.ts" old_string="const port = 3000;" new_string="const port = 8080;"
 ```
 
-> **Note:** If old_string is not found, the tool returns an error advising to read the file first. If old_string matches multiple locations, the tool requires more surrounding context to make it unique.
+> **Note:** If old_string matches multiple locations, the tool requires more surrounding context to make it unique (or `replace_all=true`).
+
+#### Whitespace handling
+
+An exact match is tried first. Failing that, matching ignores *differences in the
+amount* of whitespace — runs of spaces/tabs collapse and CRLF is treated as LF —
+because a model reconstructing text from `read_file`'s numbered output rarely
+reproduces indentation byte for byte. Indentation must still be *present*: a
+needle that drops it entirely across lines is a miss.
+
+**The file's indentation wins.** When the needle is indented differently from the
+region it matched, `new_string` is re-indented by that difference before being
+written. Otherwise the tool would silently reformat the region to whatever the
+model guessed — invisible in a nested block, and in Python a change to what the
+code means. This only happens when the shift is the *same on every line* and the
+match starts at a line boundary; anything less certain is left alone.
+
+**A miss tries to be recoverable.** Before giving up, the tool checks the two ways
+a needle is usually almost-right and quotes the file's exact bytes back: line
+numbers pasted along with the code, and a region that matches apart from
+indentation. Nothing is applied on a guess — but the next attempt does not have
+to be one.
 
 ### glob
 

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { applySingleEdit, normalizeWithMap, registerCodingTools } from '../src/tools/coding.js';
+import { applySingleEdit, normalizeWithMap, uniformIndentDelta, registerCodingTools } from '../src/tools/coding.js';
 import { ToolRegistry } from '../src/tools/registry.js';
 
 /**
@@ -92,12 +92,36 @@ describe('applySingleEdit — the regression', () => {
     if (r.ok) expect(r.updated).toContain('case "renamed":');
   });
 
-  it('does not match a needle that drops indentation entirely across lines', () => {
-    // Documents the boundary: this is a miss, and it must be reported as
-    // "not found" rather than as a match it cannot place.
-    const r = apply(FILE, 'switch (op.type) {\ncase "add_column":', 'X');
+  it('applies a needle that lost its base indent, restoring the FILE\'s', () => {
+    // read_file prints numbered lines, so a model reconstructing the original
+    // often strips the wrong prefix — dropping the same amount from every line.
+    // This was the most common tool failure in the eval, on files the model had
+    // just read. A unique match now applies, re-indented to the file.
+    const needle = 'switch (op.type) {\n  case "add_column":';           // 2 less than the file
+    const repl   = 'switch (op.type) {\n  case "renamed":';
+    const r = apply(FILE, needle, repl);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.updated).toContain('  switch (op.type) {');
+      expect(r.updated).toContain('    case "renamed":');
+      expect(r.updated).toContain('      throw new Error("unknown");'); // rest untouched
+    }
+  });
+
+  it('refuses a needle that flattened the block\'s relative indentation', () => {
+    // Re-indenting that uniformly would rewrite the block's structure — a
+    // behaviour change in Python and an unwanted reformat everywhere else.
+    const r = apply(FILE, 'switch (op.type) {\ncase "add_column":', 'X\nY');
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/not found/);
+    if (!r.ok) expect(r.error).toMatch(/not found|different indentation/);
+  });
+
+  it('refuses when the de-indented match is ambiguous', () => {
+    // Absorbing a formatting slip is fine; guessing which of two sites was
+    // meant is not.
+    const twice = 'if (a) {\n  go();\n}\nif (b) {\n  go();\n}\n';
+    const r = apply(twice, 'go();', 'stop();');
+    expect(r.ok).toBe(false);
   });
 
   it('matches an LF needle against a CRLF file', () => {
@@ -166,29 +190,13 @@ describe('applySingleEdit — a miss must be recoverable', () => {
     }
   });
 
-  it('hands back the exact text when only the indentation is wrong', () => {
-    // The dead end this replaces: "not found — read the file first", to a model
-    // that had already read the file. The retry was another guess; one run
-    // flailed 15 turns. Now the next attempt is deterministic.
-    const needle = 'switch (op.type) {\ncase "add_column":';
-    const r = apply(FILE, needle, 'X');
+  it('still describes a miss when the text is ambiguous rather than absent', () => {
+    // describeMiss remains the path for anything not uniquely resolvable; it
+    // must name where the code actually is instead of just saying "not found".
+    const twice = 'if (a) {\n  go();\n}\nif (b) {\n  go();\n}\n';
+    const r = apply(twice, 'go();', 'stop();');
     expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.error).toMatch(/different indentation/);
-      expect(r.error).toContain('  switch (op.type) {');
-      expect(r.error).toContain('    case "add_column":');
-    }
-  });
-
-  it('the quoted text actually works when fed straight back in', () => {
-    const r1 = apply(FILE, 'switch (op.type) {\ncase "add_column":', 'X');
-    expect(r1.ok).toBe(false);
-    if (r1.ok) return;
-    // Take what the error told us to use and retry with it verbatim.
-    const quoted = r1.error.split('Use this text exactly:\n')[1];
-    const r2 = apply(FILE, quoted, 'REPLACED');
-    expect(r2.ok).toBe(true);
-    if (r2.ok) expect(r2.updated).toContain('REPLACED');
+    if (!r.ok) expect(r.error).toMatch(/not found|found 2 times/);
   });
 
   it('spots read_file line numbers pasted into old_string', () => {
@@ -287,5 +295,46 @@ describe('multi_edit reports every failure at once', () => {
     expect(result.success).toBe(true);
     expect(after).toContain('return null;');
     expect(after).toContain('case "add_col":');
+  });
+});
+
+describe('the file keeps its own indentation', () => {
+  it('re-indents the replacement to the file, not to the model\'s guess', () => {
+    // Whitespace-insensitive matching lets the needle be indented differently
+    // from the region it matched. Writing new_string verbatim then silently
+    // reformats that region — invisible in a nested block, and in Python a
+    // change to what the code means.
+    const r = apply(FILE, 'switch (op.type) {\n  case "add_column":',
+                          'switch (op.type) {\n  case "renamed":');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.updated).toContain('  switch (op.type) {');
+      expect(r.updated).toContain('    case "renamed":');   // file's 4, not the needle's 2
+      expect(r.updated).toContain('      throw new Error("unknown");');
+    }
+  });
+
+  it('leaves an exactly-matching replacement completely alone', () => {
+    const r = apply(FILE, '    case "add_column":', '    case "renamed":');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.updated).toBe(FILE.replace('    case "add_column":', '    case "renamed":'));
+  });
+
+  it('does not splice indentation into a match that starts mid-line', () => {
+    // `const |x = 1` — the match begins after real code, so there is no
+    // line-level indentation to restore and adding any would corrupt the line.
+    const src = '  const x = 1;\n';
+    const r = apply(src, 'x = 1;', 'y = 2;');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.updated).toBe('  const y = 2;\n');
+  });
+
+  it('refuses to re-indent when the needle flattened the block', () => {
+    const delta = uniformIndentDelta('  a\n    b', 'a\nb');
+    expect(delta).toBe(''); // 2 vs 4 — not uniform, so no reformat
+  });
+
+  it('reports a uniform shift', () => {
+    expect(uniformIndentDelta('    a\n      b', '  a\n    b')).toBe('  ');
   });
 });

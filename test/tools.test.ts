@@ -445,3 +445,62 @@ describe('ToolRegistry arg coercion (Tier 3 #2)', () => {
     expect(r.error).toMatch(/'label'/);
   });
 });
+
+describe('nested argument coercion', () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'vcode-coerce-')); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  const build = () => {
+    const registry = new ToolRegistry();
+    for (const tool of registerCodingTools(undefined, new FileTracker())) registry.register(tool);
+    return registry;
+  };
+
+  it('coerces a stringified boolean inside an array of objects', async () => {
+    // multi_edit's booleans live at edits[N].replace_all. Coercion used to walk
+    // only the top level, so the whole call was rejected for the one mistake
+    // coercion exists to absorb — a wasted turn, seen in the harness eval as
+    // "'edits.0.replace_all': Expected boolean, received string".
+    const registry = build();
+    const p = join(dir, 'nested.ts');
+    writeFileSync(p, 'a\na\nb\n');
+    await registry.execute('read_file', { path: p });
+
+    const result = await registry.execute('multi_edit', {
+      path: p,
+      edits: [{ old_string: 'a', new_string: 'X', replace_all: 'true' }],
+    });
+
+    expect(result.success).toBe(true);
+    expect(readFileSync(p, 'utf-8')).toBe('X\nX\nb\n');
+  });
+
+  it('still rejects a value that is not coercible', async () => {
+    const registry = build();
+    const p = join(dir, 'nested2.ts');
+    writeFileSync(p, 'a\n');
+    await registry.execute('read_file', { path: p });
+    const result = await registry.execute('multi_edit', {
+      path: p,
+      edits: [{ old_string: 'a', new_string: 'X', replace_all: 'maybe' }],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('replace_all');
+  });
+
+  it('leaves a genuine string argument alone', async () => {
+    const registry = build();
+    const p = join(dir, 'nested3.ts');
+    writeFileSync(p, 'true\n');
+    await registry.execute('read_file', { path: p });
+    // old_string is a string field whose VALUE is "true" — coercion must not
+    // rewrite it into a boolean.
+    const result = await registry.execute('multi_edit', {
+      path: p,
+      edits: [{ old_string: 'true', new_string: 'false' }],
+    });
+    expect(result.success).toBe(true);
+    expect(readFileSync(p, 'utf-8')).toBe('false\n');
+  });
+});
