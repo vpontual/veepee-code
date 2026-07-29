@@ -17,6 +17,8 @@ import type { SubAgentManager } from '../subagent.js';
 export function createTaskTool(subagentMgr: SubAgentManager): ToolDef {
   return {
     name: 'task',
+    // Spawns its own agent loop; can legitimately run for many minutes.
+    timeoutMs: null,
     description: [
       'Spawn a subagent to handle a focused, self-contained task. Subagents have isolated context and (when targeting a different fleet model) run in parallel with the parent.',
       '',

@@ -842,6 +842,7 @@ export class Benchmarker {
     const sizes = [2048, 4096, 8192, 16384, 32768, 65536, 131072];
     const speedByContext: Record<number, number> = {};
     let maxUsable = 2048;
+    const probeErrors: string[] = [];
     let optimalSize = 4096;
     let bestEfficiency = 0; // score * speed
 
@@ -891,8 +892,14 @@ export class Benchmarker {
         // Check if answer is correct
         const isCorrect = responseText.includes(expectedAnswer);
 
-        if (isCorrect || responseText.trim().length > 0) {
+        // maxUsable means "the model still answered CORRECTLY at this size".
+        // Accepting any non-empty response contradicted the field's own
+        // docstring and reported a usable context the model had actually
+        // failed the needle test at.
+        if (isCorrect) {
           maxUsable = ctxSize;
+        }
+        if (isCorrect || responseText.trim().length > 0) {
 
           // Efficiency = correctness bonus * speed
           // We want the largest context where quality is still good AND speed is acceptable
@@ -904,10 +911,23 @@ export class Benchmarker {
             optimalSize = ctxSize;
           }
         }
-      } catch {
-        // Model can't handle this context size — stop probing larger
+      } catch (err) {
+        // Distinguish "the model rejected this context size" (stop probing
+        // larger — the answer is genuinely found) from a transient transport
+        // failure, which used to silently truncate the probe series and record
+        // whatever had been measured so far as the model's ceiling.
+        const msg = err instanceof Error ? err.message : String(err);
+        const transient = /ECONNRESET|ETIMEDOUT|ECONNREFUSED|socket hang up|fetch failed|network/i.test(msg);
+        if (transient) {
+          probeErrors.push(`${ctxSize}: ${msg}`);
+          continue;
+        }
         break;
       }
+    }
+
+    if (probeErrors.length > 0) {
+      console.error(`[benchmark] ${modelName}: ${probeErrors.length} context probe(s) failed transiently — ${probeErrors.join('; ')}`);
     }
 
     return { optimalSize, maxUsable, speedByContext };

@@ -52,6 +52,20 @@ function describeArgError(name: string, args: Record<string, unknown>,
   return `Invalid arguments for ${name}: ${parts.join('; ')}. Fix the argument types and call ${name} again.`;
 }
 
+/**
+ * Default wall-clock budget for a single tool call.
+ *
+ * A hung tool blocks the agent loop indefinitely — and since runs are
+ * serialized, it wedges the shared server so every later request gets 409
+ * until a restart. The bash tool and hooks were the verified offenders and are
+ * fixed at the source, but any tool can hang (a wedged MCP server, a socket
+ * that never closes), so the loop needs its own backstop.
+ *
+ * Deliberately generous: this is a "something is broken" ceiling, not a
+ * latency target. Tools that legitimately run longer declare `timeoutMs: null`.
+ */
+const DEFAULT_TOOL_TIMEOUT_MS = 10 * 60_000;
+
 export class ToolRegistry {
   private tools = new Map<string, ToolDef>();
 
@@ -151,7 +165,33 @@ export class ToolRegistry {
       if (!parsed.success) {
         return { success: false, output: '', error: describeArgError(name, coerced, parsed.error) };
       }
-      return await tool.execute(parsed.data as Record<string, unknown>);
+
+      const budget = tool.timeoutMs === undefined ? DEFAULT_TOOL_TIMEOUT_MS : tool.timeoutMs;
+      const call = tool.execute(parsed.data as Record<string, unknown>);
+      if (budget === null) return await call;
+
+      // Racing does not cancel the underlying work — tools that own a child
+      // process kill it themselves. What this guarantees is that the AGENT
+      // stops waiting, which is what turns a hung tool from "vcode is dead"
+      // into "that one call failed".
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          call,
+          new Promise<ToolResult>((resolveP) => {
+            timer = setTimeout(() => resolveP({
+              success: false,
+              output: '',
+              error: `Tool ${name} exceeded its ${Math.round(budget / 1000)}s budget and was abandoned. `
+                + `It may still be running in the background.`,
+            }), budget);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+        // Never leave an unhandled rejection behind when the race is lost.
+        void Promise.resolve(call).catch(() => undefined);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, output: '', error: `Tool ${name} failed: ${msg}` };

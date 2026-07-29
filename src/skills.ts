@@ -23,6 +23,7 @@ import { resolve } from 'path';
 import { z } from 'zod';
 import { getConfigDir, getProjectSettingsDir } from './config.js';
 import type { ToolDef, ToolResult } from './tools/types.js';
+import { parseFrontmatter } from './frontmatter.js';
 
 export interface Skill {
   name: string;
@@ -56,28 +57,6 @@ export interface Skill {
 // allowed-tools) for which we accept either YAML inline `[a, b]` or
 // comma-separated bare strings. Keeps users out of YAML-quoting hell.
 
-function parseFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
-  const meta: Record<string, string> = {};
-  if (!raw.startsWith('---')) return { meta, body: raw };
-  const end = raw.indexOf('\n---', 3);
-  if (end === -1) return { meta, body: raw };
-  const fm = raw.slice(3, end).trim();
-  const body = raw.slice(end + 4).replace(/^\n/, '');
-  for (const line of fm.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const colonIdx = trimmed.indexOf(':');
-    if (colonIdx === -1) continue;
-    const key = trimmed.slice(0, colonIdx).trim();
-    let value = trimmed.slice(colonIdx + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    meta[key] = value;
-  }
-  return { meta, body };
-}
 
 function parseList(value: string | undefined): string[] | undefined {
   if (!value) return undefined;

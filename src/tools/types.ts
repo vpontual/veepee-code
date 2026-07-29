@@ -23,6 +23,10 @@ export interface ToolDef {
   /** For non-local sources, an optional sub-name (e.g. MCP server name,
    *  skill file basename). Used for grouping in `/tools`. */
   sourceName?: string;
+  /** Wall-clock budget for one execute() call, enforced by ToolRegistry.
+   *  Omit to take the default; set `null` for tools that legitimately run
+   *  unbounded (subagents, deep research). */
+  timeoutMs?: number | null;
 }
 
 /** Convert a ToolDef's Zod schema to Ollama tool format */

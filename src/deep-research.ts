@@ -258,6 +258,8 @@ export async function deepResearch(question: string, config: Config, log?: (s: s
 export function buildDeepResearchTool(config: Config): ToolDef {
   return {
     name: 'deep_research',
+    // Spawns its own agent loop; can legitimately run for many minutes.
+    timeoutMs: null,
     description: 'Research a question across the live web: plans sub-questions, runs multiple search+read rounds, and returns a cited Markdown report. Use for open-ended questions needing current information from multiple sources (comparisons, "what is the best/latest…", how-tos, fact-checks). Slower than web_search — use it when one search isn\'t enough.',
     schema: z.object({
       question: z.string().describe('The research question or topic to investigate thoroughly.'),

@@ -317,10 +317,11 @@ export class ModelManager {
     const complexity = this.computeComplexity(signals);
 
     // Determine target tier — but NEVER go below minModelSize or above maxModelSize
-    let targetTier: 'heavy' | 'standard' | 'light';
-    if (complexity >= 8) targetTier = 'heavy';
-    else if (complexity >= 3) targetTier = 'standard';
-    else targetTier = 'standard'; // NEVER auto-downgrade to light — too unreliable for coding
+    // Two-way by design, not three: 'light' is deliberately unreachable here
+    // because auto-downgrading to a small model is too unreliable for coding.
+    // (This was previously an if/else-if/else whose last two branches both
+    // produced 'standard', which read as an oversight rather than a decision.)
+    const targetTier: 'heavy' | 'standard' | 'light' = complexity >= 8 ? 'heavy' : 'standard';
 
     // Don't switch if already at the right tier
     if (current.tier === targetTier) return null;

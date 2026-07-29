@@ -1,6 +1,6 @@
 import { execFileSync } from 'child_process';
 import { resolve, join } from 'path';
-import { existsSync, mkdirSync, rmSync, readFileSync, appendFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, readFileSync, appendFileSync, statSync } from 'fs';
 import { randomBytes } from 'crypto';
 
 // ─── Git Worktree Manager ────────────────────────────────────────────────────
@@ -13,8 +13,11 @@ import { randomBytes } from 'crypto';
 export interface WorktreeInfo {
   path: string;
   branch: string;
-  baseBranch: string;
-  created: Date;
+  /** Branch this worktree was created from, when known. `git worktree list`
+   *  does not report it, so it is null for entries discovered by listing. */
+  baseBranch: string | null;
+  /** Creation time, or null when it cannot be determined. */
+  created: Date | null;
 }
 
 const WORKTREE_DIR = '.veepee-worktrees';
@@ -57,17 +60,19 @@ export function createWorktree(
   const worktreeBase = resolve(cwd, WORKTREE_DIR);
   if (!existsSync(worktreeBase)) {
     mkdirSync(worktreeBase, { recursive: true });
-    // Add to .gitignore if not already there
-    try {
-      const gitignorePath = resolve(cwd, '.gitignore');
-      if (existsSync(gitignorePath)) {
-        const content = readFileSync(gitignorePath, 'utf-8');
-        if (!content.includes(WORKTREE_DIR)) {
-          appendFileSync(gitignorePath, `\n${WORKTREE_DIR}/\n`);
-        }
-      }
-    } catch { /* non-critical */ }
   }
+  // Ignore the worktree tree. This used to run only when the base directory
+  // was newly created AND a .gitignore already existed, so a repo without one
+  // — or one where the directory already existed — was left showing the
+  // worktrees as untracked files forever.
+  try {
+    const gitignorePath = resolve(cwd, '.gitignore');
+    const content = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf-8') : '';
+    if (!content.includes(WORKTREE_DIR)) {
+      const prefix = content && !content.endsWith('\n') ? '\n' : '';
+      appendFileSync(gitignorePath, `${prefix}${WORKTREE_DIR}/\n`);
+    }
+  } catch { /* non-critical */ }
 
   const worktreePath = resolve(worktreeBase, branchName.replace(/\//g, '-'));
 
@@ -103,11 +108,19 @@ export function listWorktrees(cwd: string = process.cwd()): WorktreeInfo[] {
       } else if (line.startsWith('branch refs/heads/')) {
         currentBranch = line.slice(18);
         if (currentBranch.startsWith('veepee/')) {
+          // baseBranch and created are NOT recoverable from `git worktree
+          // list`. They used to be filled in with the caller's current branch
+          // and the current time, which reported confident nonsense — every
+          // worktree looked like it branched from wherever you happen to be
+          // standing and was created this instant. Derive `created` from the
+          // directory's own mtime and leave the base branch unknown.
+          let created: Date | null = null;
+          try { created = statSync(currentPath).birthtime ?? statSync(currentPath).mtime; } catch { /* gone */ }
           worktrees.push({
             path: currentPath,
             branch: currentBranch,
-            baseBranch: getCurrentBranch(cwd),
-            created: new Date(),
+            baseBranch: null,
+            created,
           });
         }
       }

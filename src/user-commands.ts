@@ -24,6 +24,7 @@
 import { readdirSync, readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import { getConfigDir, getProjectSettingsDir } from './config.js';
+import { parseFrontmatter } from './frontmatter.js';
 
 export interface UserCommand {
   /** Slash command name without leading `/`. Derived from filename (.md stripped). */
@@ -46,29 +47,6 @@ export interface UserCommand {
 // nested structures. That matches every real-world slash command we'd want
 // to author and avoids dragging in a YAML dep for one file format.
 
-function parseFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
-  const meta: Record<string, string> = {};
-  if (!raw.startsWith('---')) return { meta, body: raw };
-  const end = raw.indexOf('\n---', 3);
-  if (end === -1) return { meta, body: raw };
-  const fm = raw.slice(3, end).trim();
-  const body = raw.slice(end + 4).replace(/^\n/, '');
-  for (const line of fm.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const colonIdx = trimmed.indexOf(':');
-    if (colonIdx === -1) continue;
-    const key = trimmed.slice(0, colonIdx).trim();
-    let value = trimmed.slice(colonIdx + 1).trim();
-    // Strip simple surrounding quotes
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    meta[key] = value;
-  }
-  return { meta, body };
-}
 
 // ─── Discovery ─────────────────────────────────────────────────────────
 
