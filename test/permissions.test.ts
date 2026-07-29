@@ -1,11 +1,34 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { PermissionManager } from '../src/permissions.js';
-import { resolve } from 'path';
+import { resolve, join } from 'path';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+
+// PermissionManager reads and WRITES $HOME/.veepee-code/permissions.json.
+// Without this isolation the suite persisted grants into the developer's real
+// config and then read them back, so tests leaked into each other and into the
+// machine. (It went unnoticed while the load was async and lost the race.)
+let tmpHome: string;
+let prevHome: string | undefined;
+
+beforeEach(() => {
+  tmpHome = mkdtempSync(join(tmpdir(), 'vcode-perms-'));
+  prevHome = process.env.HOME;
+  process.env.HOME = tmpHome;
+});
+
+afterEach(() => {
+  if (prevHome === undefined) delete process.env.HOME;
+  else process.env.HOME = prevHome;
+  rmSync(tmpHome, { recursive: true, force: true });
+});
 
 describe('PermissionManager', () => {
   it('auto-allows safe tools without prompting', async () => {
     const pm = new PermissionManager();
-    const safeTools = ['read_file', 'list_files', 'glob', 'grep', 'git', 'news'];
+    // `git` is deliberately absent: it takes arbitrary subcommands, so it is
+    // gated per-subcommand instead (see below).
+    const safeTools = ['read_file', 'list_files', 'glob', 'grep', 'news'];
 
     for (const tool of safeTools) {
       const result = await pm.check(tool, {});
@@ -13,11 +36,24 @@ describe('PermissionManager', () => {
     }
   });
 
-  it('allows in API mode (no prompt handler) for unknown tools', async () => {
+  it('auto-allows read-only git but not mutating git', async () => {
     const pm = new PermissionManager();
-    // No prompt handler set — should auto-allow
+    pm.setPromptHandler(async () => 'n');
+
+    for (const args of ['status', 'diff --staged', 'log --oneline']) {
+      expect(await pm.check('git', { args }), args).toBe('allow');
+    }
+    for (const args of ['commit -m wip', 'push -f origin main', 'clean -fdx']) {
+      expect(await pm.check('git', { args }), args).toBe('deny');
+    }
+  });
+
+  it('denies when no prompt handler is installed', async () => {
+    const pm = new PermissionManager();
+    // Fails closed: entry points state their policy explicitly, and callers
+    // wanting no gate pass permissionMode 'auto_allow', which skips check().
     const result = await pm.check('bash', { command: 'ls' });
-    expect(result).toBe('allow');
+    expect(result).toBe('deny');
   });
 
   it('prompts for non-safe tools when handler is set', async () => {

@@ -1,6 +1,6 @@
-import { writeFile, readFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir } from 'fs/promises';
 import { resolve, isAbsolute, relative } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 
 export type PermissionDecision = 'allow' | 'allow_always' | 'deny';
 
@@ -145,6 +145,24 @@ export class PermissionManager {
     this.loadPersisted();
   }
 
+  /** Load saved grants. Synchronous by design: the constructor cannot await,
+   *  and an async read left a window where check() ran against empty sets and
+   *  re-prompted for tools the user had already allowed permanently. The file
+   *  is a few hundred bytes. */
+  private loadPersisted(): void {
+    if (!existsSync(this.configPath)) return;
+    try {
+      const parsed = JSON.parse(readFileSync(this.configPath, 'utf-8')) as {
+        alwaysAllowed?: string[];
+        projectAllowed?: string[];
+      };
+      for (const tool of parsed.alwaysAllowed ?? []) this.alwaysAllowed.add(tool);
+      for (const entry of parsed.projectAllowed ?? []) this.projectAllowed.add(entry);
+    } catch {
+      // Ignore corrupt file
+    }
+  }
+
   /** Set a custom prompt handler (used by TUI) */
   setPromptHandler(handler: PromptHandler): void {
     this.promptHandler = handler;
@@ -205,7 +223,13 @@ export class PermissionManager {
 
   private async prompt(toolName: string, args: Record<string, unknown>, reason?: string, preview?: string): Promise<PermissionDecision> {
     if (!this.promptHandler) {
-      return 'allow'; // API mode — no interactive prompt
+      // Fail closed. Every real entry point installs a handler and states its
+      // policy explicitly — `-p` sets auto-approve, `--serve` sets deny, the
+      // TUI prompts — and callers that want no gate at all pass
+      // permissionMode: 'auto_allow', which bypasses check() entirely. So a
+      // missing handler means an entry point forgot, and the safe answer to
+      // "nobody can be asked" is no, not yes.
+      return 'deny';
     }
 
     const answer = await this.promptHandler(toolName, args, reason, preview);
@@ -259,26 +283,6 @@ export class PermissionManager {
       sessionAllowed: Array.from(this.sessionAllowed).sort(),
       safeTools: Array.from(PermissionManager.SAFE_TOOLS).sort(),
     };
-  }
-
-  private async loadPersisted(): Promise<void> {
-    if (!existsSync(this.configPath)) return;
-    try {
-      const data = await readFile(this.configPath, 'utf-8');
-      const parsed = JSON.parse(data) as { alwaysAllowed?: string[]; projectAllowed?: string[] };
-      if (parsed.alwaysAllowed) {
-        for (const tool of parsed.alwaysAllowed) {
-          this.alwaysAllowed.add(tool);
-        }
-      }
-      if (parsed.projectAllowed) {
-        for (const entry of parsed.projectAllowed) {
-          this.projectAllowed.add(entry);
-        }
-      }
-    } catch {
-      // Ignore corrupt file
-    }
   }
 
   private async savePersisted(): Promise<void> {

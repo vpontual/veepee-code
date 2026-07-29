@@ -295,8 +295,8 @@ async function main() {
   // Initialize sync manager (if configured)
   const syncManager = config.sync ? new SyncManager(config.sync.url, config.sync.user, config.sync.pass) : null;
 
-  // Cleanup stale sandbox dirs on startup (>24h old)
-  SandboxManager.cleanupStale().catch(() => {});
+  // Cleanup stale sandbox dirs on startup (>24h untouched), never this session's
+  SandboxManager.cleanupStale(undefined, sessionId).catch(() => {});
 
   // Print mode: run query, output to stdout, exit
   if (printQuery) {

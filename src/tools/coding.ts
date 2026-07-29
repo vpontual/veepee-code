@@ -568,10 +568,16 @@ function createGitTool(): ToolDef {
   };
 }
 
-/** Parse a command string into an array, respecting quoted strings */
-function parseArgs(str: string): string[] {
+/** Parse a command string into an array, respecting quoted strings.
+ *
+ *  `quoted` tracks whether the current token contained a quoted section, so a
+ *  deliberately empty argument survives. Testing truthiness of `current` alone
+ *  silently dropped it: `commit -m ""` became `commit -m`, and git then failed
+ *  on a missing message. */
+export function parseArgs(str: string): string[] {
   const args: string[] = [];
   let current = '';
+  let quoted = false;
   let inQuote: string | null = null;
   for (const ch of str) {
     if (inQuote) {
@@ -579,13 +585,14 @@ function parseArgs(str: string): string[] {
       else { current += ch; }
     } else if (ch === '"' || ch === "'") {
       inQuote = ch;
+      quoted = true;
     } else if (ch === ' ' || ch === '\t') {
-      if (current) { args.push(current); current = ''; }
+      if (current || quoted) { args.push(current); current = ''; quoted = false; }
     } else {
       current += ch;
     }
   }
-  if (current) args.push(current);
+  if (current || quoted) args.push(current);
   return args;
 }
 

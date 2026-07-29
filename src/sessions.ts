@@ -1,4 +1,4 @@
-import { writeFile, readFile, readdir, mkdir } from 'fs/promises';
+import { writeFile, readFile, readdir, mkdir, rename, unlink } from 'fs/promises';
 import { resolve, join } from 'path';
 import { existsSync } from 'fs';
 import type { Message, ToolCall } from 'ollama';
@@ -109,18 +109,31 @@ export async function saveSession(
   const filename = `${session.id}-${slugify(name)}.json`;
   const filepath = join(SESSIONS_DIR, filename);
 
-  // If updating existing session, remove old file first (name might have changed)
+  // Write-then-replace. Writing straight to `filepath` leaves the session
+  // truncated if we crash or run out of disk mid-write; deleting the old file
+  // first (as this used to) loses it outright. Rename is atomic within a
+  // filesystem, so the session file is always either the old one or the
+  // complete new one.
+  const tmpPath = `${filepath}.tmp-${process.pid}`;
+  try {
+    await writeFile(tmpPath, JSON.stringify(session, null, 2));
+    await rename(tmpPath, filepath);
+  } catch (err) {
+    await unlink(tmpPath).catch(() => {});
+    throw err;
+  }
+
+  // Only once the new file is safely in place, drop stale files for this
+  // session that were written under a previous name.
   if (existingId) {
     const files = await readdir(SESSIONS_DIR).catch(() => []);
     for (const f of files) {
-      if (f.startsWith(existingId)) {
-        const { unlink } = await import('fs/promises');
+      if (f.startsWith(existingId) && f !== filename) {
         await unlink(join(SESSIONS_DIR, f)).catch(() => {});
       }
     }
   }
 
-  await writeFile(filepath, JSON.stringify(session, null, 2));
   return session;
 }
 

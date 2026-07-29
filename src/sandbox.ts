@@ -75,6 +75,15 @@ export class SandboxManager {
       ? resolve(process.cwd(), destination)
       : resolve(process.cwd(), basename(file));
 
+    // rename() clobbers silently. The destination is user-supplied, so the
+    // only safe default is to refuse and let them name a different target.
+    if (existsSync(destPath)) {
+      throw new Error(
+        `Refusing to overwrite existing file: ${destPath}\n` +
+        `Pass a different destination, or remove the file first.`,
+      );
+    }
+
     try {
       // Try rename first (same filesystem = instant)
       await rename(srcPath, destPath);
@@ -102,8 +111,10 @@ export class SandboxManager {
     return entries.length > 0;
   }
 
-  /** Remove sandbox directories older than 24 hours (call on startup) */
-  static async cleanupStale(rootDir?: string): Promise<number> {
+  /** Remove sandbox directories untouched for 24 hours (call on startup).
+   *
+   *  `skipSessionId` protects the live session unconditionally. */
+  static async cleanupStale(rootDir?: string, skipSessionId?: string): Promise<number> {
     const sandboxRoot = rootDir || getSandboxRoot();
     if (!existsSync(sandboxRoot)) return 0;
 
@@ -113,18 +124,38 @@ export class SandboxManager {
     try {
       const dirs = await readdir(sandboxRoot);
       for (const dir of dirs) {
+        if (skipSessionId && dir === skipSessionId) continue;
         const dirPath = join(sandboxRoot, dir);
         try {
           const s = await stat(dirPath);
-          if (s.isDirectory() && s.mtimeMs < cutoff) {
-            await rm(dirPath, { recursive: true, force: true });
-            cleaned++;
-          }
+          if (!s.isDirectory()) continue;
+          if (await SandboxManager.lastTouchedMs(dirPath, s.mtimeMs) >= cutoff) continue;
+          await rm(dirPath, { recursive: true, force: true });
+          cleaned++;
         } catch { /* skip */ }
       }
     } catch { /* sandbox root doesn't exist yet */ }
 
     return cleaned;
+  }
+
+  /** Newest mtime across a directory and its entries.
+   *
+   *  A directory's own mtime only changes when entries are added or removed —
+   *  not when a file inside it is written. Keying staleness on the directory
+   *  alone deleted the sandbox of a long-running session that kept rewriting
+   *  the same files. */
+  private static async lastTouchedMs(dirPath: string, dirMtimeMs: number): Promise<number> {
+    let newest = dirMtimeMs;
+    try {
+      for (const entry of await readdir(dirPath)) {
+        try {
+          const es = await stat(join(dirPath, entry));
+          if (es.mtimeMs > newest) newest = es.mtimeMs;
+        } catch { /* unreadable entry — ignore */ }
+      }
+    } catch { /* unreadable dir — fall back to its own mtime */ }
+    return newest;
   }
 
   /** Resolve a path that may be sandbox-relative (sandbox:filename) */
