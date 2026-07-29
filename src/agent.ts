@@ -620,6 +620,50 @@ export class Agent {
     } catch { /* best effort */ }
   }
 
+  /**
+   * Look for enumerated sets that fell out of step with the files just edited.
+   *
+   * Scope is deliberately narrow: only files in the same directories as the
+   * ones edited this turn, and only source files. A repo-wide scan would be
+   * slow and would surface unrelated lists — this is a nudge, and a noisy nudge
+   * costs a turn every time it is wrong.
+   */
+  private async buildCompletenessNudgeForTurn(editedPaths: Set<string>): Promise<string | null> {
+    try {
+      const { readdir, readFile: rf } = await import('node:fs/promises');
+      const { dirname, join: joinPath, extname, relative: rel } = await import('node:path');
+      const SOURCE = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs']);
+      const MAX_FILES = 40;
+      const MAX_BYTES = 200_000;
+
+      const dirs = new Set([...editedPaths].map((p) => dirname(p)));
+      const files = new Map<string, string>();
+      for (const dir of dirs) {
+        let entries: string[] = [];
+        try { entries = await readdir(dir); } catch { continue; }
+        for (const name of entries) {
+          if (files.size >= MAX_FILES) break;
+          if (!SOURCE.has(extname(name))) continue;
+          const full = joinPath(dir, name);
+          try {
+            const content = await rf(full, 'utf-8');
+            if (content.length <= MAX_BYTES) files.set(rel(process.cwd(), full), content);
+          } catch { /* unreadable — skip */ }
+        }
+      }
+      if (files.size < 2) return null;
+
+      const { findExtensionGaps, buildCompletenessNudge } = await import('./completeness.js');
+      // Only report a file the model did NOT just edit; if it edited the file
+      // and left it as-is, that was a decision, not an oversight.
+      const editedRel = new Set([...editedPaths].map((p) => rel(process.cwd(), p)));
+      const gaps = findExtensionGaps(files).filter((g) => !editedRel.has(g.file));
+      return buildCompletenessNudge(gaps);
+    } catch {
+      return null; // never fail a turn over a nudge
+    }
+  }
+
   setModel(model: string): void {
     this.modelManager.switchTo(model);
     this.context.setSystemPrompt(model);
@@ -742,6 +786,9 @@ export class Agent {
     // Daily-driver #1 (self-repair): true once code is edited, cleared when the model runs
     // something (bash) — so we can force a verify-and-fix turn if it finishes without running it.
     let codeChangedUnverified = false;
+    let forcedCompletenessOnce = false;
+    /** Files this run wrote to, for the incomplete-extension check. */
+    const editedPaths = new Set<string>();
     let forcedVerifyOnce = false;
 
     for (let turn = 0; ; turn++) {
@@ -1075,6 +1122,18 @@ export class Agent {
           yield { type: 'info', content: 'Nudged: verify your code change before finishing' };
           continue;
         }
+        // Incomplete extension: a new member added to one enumerated set but not
+        // to the others that list the same family. Passing tests do not rule
+        // this out — nothing exercises the half that was missed.
+        if (this.mode === 'act' && !forcedCompletenessOnce && editedPaths.size > 0) {
+          forcedCompletenessOnce = true;
+          const nudge = await this.buildCompletenessNudgeForTurn(editedPaths);
+          if (nudge) {
+            this.context.addUser(nudge);
+            yield { type: 'info', content: 'Nudged: sibling files may need the same change' };
+            continue;
+          }
+        }
         // Save knowledge state to disk (non-blocking)
         this.context.getKnowledgeState().save().catch(() => {});
 
@@ -1258,6 +1317,15 @@ export class Agent {
             content: result.success ? result.output : result.error,
             error: result.error,
           };
+
+          // Only SUCCESSFUL writes count as "the model handled this file". An
+          // attempted-but-failed edit must stay eligible for the completeness
+          // nudge — a file the model tried and could not change is exactly the
+          // one most likely to have been left behind.
+          if (result.success && CODE_MUTATION_TOOLS.has(toolName)) {
+            const ep = (toolArgs as { path?: string }).path;
+            if (typeof ep === 'string' && ep) editedPaths.add(resolve(ep));
+          }
 
           const resultContent = result.success ? result.output : `Error: ${result.error}`;
           const filePath = (toolArgs.path as string) || undefined;
