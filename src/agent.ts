@@ -12,6 +12,7 @@ import { SubAgentManager } from './subagent.js';
 import { runHooks, shouldBlock, type HookExecResult } from './hooks.js';
 import { previewEdit, previewWrite } from './diff.js';
 import { PLAN_DISABLED_TOOLS } from './tools/plan-gate.js';
+import type { CheckpointManager } from './checkpoint.js';
 import { signatureOf, detectStuckSignature, LOOP_WINDOW, LOOP_MAX_REPEATS, type SignedStep } from './loop-detection.js';
 import { readFile, readFile as readFileAsync, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, relative } from 'path';
@@ -148,6 +149,10 @@ export class Agent {
   private modelManager: ModelManager;
   private registry: ToolRegistry;
   private permissions: PermissionManager;
+  /** Optional file checkpointing. Best-effort: never blocks or fails a turn. */
+  private checkpoints: CheckpointManager | null = null;
+  /** True once this turn has taken its snapshot, so we take at most one. */
+  private checkpointedThisTurn = false;
   private optimalContextSizes = new Map<string, number>();
   private mode: AgentMode = 'act';
   private previousModel: string | null = null;
@@ -550,6 +555,7 @@ export class Agent {
   ): AsyncGenerator<AgentEvent> {
     if (this.runLock) throw new AgentBusyError();
     this.runLock = true;
+    this.checkpointedThisTurn = false;
     return this.withRunLock(this._run(userMessage, options));
   }
 
@@ -590,6 +596,28 @@ export class Agent {
       });
     }
     return { client: this.gatewayClient, isAdapter: false };
+  }
+
+  /** Attach file checkpointing. Optional — without it the agent behaves exactly
+   *  as before, just with no rewind. */
+  setCheckpointManager(cm: CheckpointManager | null): void {
+    this.checkpoints = cm;
+  }
+
+  /**
+   * Snapshot the working tree before the first tool of a turn runs.
+   *
+   * Taken lazily rather than at turn start so read-only turns cost nothing, and
+   * before the tool rather than after so the checkpoint represents "the state
+   * you can get back to". Deliberately swallows everything: losing a checkpoint
+   * is an inconvenience, failing the user's turn because of one is not.
+   */
+  private async checkpointOnce(userMessage: string): Promise<void> {
+    if (!this.checkpoints || this.checkpointedThisTurn) return;
+    this.checkpointedThisTurn = true;
+    try {
+      await this.checkpoints.snapshot(userMessage);
+    } catch { /* best effort */ }
   }
 
   setModel(model: string): void {
@@ -1087,6 +1115,10 @@ export class Agent {
         if (CODE_MUTATION_TOOLS.has(n)) codeChangedUnverified = true;
         else if (n === 'bash') codeChangedUnverified = false;
       }
+
+      // Snapshot the working tree before anything runs this turn. Placed here
+      // rather than at turn start so read-only turns cost nothing.
+      await this.checkpointOnce(userMessage);
 
       // Execute tool calls — parallelize independent read-only calls
       const READ_ONLY_TOOLS = new Set(['read_file', 'glob', 'grep', 'list_files', 'system_info', 'web_search', 'web_fetch']);

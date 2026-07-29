@@ -30,6 +30,7 @@ import { KnowledgeState } from './knowledge.js';
 import { createWorktree, listWorktrees, cleanupWorktrees, isGitRepo } from './worktree.js';
 import { needsWizard, runWizard, runWizardForStep, getWizardStepIds } from './wizard.js';
 import { SandboxManager, formatSize } from './sandbox.js';
+import { CheckpointManager } from './checkpoint.js';
 import { PreviewManager } from './preview.js';
 import { SyncManager } from './sync.js';
 import { registerRcRoutes, generateRcToken } from './rc.js';
@@ -324,6 +325,10 @@ async function main() {
   // Initialize sandbox
   const sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const sandbox = new SandboxManager(sessionId);
+  // File checkpointing — snapshots the working tree once per turn that runs a
+  // tool, so an agent turn can be undone with /rewind.
+  const checkpoints = new CheckpointManager(process.cwd());
+  agent.setCheckpointManager(checkpoints);
   agent.getContext().setSandboxPath(sandbox.getPathSync());
 
   // Initialize preview manager
@@ -1080,7 +1085,7 @@ async function main() {
     if (rcOnRemoteCommand) {
       rcOnRemoteCommand(async (message) => {
         tui.addCommandMessage(`[RC] ${message}`);
-        const result = await handleCommand(message, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId, sandbox, preview, syncManager, lspManager, runTurn);
+        const result = await handleCommand(message, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId, sandbox, preview, syncManager, lspManager, runTurn, checkpoints);
         if (typeof result === 'string' && result.startsWith('session:')) {
           currentSessionId = result.slice(8) || null;
         }
@@ -1123,7 +1128,7 @@ async function main() {
     if (trimmed.startsWith('/')) {
       // Show the command in the chat (but don't start the turn tracker — commands don't go to the LLM)
       tui.addCommandMessage(trimmed);
-      const result = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId, sandbox, preview, syncManager, lspManager, runTurn);
+      const result = await handleCommand(trimmed, tui, agent, modelManager, registry, permissions, config, actualApiPort, currentSessionId, sandbox, preview, syncManager, lspManager, runTurn, checkpoints);
       if (result === true) break; // quit
       if (typeof result === 'string' && result.startsWith('session:')) {
         currentSessionId = result.slice(8) || null;
@@ -1314,6 +1319,7 @@ async function handleCommand(
   syncManager: SyncManager | null,
   lspManager: LspManager,
   runTurn: (text: string) => Promise<void>,
+  checkpoints: CheckpointManager,
 ): Promise<boolean | string | void> {
   // Returns: true = quit, 'session:<id>' = set session ID, void = continue
   const parts = input.split(/\s+/);
@@ -1356,6 +1362,7 @@ async function handleCommand(
         `  ${theme.accent('/resume <name>')}    Resume a session    ${theme.accent('/rename <name>')} Rename session`,
         `  ${theme.accent('/fork [name]')}      Fork current session ${theme.accent('/projects')}    List tracked projects`,
         `  ${theme.accent('/add-dir <path>')}   Add working dir     ${theme.accent('/worktree')}     Git worktree isolation`,
+        `  ${theme.accent('/rewind')}           Undo file changes   ${theme.dim('/rewind <id> [yes]')}`,
         `  ${theme.accent('/ralph <task>')}      Work→Review loop    ${theme.dim('/ralph --max <n> <task>')}`,
         `  ${theme.accent('/effort low|med|hi')} Set response depth  ${theme.accent('/settings')}    View/toggle settings`,
         '',
@@ -2031,6 +2038,59 @@ async function handleCommand(
         tui.showError(err instanceof Error ? err.message : String(err));
         return false;
       }
+    }
+
+    case '/rewind': {
+      const sub = parts[1];
+      const entries = checkpoints.list();
+      const unavailable = checkpoints.unavailableReason();
+
+      if (unavailable) {
+        tui.showInfo(`${theme.warning('Checkpointing unavailable:')} ${unavailable}`);
+        return false;
+      }
+
+      if (!sub) {
+        if (entries.length === 0) {
+          tui.showInfo(theme.dim('No checkpoints yet. One is taken before the first tool call of each turn.'));
+          return false;
+        }
+        const lines = [`${theme.textBold('Checkpoints')} ${theme.dim('(newest first)')}`, ''];
+        for (const c of entries.slice(0, 20)) {
+          const when = new Date(c.at).toLocaleTimeString();
+          lines.push(`  ${theme.accent(c.id)}  ${theme.dim(when)}  ${c.label || theme.dim('(no label)')}`);
+        }
+        lines.push('');
+        lines.push(theme.dim('  /rewind <id>       Preview what restoring would change'));
+        lines.push(theme.dim('  /rewind <id> yes   Restore the working tree to that checkpoint'));
+        tui.showInfo(lines.join('\n'));
+        return false;
+      }
+
+      const confirm = parts[2]?.toLowerCase();
+      if (confirm !== 'yes') {
+        // Preview first, always. Restoring overwrites the user's files, so the
+        // default action for `/rewind <id>` is to show the damage, not do it.
+        const pv = await checkpoints.previewRestore(sub);
+        if (!pv.ok) { tui.showError(pv.error); return false; }
+        tui.showInfo([
+          `${theme.textBold('Restoring')} ${theme.accent(sub)} ${theme.dim('would:')}`,
+          '',
+          pv.summary,
+          '',
+          pv.files === 0 ? '' : theme.dim(`  Confirm with: /rewind ${sub} yes`),
+        ].filter(Boolean).join('\n'));
+        return false;
+      }
+
+      const res = await checkpoints.restore(sub);
+      if (!res.ok) { tui.showError(res.error); return false; }
+      tui.showInfo([
+        `${theme.success('Restored')} ${res.changed} file change${res.changed === 1 ? '' : 's'} to checkpoint ${theme.accent(sub)}.`,
+        res.undoId ? theme.dim(`  Undo this rewind: /rewind ${res.undoId} yes`) : '',
+        theme.dim('  Note: the conversation is unchanged — use /tree to rewind that too.'),
+      ].filter(Boolean).join('\n'));
+      return false;
     }
 
     case '/doctor': {

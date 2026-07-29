@@ -289,6 +289,22 @@ Affects all subsequent responses until changed again or the session ends.
 
 ### Workspace Management
 
+#### /rewind [id] [yes]
+
+Undo file changes made during a turn. A snapshot of the working tree is taken before the first tool of each turn runs.
+
+```
+/rewind                # List recent checkpoints, newest first
+/rewind a3f91c2b       # Preview exactly what restoring would change
+/rewind a3f91c2b yes   # Restore the working tree to that checkpoint
+```
+
+`/rewind <id>` on its own never modifies anything — restoring overwrites files, so it shows the change list and waits for `yes`. Every restore snapshots the current state first, so the rewind itself can be undone.
+
+Covers changes made by shell commands as well as by the edit tools; ignores whatever `.gitignore` excludes. See [Checkpoints and /rewind](checkpoints.md) for details.
+
+Distinct from `/tree`, which rewinds the conversation rather than the files.
+
 #### /worktree [list|create [name]|cleanup]
 
 Manage git worktree isolation for experiments.
