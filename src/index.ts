@@ -538,7 +538,10 @@ async function main() {
             tui.showThinking(event.content || '...');
             break;
           case 'info':
-            tui.showThinking(event.content || '');
+            // showInfo, not showThinking: a non-'...' payload takes the
+            // REPLACE_LAST_THINKING path, so info text used to overwrite the
+            // turn's reasoning block and render in its place.
+            tui.showInfo(event.content || '');
             break;
           case 'reset_stream':
             tui.resetStream();
@@ -977,7 +980,10 @@ async function main() {
             break;
 
           case 'info':
-            tui.showThinking(event.content || '');
+            // showInfo, not showThinking: a non-'...' payload takes the
+            // REPLACE_LAST_THINKING path, so info text used to overwrite the
+            // turn's reasoning block and render in its place.
+            tui.showInfo(event.content || '');
             break;
 
           case 'reset_stream':

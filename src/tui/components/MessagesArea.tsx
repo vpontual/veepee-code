@@ -40,12 +40,15 @@ interface MessagesAreaProps {
   scrollOffset: number;
   visibleRows: number;
   cols: number;
+  /** Advances every 500ms while a turn is active; drives the thinking spinner
+   *  so its frame is an input to rendering rather than a clock read inside it. */
+  renderTick: number;
 }
 
 export function MessagesArea({
   messages, streamActive, streamBuffer,
   permissionActive, permissionOptions, permissionMenuSelection,
-  scrollOffset, visibleRows, cols,
+  scrollOffset, visibleRows, cols, renderTick,
 }: MessagesAreaProps): React.ReactElement {
   const maxWidth = cols - 4;
 
@@ -74,7 +77,7 @@ export function MessagesArea({
       }
     }
 
-    const lines = formatMessage(msg, maxWidth);
+    const lines = formatMessage(msg, maxWidth, renderTick);
     renderedLines.push(...lines);
   }
 
@@ -82,7 +85,7 @@ export function MessagesArea({
   if (streamActive && streamBuffer) {
     renderedLines.push(' ');
     const streamMsg = { role: 'assistant' as const, content: streamBuffer };
-    const streamLines = formatMessage(streamMsg, maxWidth);
+    const streamLines = formatMessage(streamMsg, maxWidth, renderTick);
     renderedLines.push(...streamLines);
   }
 

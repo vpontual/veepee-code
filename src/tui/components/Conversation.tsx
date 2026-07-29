@@ -58,6 +58,7 @@ export function Conversation({ state, rows, cols, hasResolveInput }: Conversatio
           scrollOffset={state.scrollOffset}
           visibleRows={Math.max(1, messagesHeight)}
           cols={cols}
+          renderTick={state.renderTick}
         />
       </Box>
 

@@ -1,5 +1,10 @@
 import type { AppState, AppAction, TreeViewItem, TreeViewFilter } from './types.js';
 
+/** Transcript cap. Every path that appends a message must apply this, or the
+ *  cap silently doesn't hold for that path. */
+const MAX_MESSAGES = 500;
+const MESSAGES_AFTER_TRIM = 400;
+
 /** Filter the active-path tree-view items by mode. Pure helper so both
  *  reducer and component agree on what's visible. */
 export function filteredTreeItems(items: TreeViewItem[], filter: TreeViewFilter): TreeViewItem[] {
@@ -88,8 +93,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case 'ADD_MESSAGE': {
       const messages = [...state.messages, action.message];
-      if (messages.length > 500) {
-        return { ...state, messages: messages.slice(-400) };
+      if (messages.length > MAX_MESSAGES) {
+        return { ...state, messages: messages.slice(-MESSAGES_AFTER_TRIM) };
       }
       return { ...state, messages };
     }
@@ -98,11 +103,18 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case 'REPLACE_LAST_THINKING': {
       const msgs = [...state.messages];
-      const lastIdx = msgs.findLastIndex(m => m.role === 'thinking');
-      if (lastIdx >= 0) {
-        msgs[lastIdx] = action.message;
+      // Only the message currently at the end may be replaced. Searching the
+      // whole history (findLastIndex) reached back into earlier turns and
+      // overwrote their reasoning in place — the new text silently replaced
+      // old content and appeared at that old scroll position instead of at
+      // the end. If the trailing message isn't the in-progress thinking
+      // block, this is a new one and gets appended.
+      const last = msgs[msgs.length - 1];
+      if (last?.role === 'thinking') {
+        msgs[msgs.length - 1] = action.message;
       } else {
         msgs.push(action.message);
+        if (msgs.length > MAX_MESSAGES) msgs.splice(0, msgs.length - MESSAGES_AFTER_TRIM);
       }
       return { ...state, messages: msgs };
     }
@@ -162,7 +174,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       const newMsgs = [...state.messages];
       if (state.streamBuffer.trim()) {
         newMsgs.push({ role: 'assistant', content: state.streamBuffer.trim() });
-        if (newMsgs.length > 500) newMsgs.splice(0, newMsgs.length - 400);
+        if (newMsgs.length > MAX_MESSAGES) newMsgs.splice(0, newMsgs.length - MESSAGES_AFTER_TRIM);
       }
       return { ...state, streamBuffer: '', streamActive: false, progressBarActive: false, view: 'conversation', messages: newMsgs };
     }

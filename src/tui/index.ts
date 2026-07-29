@@ -374,8 +374,11 @@ export class TUI {
 
     if (this.turnTrackerInterval) clearInterval(this.turnTrackerInterval);
     this.turnTrackerInterval = setInterval(() => {
-      // Trigger a re-render by dispatching a no-op-like action
-      // The TurnTracker component handles its own timer
+      // FORCE_RENDER bumps renderTick, which is what actually re-renders the
+      // turn tracker's elapsed time and advances the thinking spinner. The
+      // body used to be empty with a comment saying it dispatched something,
+      // so neither animated: the interval just burned a timer.
+      this.dispatch({ type: 'FORCE_RENDER' });
     }, 500);
   }
 
