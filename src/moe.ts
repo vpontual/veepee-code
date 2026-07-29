@@ -48,8 +48,10 @@ const SYNTHESIZE_PATTERNS = [
 function detectStrategy(message: string): MoeStrategy {
   if (DEBATE_PATTERNS.some(p => p.test(message))) return 'debate';
   if (FASTEST_PATTERNS.some(p => p.test(message))) return 'fastest';
-  if (SYNTHESIZE_PATTERNS.some(p => p.test(message))) return 'synthesize';
-  return 'synthesize'; // default
+  // SYNTHESIZE_PATTERNS is not consulted: synthesize is already the default,
+  // so testing it first was a no-op. Kept as documentation of what the
+  // synthesize-shaped prompts look like.
+  return 'synthesize';
 }
 
 // ─── MoE Engine ──────────────────────────────────────────────────────────────
@@ -212,9 +214,20 @@ export class MoeEngine {
           }
         }
       } catch (err) {
-        if (!abortControllers[idx].signal.aborted) {
-          content = `Error: ${(err as Error).message}`;
-        }
+        // REJECT rather than resolving with an error string. Promise.any takes
+        // the first promise to FULFIL, so a promise that always fulfils turns
+        // the race into "whichever settles first" — and a model missing from
+        // the proxy 404s in milliseconds, far faster than any real generation,
+        // so the user was shown "Error: model not found" as the answer.
+        onProgress?.(model.name, model.role, 'done', '');
+        throw new Error(`${model.name}: ${(err as Error).message}`);
+      }
+
+      // An empty completion is not a usable answer either; let a slower model
+      // that actually said something win instead.
+      if (!content.trim()) {
+        onProgress?.(model.name, model.role, 'done', '');
+        throw new Error(`${model.name}: empty response`);
       }
 
       const elapsed = Date.now() - start;
@@ -222,8 +235,18 @@ export class MoeEngine {
       return { model: model.name, content, elapsed, role: model.role };
     });
 
-    // Race: take the first successful response, then abort the rest
-    const winner = await Promise.any(promises);
+    // Race: take the first model to produce a real answer, then abort the rest.
+    // Promise.any rejects with an AggregateError only if EVERY model failed.
+    let winner: MoeResponse['responses'][number];
+    try {
+      winner = await Promise.any(promises);
+    } catch (err) {
+      const causes = err instanceof AggregateError
+        ? err.errors.map((e) => (e as Error).message).join('; ')
+        : String(err);
+      abortControllers.forEach((ac) => ac.abort());
+      throw new Error(`All ${this.models.length} models failed: ${causes}`);
+    }
     abortControllers.forEach((ac, idx) => {
       if (this.models[idx].name !== winner.model) ac.abort();
     });

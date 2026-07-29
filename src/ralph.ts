@@ -8,7 +8,7 @@
  * State persists in {cwd}/.veepee/ralph/ so work survives context compaction.
  */
 
-import { writeFile, mkdir, readdir, readFile } from 'fs/promises';
+import { writeFile, mkdir, readdir, readFile, rename, unlink } from 'fs/promises';
 import { resolve, join } from 'path';
 import type { Config } from './config.js';
 import type { ModelRoster } from './benchmark.js';
@@ -180,20 +180,20 @@ export class RalphEngine {
   }
 
   private parseDecision(text: string): RalphDecision {
-    // Look for the decision keyword, preferably on its own line at the end
-    const lines = text.split('\n').map(l => l.trim().toUpperCase());
-    // Search from the end for a standalone decision keyword
+    // Only a line that is EXACTLY the keyword counts. Accepting prefixes and
+    // suffixes made prose decide the loop: a review ending "SHIP only after
+    // the tests pass" startsWith('SHIP ') and shipped, and the old whole-text
+    // fallback shipped on "I would not SHIP this".
+    const lines = text.split('\n').map(l => l.trim().toUpperCase().replace(/[.*_`:]+$/, ''));
     for (let i = lines.length - 1; i >= Math.max(0, lines.length - 5); i--) {
       const line = lines[i];
-      if (line === 'SHIP' || line.startsWith('SHIP ') || line.endsWith(' SHIP')) return 'SHIP';
-      if (line === 'ABANDON' || line.startsWith('ABANDON ') || line.endsWith(' ABANDON')) return 'ABANDON';
-      if (line === 'REVISE' || line.startsWith('REVISE ') || line.endsWith(' REVISE')) return 'REVISE';
+      if (line === 'SHIP') return 'SHIP';
+      if (line === 'ABANDON') return 'ABANDON';
+      if (line === 'REVISE') return 'REVISE';
     }
-    // Fall back to any occurrence in the text
-    const upper = text.toUpperCase();
-    if (/\bSHIP\b/.test(upper)) return 'SHIP';
-    if (/\bABANDON\b/.test(upper)) return 'ABANDON';
-    return 'REVISE'; // default: keep iterating
+    // No explicit verdict — keep iterating. Guessing from prose is what made
+    // this unsafe; REVISE is the outcome that cannot lose work.
+    return 'REVISE';
   }
 
   private async *streamModel(model: string, prompt: string): AsyncGenerator<string> {
@@ -214,7 +214,17 @@ export class RalphEngine {
   private async saveState(state: RalphState): Promise<void> {
     const dir = resolve(process.cwd(), '.veepee', 'ralph');
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, `${state.id}.json`), JSON.stringify(state, null, 2));
+    // Atomic — this is rewritten every iteration, and a torn file is silently
+    // skipped by listStates(), losing the whole run.
+    const target = join(dir, `${state.id}.json`);
+    const tmp = `${target}.tmp-${process.pid}`;
+    try {
+      await writeFile(tmp, JSON.stringify(state, null, 2));
+      await rename(tmp, target);
+    } catch (err) {
+      await unlink(tmp).catch(() => {});
+      throw err;
+    }
   }
 
   /** List all saved ralph states in cwd */

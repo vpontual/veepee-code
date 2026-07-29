@@ -266,7 +266,7 @@ async function main() {
   registry.register(createExitPlanModeTool(agent, permissions));
   // Notebook editing — round-trips cleanly through nbformat instead of
   // letting the model edit raw JSON via edit_file.
-  registry.register(createNotebookEditTool());
+  registry.register(createNotebookEditTool(ignoreManager, fileTracker));
 
   // Background-completion notifications. Fires for every subagent
   // transition to a terminal state — foreground completions are already
@@ -309,7 +309,12 @@ async function main() {
   if (config.modelStick) agent.setModelStick(true);
 
   // Capture shell history for context (once on startup, if enabled)
-  if (config.shellHistoryContext !== false) {
+  // Opt-IN, tested positively. `!== false` reads as default-on for a feature
+  // that ships the user's recent shell commands (which can include exported
+  // secrets) into the system prompt. It is only safe today because config.ts
+  // materialises an explicit `false`; any partial config object would have
+  // silently enabled it.
+  if (config.shellHistoryContext === true) {
     agent.getContext().captureShellHistory();
   }
 
@@ -513,12 +518,12 @@ async function main() {
   // (apiPoll is cleared by process exit; 'beforeExit' never fires here.)
 
   // Check for updates in background (non-blocking)
-  setTimeout(() => {
-    const update = checkForUpdate();
+  void (async () => {
+    const update = await checkForUpdate();
     if (update?.available) {
       tui.setUpdateAvailable(update.behind);
     }
-  }, 0);
+  })();
 
   // Probe new models for tool-calling support in background (non-blocking)
   // Only runs for models not yet in the capabilities cache — one cheap test call each
@@ -1968,6 +1973,10 @@ async function handleCommand(
     case '/extras': {
       const sub = parts[1]?.toLowerCase();
       const { listExtras, addExtra, removeExtra } = await import('./extras/index.js');
+      // These read settings.json and write it back in full. It now refuses to
+      // proceed when the file is unparseable rather than silently replacing it
+      // with just the extras key — surface that as a clear message.
+      try {
 
       if (!sub || sub === 'list') {
         const items = listExtras();
@@ -2018,6 +2027,10 @@ async function handleCommand(
         `  ${theme.accent('/extras remove <name>')}      Unregister hooks (LSP servers stay)`,
       ].join('\n'));
       return false;
+      } catch (err) {
+        tui.showError(err instanceof Error ? err.message : String(err));
+        return false;
+      }
     }
 
     case '/doctor': {

@@ -5,6 +5,10 @@ import { request as httpsRequest } from 'https';
 import { request as httpRequest } from 'http';
 import { getSessionDir } from './sessions.js';
 
+/** Ceiling on any single WebDAV request. Without this a /sync against an
+ *  unresponsive host hung indefinitely — no request set a timeout at all. */
+const SYNC_TIMEOUT_MS = 20_000;
+
 export class SyncManager {
   private url: string;
   private user: string;
@@ -125,6 +129,7 @@ export class SyncManager {
       const parsed = new URL(url);
       const reqFn = this.getRequestFn(url);
       const req = reqFn({
+        timeout: SYNC_TIMEOUT_MS,
         hostname: parsed.hostname,
         port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
         path: parsed.pathname,
@@ -145,6 +150,9 @@ export class SyncManager {
           }
         });
       });
+      req.on('timeout', () => {
+        req.destroy(new Error(`WebDAV request timed out after ${SYNC_TIMEOUT_MS}ms`));
+      });
       req.on('error', reject);
       req.write(body);
       req.end();
@@ -157,6 +165,7 @@ export class SyncManager {
       const parsed = new URL(url);
       const reqFn = this.getRequestFn(url);
       const req = reqFn({
+        timeout: SYNC_TIMEOUT_MS,
         hostname: parsed.hostname,
         port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
         path: parsed.pathname,
@@ -175,6 +184,9 @@ export class SyncManager {
           }
         });
       });
+      req.on('timeout', () => {
+        req.destroy(new Error(`WebDAV request timed out after ${SYNC_TIMEOUT_MS}ms`));
+      });
       req.on('error', reject);
       req.end();
     });
@@ -186,6 +198,7 @@ export class SyncManager {
       const parsed = new URL(url);
       const reqFn = this.getRequestFn(url);
       const req = reqFn({
+        timeout: SYNC_TIMEOUT_MS,
         hostname: parsed.hostname,
         port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
         path: parsed.pathname,
@@ -206,6 +219,9 @@ export class SyncManager {
           }
         });
       });
+      req.on('timeout', () => {
+        req.destroy(new Error(`WebDAV request timed out after ${SYNC_TIMEOUT_MS}ms`));
+      });
       req.on('error', reject);
 
       // PROPFIND body requesting basic properties
@@ -223,6 +239,7 @@ export class SyncManager {
       const parsed = new URL(url);
       const reqFn = this.getRequestFn(url);
       const req = reqFn({
+        timeout: SYNC_TIMEOUT_MS,
         hostname: parsed.hostname,
         port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
         path: parsed.pathname,
@@ -242,6 +259,9 @@ export class SyncManager {
           }
         });
       });
+      req.on('timeout', () => {
+        req.destroy(new Error(`WebDAV request timed out after ${SYNC_TIMEOUT_MS}ms`));
+      });
       req.on('error', reject);
       req.end();
     });
@@ -251,13 +271,18 @@ export class SyncManager {
   private parsePropfindResponse(xml: string, baseUrl: string): Array<{ name: string; lastModified: string }> {
     const files: Array<{ name: string; lastModified: string }> = [];
 
-    // Simple XML parsing — extract <d:href> and <d:getlastmodified>
-    const responseBlocks = xml.split(/<d:response>/i).slice(1);
+    // Namespace-prefix agnostic: WebDAV servers are free to choose their own
+    // prefix (Apache mod_dav returns live properties under lp1:), and a
+    // default namespace has no prefix at all. Hardcoding `d:` meant href and
+    // getlastmodified silently came back empty on those servers — and an
+    // empty lastModified makes pull() skip its "is the remote newer?" guards
+    // entirely and overwrite a locally-newer session.
+    const responseBlocks = xml.split(/<(?:[a-zA-Z0-9_-]+:)?response[\s>]/i).slice(1);
     const basePath = new URL(baseUrl).pathname;
 
     for (const block of responseBlocks) {
-      const hrefMatch = block.match(/<d:href>(.*?)<\/d:href>/i);
-      const dateMatch = block.match(/<d:getlastmodified>(.*?)<\/d:getlastmodified>/i);
+      const hrefMatch = block.match(/<(?:[a-zA-Z0-9_-]+:)?href>([\s\S]*?)<\/(?:[a-zA-Z0-9_-]+:)?href>/i);
+      const dateMatch = block.match(/<(?:[a-zA-Z0-9_-]+:)?getlastmodified>([\s\S]*?)<\/(?:[a-zA-Z0-9_-]+:)?getlastmodified>/i);
 
       if (hrefMatch) {
         const href = decodeURIComponent(hrefMatch[1]);

@@ -92,7 +92,12 @@ function buildZodSchema(
         field = z.array(z.unknown());
         break;
       default:
-        field = prop.enum ? z.enum(prop.enum as [string, ...string[]]) : z.string();
+        // An empty array is truthy, and z.enum([]) throws — which escaped
+        // discoverRemoteTools and aborted startup for the whole CLI rather
+        // than degrading to "no remote tools".
+        field = prop.enum && prop.enum.length > 0
+          ? z.enum(prop.enum as [string, ...string[]])
+          : z.string();
     }
 
     if (prop.description) {

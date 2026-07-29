@@ -67,7 +67,9 @@ export function detectProject(cwd: string): ProjectInfo {
     allDeps['@oclif/core']);
   const isNodeCli = hasBin || hasInk || hasTermUi || hasArgParser;
 
-  if (allDeps) {
+  // `allDeps` is a spread of two optionals, so it is always an object —
+  // the real question is whether a package.json was found at all.
+  if (pkg) {
     if (allDeps['next']) info.framework = `Next.js ${allDeps['next'].replace('^', '')}`;
     else if (allDeps['astro']) info.framework = `Astro ${allDeps['astro'].replace('^', '')}`;
     else if (allDeps['nuxt']) info.framework = `Nuxt ${allDeps['nuxt'].replace('^', '')}`;
@@ -88,7 +90,6 @@ export function detectProject(cwd: string): ProjectInfo {
     } catch {}
   }
 
-  const pyproject = readJson('pyproject.toml');
   if (has('requirements.txt')) {
     try {
       const reqs = readFileSync(join(cwd, 'requirements.txt'), 'utf-8');
@@ -100,7 +101,7 @@ export function detectProject(cwd: string): ProjectInfo {
 
   // ─── Test Runner ──────────────────────────────────────────────────
 
-  if (allDeps) {
+  if (pkg) {
     if (allDeps['vitest']) info.testRunner = 'vitest';
     else if (allDeps['jest']) info.testRunner = 'jest';
     else if (allDeps['mocha']) info.testRunner = 'mocha';

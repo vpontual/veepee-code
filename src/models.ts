@@ -1,5 +1,6 @@
 import chalk from 'chalk';
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync } from 'fs';
+import { writeFileAtomicSync } from './atomic-write.js';
 import { resolve, join } from 'path';
 import os from 'os';
 import type { Config } from './config.js';
@@ -502,7 +503,10 @@ export class ModelManager {
       for (const [model, hasTools] of this.probeCache) {
         data[model] = hasTools;
       }
-      writeFileSync(ModelManager.CAPABILITIES_FILE, JSON.stringify(data, null, 2));
+      // Atomic: a truncated capabilities.json makes loadProbeCache swallow the
+      // parse error and lose the whole cache, which re-triggers the full probe
+      // storm on the next run.
+      writeFileAtomicSync(ModelManager.CAPABILITIES_FILE, JSON.stringify(data, null, 2));
     } catch { /* non-critical */ }
   }
 
@@ -541,16 +545,34 @@ export class ModelManager {
 
     const updated: string[] = [];
 
-    await Promise.all(toProbe.map(async (m) => {
+    // Throttled and time-bounded. An unbounded Promise.all fired one chat at
+    // every unknown model simultaneously; each forces a model load, evicting
+    // the previous one, so a fleet with ~30 unknown models thrashed the GPU
+    // servers for minutes while the user was trying to work.
+    const PROBE_CONCURRENCY = 3;
+    const PROBE_TIMEOUT_MS = 30_000;
+    const queue = [...toProbe];
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const m = queue.shift();
+        if (!m) return;
+        await probeOne(m);
+      }
+    };
+    const probeOne = async (m: ModelProfile): Promise<void> => {
       try {
-        const resp = await (ollama.chat as Function)({
-          model: m.name,
-          messages: [{ role: 'user', content: 'Call get_answer with value="yes".' }],
-          tools: [PROBE_TOOL],
-          keep_alive: '5m',
-          options: { num_predict: 64 },
-          stream: false,
-        }) as { message: { tool_calls?: unknown[] } };
+        const resp = await Promise.race([
+          (ollama.chat as Function)({
+            model: m.name,
+            messages: [{ role: 'user', content: 'Call get_answer with value="yes".' }],
+            tools: [PROBE_TOOL],
+            keep_alive: '5m',
+            options: { num_predict: 64 },
+            stream: false,
+          }) as Promise<{ message: { tool_calls?: unknown[] } }>,
+          new Promise<never>((_, rej) =>
+            setTimeout(() => rej(new Error(`probe timed out after ${PROBE_TIMEOUT_MS}ms`)), PROBE_TIMEOUT_MS)),
+        ]);
 
         const hasTools = Array.isArray(resp.message.tool_calls) && resp.message.tool_calls.length > 0;
         this.probeCache.set(m.name, hasTools);
@@ -570,7 +592,10 @@ export class ModelManager {
       } catch {
         // Probe failed (model too slow, error, etc.) — leave uncached, keep default assumption
       }
-    }));
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(PROBE_CONCURRENCY, queue.length) }, () => worker()),
+    );
 
     if (updated.length > 0) {
       this.saveProbeCache();

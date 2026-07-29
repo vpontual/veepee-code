@@ -136,9 +136,18 @@ export function findUserCommand(name: string, cwd: string = process.cwd()): User
 // authors can include literal `$` in templates without escaping.
 
 export function expandCommand(cmd: UserCommand, argString: string): string {
-  const args = argString.trim().length > 0 ? argString.trim().split(/\s+/) : [];
+  const trimmed = argString.trim();
+  const args = trimmed.length > 0 ? trimmed.split(/\s+/) : [];
+
+  // Substitute positionals FIRST, then $ARGUMENTS. The other order expanded
+  // the user's own text a second time: `/commit fix $1 handling` against an
+  // $ARGUMENTS template produced "fix fix handling".
+  //
+  // Both use a replacer FUNCTION rather than a replacement string, because a
+  // string replacement interprets `$&`, `` $` `` and `$'` — so an argument
+  // containing those was mangled instead of inserted literally.
   let out = cmd.template;
-  out = out.replace(/\$ARGUMENTS\b|\$@/g, argString.trim());
   out = out.replace(/\$\{?(\d)\}?/g, (_m, n) => args[parseInt(n, 10) - 1] ?? '');
+  out = out.replace(/\$ARGUMENTS\b|\$@/g, () => trimmed);
   return out;
 }

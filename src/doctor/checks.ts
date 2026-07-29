@@ -9,11 +9,38 @@
  */
 
 import type { Check, CheckResult, FixOutcome } from './types.js';
+
+/** Shell builtins and keywords that `which` cannot resolve. */
+const SHELL_BUILTINS = new Set([
+  'command', 'echo', 'cd', 'true', 'false', ':', 'exit', 'export', 'test', '[', '[[',
+  'if', 'then', 'else', 'fi', 'for', 'while', 'do', 'done', 'case', 'esac',
+  'source', '.', 'set', 'unset', 'eval', 'exec', 'read', 'shift', 'return',
+  'local', 'declare', 'printf', 'pwd', 'trap', 'wait', 'type', 'hash', 'umask',
+]);
 import type { Config } from '../config.js';
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+
+/** Pick the transport that matches the URL's scheme, and keep any base path.
+ *
+ *  Every probe here used node:http unconditionally while computing
+ *  `port: 443` for https URLs — i.e. a plaintext request to a TLS port, which
+ *  always fails. Against an https proxy (llm-api.casarp.us) /doctor therefore
+ *  reported "Proxy unreachable" and skipped every fleet check.
+ *
+ *  The base path was also dropped: http://host/ollama was probed at
+ *  /api/version rather than /ollama/api/version. */
+function requestFor(u: URL): typeof httpRequest {
+  return u.protocol === 'https:' ? (httpsRequest as typeof httpRequest) : httpRequest;
+}
+
+function joinPath(u: URL, suffix: string): string {
+  const base = u.pathname.replace(/\/+$/, '');
+  return base ? base + suffix : suffix;
+}
 import { URL } from 'node:url';
 
 /** Quick liveness probe via /api/version. Returns null on failure. */
@@ -21,11 +48,11 @@ async function probeOllama(url: string, timeoutMs = 3000): Promise<{ version?: s
   return new Promise((resolve) => {
     const u = new URL(url);
     const start = Date.now();
-    const req = httpRequest({
+    const req = requestFor(u)({
       method: 'GET',
       hostname: u.hostname,
       port: u.port || (u.protocol === 'https:' ? 443 : 80),
-      path: '/api/version',
+      path: joinPath(u, '/api/version'),
       timeout: timeoutMs,
     }, (res) => {
       const chunks: Buffer[] = [];
@@ -83,11 +110,11 @@ interface ProxyPsEntry {
 async function fetchProxyPs(proxyUrl: string, timeoutMs = 5000): Promise<ProxyPsEntry[] | null> {
   return new Promise((resolve) => {
     const u = new URL(proxyUrl);
-    const req = httpRequest({
+    const req = requestFor(u)({
       method: 'GET',
       hostname: u.hostname,
       port: u.port || (u.protocol === 'https:' ? 443 : 80),
-      path: '/api/ps',
+      path: joinPath(u, '/api/ps'),
       timeout: timeoutMs,
     }, (res) => {
       const chunks: Buffer[] = [];
@@ -285,7 +312,11 @@ function checkHooksExecutable(config: Config): Check {
           const firstWord = entry.command.split(/\s+/)[0];
           // Skip shell built-ins and absolute paths we can't easily check.
           if (firstWord.startsWith('/') || firstWord.startsWith('./')) continue;
-          if (['echo', 'cd', 'true', 'false', ':', 'exit', 'export'].includes(firstWord)) continue;
+          // Shell builtins are not on PATH, so `which` never finds them.
+          // `command` matters most: every hook installed by /extras starts
+          // with `command -v <tool> >/dev/null && ...`, so vcode's own feature
+          // made /doctor warn about a missing binary called "command".
+          if (SHELL_BUILTINS.has(firstWord)) continue;
           if (!whichBin(firstWord)) {
             if (!missingBins.includes(firstWord)) missingBins.push(firstWord);
           }

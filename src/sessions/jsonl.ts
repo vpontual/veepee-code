@@ -149,14 +149,26 @@ export class JsonlSession {
     }
     if (!metaId) throw new Error(`Session file has no meta entry: ${filePath}`);
     const lp = leafPath(filePath);
+    // Fall back to the deepest CONVERSATION entry, not simply the last line.
+    // updateMeta (rename, model switch) appends a meta entry chained to the
+    // previous meta, so if the .leaf sidecar is missing the last line is often
+    // a meta — and walking its parents produces a path containing no messages,
+    // i.e. a session that reopens completely empty while the jsonl still holds
+    // everything.
+    const lastConversationId = (): string => {
+      for (let i = entries.length - 1; i >= 0; i--) {
+        if (entries[i].type !== 'meta') return entries[i].id;
+      }
+      return metaId;
+    };
     let leafId: string;
     if (existsSync(lp)) {
       leafId = readFileSync(lp, 'utf-8').trim();
       if (!leafId || !entries.find(e => e.id === leafId)) {
-        leafId = entries[entries.length - 1]?.id ?? metaId;
+        leafId = lastConversationId();
       }
     } else {
-      leafId = entries[entries.length - 1]?.id ?? metaId;
+      leafId = lastConversationId();
     }
     return new JsonlSession(filePath, entries, leafId, metaId);
   }
@@ -255,10 +267,15 @@ export class JsonlSession {
     let skipUntilId: string | null = null;
     if (lastCompaction) {
       skipUntilId = lastCompaction.firstKeptEntryId;
+      // A null firstKeptEntryId means "nothing was kept" — the summary stands
+      // in for everything before it. Starting from `skipUntilId !== null` did
+      // the opposite of compacting in that case: nothing was skipped and the
+      // summary was prepended to the FULL history. Keying the flag off the
+      // compaction entry instead makes null skip everything, as documented.
       messages.push({ role: 'system', content: `[Compacted earlier conversation]\n${lastCompaction.summary}` });
     }
 
-    let skipping = skipUntilId !== null;
+    let skipping = lastCompaction !== null;
     for (const e of path) {
       if (skipping) {
         if (e.id === skipUntilId) {

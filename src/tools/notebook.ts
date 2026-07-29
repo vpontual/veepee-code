@@ -10,10 +10,13 @@
  * Spec: https://nbformat.readthedocs.io/en/latest/format_description.html
  */
 
-import { writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir, rename, unlink } from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
+import { randomBytes } from 'crypto';
 import { resolve, dirname } from 'path';
 import { z } from 'zod';
+import type { IgnoreManager } from '../ignore.js';
+import type { FileTracker } from '../filetracker.js';
 import type { ToolDef, ToolResult } from './types.js';
 import { ok, fail } from './types.js';
 
@@ -69,17 +72,36 @@ function toCellSource(text: string): string[] {
 
 function makeCellId(): string {
   // nbformat 4.5+ wants a stable cell id (8-char hex is conventional).
-  return Math.random().toString(16).slice(2, 10);
+  return randomBytes(4).toString('hex');
 }
 
 async function writeNotebook(path: string, nb: Notebook): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   // Pretty-print with 1-space indent — matches Jupyter's own save format
   // and keeps diffs readable. Trailing newline for POSIX-friendliness.
-  await writeFile(path, JSON.stringify(nb, null, 1) + '\n', 'utf-8');
+  // Atomic — a torn write leaves a notebook Jupyter cannot open, and there is
+  // no backup copy.
+  const tmp = `${path}.tmp-${process.pid}`;
+  try {
+    await writeFile(tmp, JSON.stringify(nb, null, 1) + '\n', 'utf-8');
+    await rename(tmp, path);
+  } catch (err) {
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
 }
 
-export function createNotebookEditTool(): ToolDef {
+/**
+ * `notebook_edit` mutates files like the coding tools do, so it takes the same
+ * guards they take. Without them it was the one write path that ignored
+ * .veepeignore entirely and skipped the stale-file check — editing a notebook
+ * the user had changed in Jupyter silently overwrote their work, where
+ * edit_file would have refused.
+ */
+export function createNotebookEditTool(
+  ignoreManager?: IgnoreManager,
+  fileTracker?: FileTracker,
+): ToolDef {
   return {
     name: 'notebook_edit',
     description: [
@@ -106,9 +128,16 @@ export function createNotebookEditTool(): ToolDef {
       const action = String(params.action ?? '');
       const absPath = resolve(path);
 
+      const blocked = ignoreManager?.getBlockedReason(absPath);
+      if (blocked) return fail(`Access blocked by .veepeignore (${blocked}): ${absPath}`);
+
       try {
         if (action === 'list' || action === 'read' || action === 'edit' || action === 'delete') {
           if (!existsSync(absPath)) return fail(`Notebook does not exist: ${path}`);
+        }
+        if (fileTracker && (action === 'edit' || action === 'delete' || action === 'insert')) {
+          const stale = fileTracker.checkFresh(absPath, action !== 'insert');
+          if (stale) return fail(stale);
         }
 
         if (action === 'list') {

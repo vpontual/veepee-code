@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 
 export type BangKind = 'silent' | 'send' | null;
 
@@ -42,21 +42,30 @@ export interface ShellResult {
  * — anything larger gets truncated with a tail marker, matching the bash tool.
  */
 export function runInlineShell(cmd: string, cwd: string = process.cwd()): ShellResult {
-  try {
-    const output = execSync(cmd, {
-      cwd,
-      encoding: 'utf8',
-      timeout: 30_000,
-      maxBuffer: 10 * 1024 * 1024,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    return { ok: true, output: truncateOutput(output), exitCode: 0 };
-  } catch (err: any) {
-    const stderr = (err.stderr ?? '').toString();
-    const stdout = (err.stdout ?? '').toString();
-    const output = stderr || stdout || err.message || '';
-    return { ok: false, output: truncateOutput(output), exitCode: err.status ?? 1 };
+  // spawnSync rather than execSync so stderr is available on SUCCESS too:
+  // execSync returns stdout only, so a command that succeeded while warning
+  // (deprecation notices, tsc warnings) silently lost everything it wrote to
+  // stderr — exactly the output the user ran `!cmd` to see.
+  const r = spawnSync('bash', ['-c', cmd], {
+    cwd,
+    encoding: 'utf8',
+    timeout: 30_000,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  if (r.error) {
+    return { ok: false, output: truncateOutput(r.error.message), exitCode: 1 };
   }
+
+  const stdout = r.stdout ?? '';
+  const stderr = r.stderr ?? '';
+  const combined = stdout + (stderr.trim() ? `${stdout.endsWith('\n') || !stdout ? '' : '\n'}[stderr]\n${stderr}` : '');
+  const ok = r.status === 0;
+  return {
+    ok,
+    output: truncateOutput(combined || (ok ? '' : `exited with status ${r.status ?? 'unknown'}`)),
+    exitCode: r.status ?? 1,
+  };
 }
 
 const MAX_BYTES = 8 * 1024;
@@ -65,14 +74,23 @@ const MAX_LINES = 200;
 export function truncateOutput(raw: string): string {
   if (!raw) return '';
   let out = raw;
+  const reasons: string[] = [];
+
   if (out.length > MAX_BYTES) {
-    out = out.slice(0, MAX_BYTES) + `\n…[truncated at ${MAX_BYTES} bytes]`;
+    out = out.slice(0, MAX_BYTES);
+    reasons.push(`${MAX_BYTES} bytes`);
   }
   const lines = out.split('\n');
   if (lines.length > MAX_LINES) {
-    out = lines.slice(0, MAX_LINES).join('\n') + `\n…[truncated at ${MAX_LINES} lines]`;
+    out = lines.slice(0, MAX_LINES).join('\n');
+    reasons.push(`${MAX_LINES} lines`);
   }
-  return out.replace(/\s+$/, '');
+
+  out = out.replace(/\s+$/, '');
+  // One marker, appended LAST. Appending the byte marker before the line cap
+  // let the line trim cut it back off, so truncated output looked complete.
+  if (reasons.length > 0) out += `\n…[truncated at ${reasons.join(' / ')}]`;
+  return out;
 }
 
 /**

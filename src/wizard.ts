@@ -276,13 +276,30 @@ function readLine(opts: {
         return;
       }
 
+      // Bracketed paste: the payload is wrapped in \x1b[200~ … \x1b[201~.
+      // Strip the markers and insert the contents, otherwise the whole paste
+      // is swallowed by the escape-sequence guard below.
+      if (key.startsWith('\x1b[200~')) {
+        const pasted = key.replace(/\x1b\[200~/g, '').replace(/\x1b\[201~/g, '');
+        const clean = pasted.replace(/[\r\n]+/g, '').replace(/[\x00-\x1f]/g, '');
+        if (clean) {
+          text = text.slice(0, cursor) + clean + text.slice(cursor);
+          cursor += clean.length;
+          render();
+        }
+        return;
+      }
+
       // Ignore other escape sequences
       if (key.startsWith('\x1b')) return;
 
-      // Printable character
-      if (key.length === 1 && key >= ' ') {
-        text = text.slice(0, cursor) + key + text.slice(cursor);
-        cursor++;
+      // Printable input. A terminal paste arrives as a SINGLE data event
+      // containing every character, so testing for length === 1 silently
+      // discarded it — the user saw nothing appear and the default was saved.
+      const printable = key.replace(/[\r\n]+/g, '').replace(/[\x00-\x1f]/g, '');
+      if (printable) {
+        text = text.slice(0, cursor) + printable + text.slice(cursor);
+        cursor += printable.length;
         render();
       }
     };
@@ -713,7 +730,16 @@ function loadExistingConfig(): Record<string, string> {
 
   const jsonPath = existsSync(newPath) ? newPath : (existsSync(legacyPath) ? legacyPath : null);
   if (jsonPath) {
-    const config = JSON.parse(readFileSync(jsonPath, 'utf-8'));
+    // Guarded: the wizard is what a user runs to FIX a broken settings.json,
+    // so throwing a raw SyntaxError here made the repair path the one path
+    // that could not survive the problem. Start from blank instead.
+    let config: Record<string, any>;
+    try {
+      config = JSON.parse(readFileSync(jsonPath, 'utf-8'));
+    } catch {
+      console.error(`Warning: ${jsonPath} is not valid JSON — starting the wizard from defaults.`);
+      config = {};
+    }
     // Map JSON fields back to wizard env var keys
     if (config.proxyUrl) values['VEEPEE_CODE_PROXY_URL'] = config.proxyUrl;
     if (config.dashboardUrl) values['VEEPEE_CODE_DASHBOARD_URL'] = config.dashboardUrl;
@@ -767,10 +793,14 @@ function saveConfig(values: Record<string, string>): void {
     config.model = values['VEEPEE_CODE_MODEL'] || null;
   }
 
-  if (values['VEEPEE_CODE_REMOTE_URL'] && values['VEEPEE_CODE_REMOTE_API_KEY']) {
+  // The URL is what makes a remote; the key is optional, and the step's own
+  // validator explicitly supports an unauthenticated bridge. Requiring both
+  // meant the user saw "Connected — N remote tools available" and then got no
+  // remote at all.
+  if (values['VEEPEE_CODE_REMOTE_URL']) {
     config.remote = {
       url: values['VEEPEE_CODE_REMOTE_URL'],
-      apiKey: values['VEEPEE_CODE_REMOTE_API_KEY'],
+      apiKey: values['VEEPEE_CODE_REMOTE_API_KEY'] || null,
     };
   }
 
@@ -830,9 +860,11 @@ async function runStep(
     row += 2;
   }
 
-  // Store values
+  // Store values, INCLUDING empty ones. Skipping empties made a configured
+  // value impossible to clear: readLine falls back to the existing value as
+  // its default, so blanking a field and pressing Enter re-saved the old one.
   for (const [key, val] of Object.entries(stepValues)) {
-    if (val) values[key] = val;
+    values[key] = val;
   }
 
   // Validate if validator exists and values were provided

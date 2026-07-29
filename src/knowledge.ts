@@ -1,4 +1,4 @@
-import { writeFile, readFile, mkdir } from 'fs/promises';
+import { writeFile, readFile, mkdir, rename, unlink } from 'fs/promises';
 import { resolve, join } from 'path';
 import { existsSync } from 'fs';
 import type { Message, ToolCall } from 'ollama';
@@ -181,12 +181,12 @@ export class KnowledgeState {
     lines.push(`CWD: ${this.data.cwd}`);
     if (this.data.userIntent) lines.push(`USER_INTENT: ${this.data.userIntent}`);
     if (this.data.currentTask) lines.push(`CURRENT_TASK: ${this.data.currentTask}`);
-    if (this.data.decisions.length) lines.push(`DECISIONS: [${this.data.decisions.join(' | ')}]`);
-    if (this.data.filesRead.length) lines.push(`FILES_READ: [${this.data.filesRead.join(' | ')}]`);
-    if (this.data.filesModified.length) lines.push(`FILES_MODIFIED: [${this.data.filesModified.join(' | ')}]`);
-    if (this.data.facts.length) lines.push(`FACTS: [${this.data.facts.join(' | ')}]`);
-    if (this.data.errors.length) lines.push(`ERRORS: [${this.data.errors.join(' | ')}]`);
-    if (this.data.openQuestions.length) lines.push(`OPEN_QUESTIONS: [${this.data.openQuestions.join(' | ')}]`);
+    if (this.data.decisions.length) lines.push(`DECISIONS: [${serializeArray(this.data.decisions)}]`);
+    if (this.data.filesRead.length) lines.push(`FILES_READ: [${serializeArray(this.data.filesRead)}]`);
+    if (this.data.filesModified.length) lines.push(`FILES_MODIFIED: [${serializeArray(this.data.filesModified)}]`);
+    if (this.data.facts.length) lines.push(`FACTS: [${serializeArray(this.data.facts)}]`);
+    if (this.data.errors.length) lines.push(`ERRORS: [${serializeArray(this.data.errors)}]`);
+    if (this.data.openQuestions.length) lines.push(`OPEN_QUESTIONS: [${serializeArray(this.data.openQuestions)}]`);
     lines.push(`TURN: ${this.data.turn}`);
 
     return lines.join('\n');
@@ -237,7 +237,15 @@ export class KnowledgeState {
     if (!this.dirty) return;
     await mkdir(SESSIONS_DIR, { recursive: true });
     const filePath = join(SESSIONS_DIR, `${this.sessionId}-state.md`);
-    await writeFile(filePath, this.serialize());
+    // Atomic — a torn state file is silently dropped on the next load.
+    const tmp = `${filePath}.tmp-${process.pid}`;
+    try {
+      await writeFile(tmp, this.serialize());
+      await rename(tmp, filePath);
+    } catch (err) {
+      await unlink(tmp).catch(() => {});
+      throw err;
+    }
     this.dirty = false;
   }
 
@@ -282,11 +290,54 @@ export class KnowledgeState {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/** Escape a value for the single-line `[a | b]` encoding.
+ *
+ *  Both the delimiter and newlines occur in real content — errors are captured
+ *  from raw tool output, so `grep foo | wc -l` used to split into two entries,
+ *  and any multi-line output broke the line-oriented file so badly that
+ *  deserialize dropped or misread everything after it. */
+function escapeItem(item: string): string {
+  return item
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '')
+    .replace(/ \| /g, ' \\| ');
+}
+
+function unescapeItem(item: string): string {
+  return item
+    .replace(/\\\|/g, '|')
+    .replace(/\\n/g, '\n')
+    .replace(/\\\\/g, '\\');
+}
+
+/** Join items for storage, escaping the delimiter and newlines. */
+function serializeArray(items: string[]): string {
+  return items.map(escapeItem).join(' | ');
+}
+
 function parseArray(val: string): string[] {
-  // Parse "[item1 | item2 | item3]" format (pipe-delimited to avoid breaking on commas in values)
-  // Also supports legacy comma-delimited format for backward compatibility
+  // Parse "[item1 | item2 | item3]" — pipe-delimited, with ' \| ' meaning a
+  // literal pipe inside a value. Legacy comma-delimited files still load.
   const trimmed = val.replace(/^\[/, '').replace(/\]$/, '').trim();
   if (!trimmed) return [];
-  const delimiter = trimmed.includes(' | ') ? ' | ' : ',';
-  return trimmed.split(delimiter).map(s => s.trim()).filter(Boolean);
+  if (!trimmed.includes(' | ')) {
+    return trimmed.split(',').map(s => unescapeItem(s.trim())).filter(Boolean);
+  }
+  const out: string[] = [];
+  let buf = '';
+  const parts = trimmed.split(' | ');
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    // A part ending in an odd number of backslashes escaped the delimiter.
+    const trailing = /(\\*)$/.exec(part)?.[1].length ?? 0;
+    if (trailing % 2 === 1) {
+      buf += part.slice(0, -1) + ' | ';
+    } else {
+      out.push(unescapeItem((buf + part).trim()));
+      buf = '';
+    }
+  }
+  if (buf) out.push(unescapeItem(buf.trim()));
+  return out.filter(Boolean);
 }

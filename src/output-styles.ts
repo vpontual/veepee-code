@@ -128,7 +128,9 @@ export function loadOutputStyles(cwd: string = process.cwd()): OutputStyle[] {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Find a style by name. Returns the default style if name is unknown. */
+/** Find a style by name. Returns undefined when the name is unknown — the
+ *  return type says so, and callers decide the fallback (see getDefaultStyle).
+ *  The doc used to claim it returned the default, which it never did. */
 export function findOutputStyle(name: string, cwd: string = process.cwd()): OutputStyle | undefined {
   return loadOutputStyles(cwd).find((s) => s.name === name);
 }

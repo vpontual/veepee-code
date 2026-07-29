@@ -9,7 +9,8 @@
  *   - Append the extra name to config.extras (string[]).
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { writeFileAtomicSync } from '../atomic-write.js';
 import { resolve } from 'node:path';
 import { recipeByLabel, runInstall, writeServerToSettings, whichBin } from '../lsp/install.js';
 import { extraByName, BUILTIN_EXTRAS } from './builtins.js';
@@ -28,14 +29,41 @@ function settingsPath(): string {
   return resolve(process.env.HOME || '~', '.veepee-code', 'settings.json');
 }
 
+/** Thrown when settings.json exists but cannot be parsed. Callers must abort
+ *  rather than continue with an empty object — see readSettings(). */
+export class SettingsUnreadableError extends Error {
+  constructor(cause: string) {
+    super(
+      `~/.veepee-code/settings.json is not valid JSON (${cause}). ` +
+      `Refusing to modify it — fix the file first, or it would be overwritten and every ` +
+      `other setting (proxyUrl, apiToken, lockModel, fleet, mcpServers, lsp) lost.`,
+    );
+    this.name = 'SettingsUnreadableError';
+  }
+}
+
+/**
+ * Read the whole settings file.
+ *
+ * Throws on a parse error instead of returning {}. Returning an empty object
+ * was silently destructive: every caller here mutates the result and writes it
+ * back in full, so one stray comma in settings.json turned `/extras add` into
+ * "replace my entire config with just the extras key". src/lsp/install.ts
+ * already refuses to write over unparseable settings; this matches it.
+ */
 function readSettings(): SettingsShape {
   const path = settingsPath();
   if (!existsSync(path)) return {};
-  try { return JSON.parse(readFileSync(path, 'utf-8')) as SettingsShape; } catch { return {}; }
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8')) as SettingsShape;
+  } catch (err) {
+    throw new SettingsUnreadableError(err instanceof Error ? err.message : String(err));
+  }
 }
 
 function writeSettings(s: SettingsShape): void {
-  writeFileSync(settingsPath(), JSON.stringify(s, null, 2) + '\n');
+  // Atomic — this rewrites the user's entire config.
+  writeFileAtomicSync(settingsPath(), JSON.stringify(s, null, 2) + '\n');
 }
 
 export interface AddOutcome {

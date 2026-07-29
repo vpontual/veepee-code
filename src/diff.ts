@@ -31,12 +31,28 @@ interface DiffLine {
   text: string;
 }
 
+/**
+ * Cell budget for the LCS table, which is allocated as (n+1)×(m+1) and so
+ * grows quadratically with file size. Measured: 4,000 lines costs ~610ms and
+ * ~123MB; 10,000 lines needs ~0.7GB and 20,000 lines ~3GB, which exhausts the
+ * V8 heap. Heap exhaustion is a fatal abort, not a catchable throw, so the
+ * caller's try/catch cannot contain it — the limit has to be here.
+ *
+ * 4.2M cells covers 2,000×2,000 (measured ~170ms and ~31MB), which is the
+ * largest size still worth diffing exactly.
+ */
+const MAX_LCS_CELLS = 4_200_000;
+
+/** True when a proper LCS diff of these two sides would be too expensive. */
+function tooLargeForLcs(a: string[], b: string[]): boolean {
+  return (a.length + 1) * (b.length + 1) > MAX_LCS_CELLS;
+}
+
 /** Compute the LCS table for two arrays of lines. Returns a matrix where
- *  M[i][j] is the LCS length of a[0..i) and b[0..j). */
+ *  M[i][j] is the LCS length of a[0..i) and b[0..j).
+ *  Callers MUST check tooLargeForLcs() first. */
 function lcsMatrix(a: string[], b: string[]): number[][] {
   const n = a.length, m = b.length;
-  // Allocate (n+1) × (m+1) — typical edits with ~hundreds of lines fit in
-  // tens of KB. For pathological large files we'd cap before reaching here.
   const M: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < m; j++) {
@@ -82,7 +98,11 @@ function withContext(ops: DiffLine[], context: number): DiffLine[] {
     }
   }
   const out: DiffLine[] = [];
-  let lastKept = -2;
+  // -1 means "nothing kept yet", which the guard below uses to suppress a
+  // separator before the very first hunk. Seeding to -2 defeated that: for a
+  // change at line 1, `0 - (-2) > 1`, so every such diff opened with a
+  // spurious `@@ ... @@`.
+  let lastKept = -1;
   for (let i = 0; i < ops.length; i++) {
     if (!keep[i]) continue;
     if (lastKept !== -1 && i - lastKept > 1) {
@@ -92,6 +112,41 @@ function withContext(ops: DiffLine[], context: number): DiffLine[] {
     lastKept = i;
   }
   return out;
+}
+
+/**
+ * Cheap stand-in for a real diff on files too large to run LCS over.
+ *
+ * Compares line-for-line by position — no alignment, so an inserted line makes
+ * everything after it look changed. That is acceptable here: the goal is to
+ * show the user enough to approve or reject a write, and it is O(n) with no
+ * allocation beyond the sample.
+ */
+function renderLargeSummary(a: string[], b: string[], label: string, maxLines: number): string {
+  const lines: string[] = [];
+  lines.push(chalk.bold(`--- ${label}`));
+  lines.push(chalk.bold(`+++ ${label}`));
+  lines.push(chalk.yellow(
+    `(${a.length} → ${b.length} lines — too large for a full diff; showing changed lines by position)`,
+  ));
+
+  const sample = Math.min(maxLines, 40);
+  let shown = 0;
+  let changed = 0;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (a[i] === b[i]) continue;
+    changed++;
+    if (shown < sample) {
+      shown++;
+      if (a[i] !== undefined) lines.push(chalk.red('-' + a[i].slice(0, 200)));
+      if (b[i] !== undefined) lines.push(chalk.green('+' + b[i].slice(0, 200)));
+    }
+  }
+  if (changed > shown) {
+    lines.push(chalk.dim(`... (${changed - shown} more changed line${changed - shown === 1 ? '' : 's'})`));
+  }
+  lines.push(chalk.dim(`(${changed} line${changed === 1 ? '' : 's'} differ by position)`));
+  return lines.join('\n');
 }
 
 /** Render a unified diff as a colored, multi-line string. */
@@ -108,6 +163,13 @@ export function renderDiff(oldText: string, newText: string, opts: DiffOptions):
   // No-op
   if (oldText === newText) {
     return chalk.dim(`(no changes to ${opts.label})`);
+  }
+
+  // Too big for an exact diff — summarise instead of allocating gigabytes.
+  // The prompt still has to tell the user what is about to change, so this
+  // falls back to a cheap positional scan rather than showing nothing.
+  if (tooLargeForLcs(a, b)) {
+    return renderLargeSummary(a, b, opts.label, maxLines);
   }
 
   const ops = walk(a, b, lcsMatrix(a, b));

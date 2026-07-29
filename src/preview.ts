@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'http';
 import { spawn } from 'child_process';
 import { readFile, stat } from 'fs/promises';
-import { extname, join, resolve, dirname } from 'path';
+import { extname, join, resolve, dirname, sep } from 'path';
 import { existsSync } from 'fs';
 import type { SandboxManager } from './sandbox.js';
 
@@ -107,8 +107,11 @@ export class PreviewManager {
         const urlPath = decodeURIComponent(new URL(req.url || '/', 'http://localhost').pathname);
         const filePath = resolve(resolvedRoot, `.${urlPath}`);
 
-        // Security: prevent directory traversal
-        if (!filePath.startsWith(resolvedRoot)) {
+        // Security: prevent directory traversal. A bare startsWith also
+        // accepts siblings that merely share the prefix — with root
+        // /home/u/proj, the path /home/u/proj-secrets/keys.txt passes. Compare
+        // against root + separator, and allow the root itself.
+        if (filePath !== resolvedRoot && !filePath.startsWith(resolvedRoot + sep)) {
           res.writeHead(403);
           res.end('Forbidden');
           return;
@@ -177,28 +180,77 @@ export class PreviewManager {
   private runScript(runner: string[], filePath: string): Promise<string> {
     return new Promise((resolvePromise, reject) => {
       const [cmd, ...args] = runner;
+      // `detached` so the timeout can kill the whole tree: the runners are
+      // wrappers (SCRIPT_RUNNERS['.ts'] is `npx tsx`), so signalling the
+      // direct child leaves the real worker running.
       const proc = spawn(cmd, [...args, filePath], {
         cwd: dirname(filePath),
-        timeout: SCRIPT_TIMEOUT,
+        detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
       let stdout = '';
       let stderr = '';
+      // Cap output: a script in a print loop otherwise grows these until the
+      // process runs out of memory.
+      const MAX_OUTPUT = 256 * 1024;
+      let truncated = false;
+      const append = (buf: string, data: Buffer): string => {
+        if (buf.length >= MAX_OUTPUT) { truncated = true; return buf; }
+        return buf + data.toString();
+      };
 
-      proc.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
-      proc.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+      let settled = false;
+      let graceTimer: ReturnType<typeof setTimeout> | null = null;
+      const finish = (value: string) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(hardTimer);
+        if (graceTimer) clearTimeout(graceTimer);
+        proc.stdout?.destroy();
+        proc.stderr?.destroy();
+        resolvePromise(value);
+      };
+      const killTree = (signal: NodeJS.Signals) => {
+        try {
+          if (proc.pid !== undefined) process.kill(-proc.pid, signal);
+        } catch { try { proc.kill(signal); } catch { /* gone */ } }
+      };
+      const compose = () => {
+        const body = stdout + (stderr ? `\n--- stderr ---\n${stderr}` : '');
+        return truncated ? body + '\n…(output truncated)' : body;
+      };
+
+      const hardTimer = setTimeout(() => {
+        killTree('SIGKILL');
+        finish(`Timed out after ${SCRIPT_TIMEOUT}ms (process group killed)\n${compose()}`);
+      }, SCRIPT_TIMEOUT);
+
+      proc.stdout.on('data', (data: Buffer) => { stdout = append(stdout, data); });
+      proc.stderr.on('data', (data: Buffer) => { stderr = append(stderr, data); });
+
+      // 'close' waits for stdio EOF, which a backgrounded grandchild can hold
+      // open forever — that hung /preview permanently. Bound the wait once the
+      // script itself has exited.
+      proc.on('exit', () => {
+        if (settled || graceTimer) return;
+        graceTimer = setTimeout(() => finish(compose() || '(no output)'), 250);
+      });
 
       proc.on('close', (code) => {
-        const output = stdout + (stderr ? `\n--- stderr ---\n${stderr}` : '');
+        const output = compose();
         if (code !== 0 && code !== null) {
-          resolvePromise(`Exit code ${code}\n${output}`);
+          finish(`Exit code ${code}\n${output}`);
         } else {
-          resolvePromise(output || '(no output)');
+          finish(output || '(no output)');
         }
       });
 
       proc.on('error', (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(hardTimer);
+        if (graceTimer) clearTimeout(graceTimer);
         reject(new Error(`Failed to run ${cmd}: ${err.message}`));
       });
     });

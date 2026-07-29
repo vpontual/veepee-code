@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, realpathSync } from 'fs';
 import { resolve, join } from 'path';
 import os from 'os';
 
@@ -40,6 +40,17 @@ function globToRegex(pattern: string): RegExp {
       re += c;
       i++;
     }
+  }
+  // A trailing slash means "this directory and everything under it"; without
+  // the `(?:/.*)?` the regex ended at the slash and matched nothing at all, so
+  // a gitignore-style `secrets/` line silently protected nothing.
+  if (pattern.endsWith('/')) {
+    return new RegExp(`(?:^|/)${re.replace(/\/$/, '')}(?:/.*)?$`);
+  }
+  // A pattern with no slash and no wildcard names an entry — match the entry
+  // itself AND anything beneath it, so `node_modules` covers its contents.
+  if (!pattern.includes('/') && !pattern.includes('*') && !pattern.includes('?')) {
+    return new RegExp(`(?:^|/)${re}(?:/.*)?$`);
   }
   return new RegExp(`(?:^|/)${re}$`);
 }
@@ -86,7 +97,27 @@ export class IgnoreManager {
 
   /** Returns the matching pattern if the path is blocked, null if allowed */
   getBlockedReason(filePath: string): string | null {
-    const normalized = resolve(filePath).replace(/\\/g, '/');
+    // Test BOTH the given path and its symlink target. resolve() only
+    // normalises `..`; it does not follow links, so `config/local.json`
+    // pointing at `../../.env` sailed past the `**/.env` rule and handed the
+    // model the credentials it was supposed to protect.
+    const candidates = new Set<string>();
+    const direct = resolve(filePath);
+    candidates.add(direct.replace(/\\/g, '/'));
+    try {
+      candidates.add(realpathSync(direct).replace(/\\/g, '/'));
+    } catch { /* path doesn't exist yet — the direct form is all we have */ }
+
+    let blockedAny: string | null = null;
+    for (const candidate of candidates) {
+      const r = this.matchPath(candidate);
+      if (r) blockedAny = r;
+    }
+    return blockedAny;
+  }
+
+  /** Run the pattern list against one already-normalised absolute path. */
+  private matchPath(normalized: string): string | null {
 
     let blocked: string | null = null;
 

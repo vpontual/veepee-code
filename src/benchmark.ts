@@ -1,6 +1,26 @@
 import { Ollama } from 'ollama';
 import chalk from 'chalk';
-import { writeFile, readFile, mkdir } from 'fs/promises';
+import { rename, unlink, writeFile, readFile, mkdir } from 'fs/promises';
+
+/** Hard ceiling on the first-launch speed check, including the case where
+ *  the stream produces no chunks whatsoever. */
+const SPEED_CHECK_TIMEOUT_MS = 95_000;
+
+/** Write JSON so a crash mid-write cannot truncate the file. A torn
+ *  latest.json makes loadLatest() return null, which silently discards every
+ *  prior benchmark: skipExisting finds nothing and the next run re-benchmarks
+ *  the whole fleet (hours of GPU time), while model selection quietly stops
+ *  using benchmark data at all. */
+async function writeJsonAtomic(path: string, data: unknown): Promise<void> {
+  const tmp = `${path}.tmp-${process.pid}`;
+  try {
+    await writeFile(tmp, JSON.stringify(data, null, 2));
+    await rename(tmp, path);
+  } catch (err) {
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
+}
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { existsSync } from 'fs';
@@ -617,10 +637,14 @@ export class Benchmarker {
             tokenCount++;
           }
           if (chunk.message.tool_calls) {
-            toolCalls = chunk.message.tool_calls.map(tc => ({
+            // Accumulate. Reassigning dropped every call but the last chunk's,
+            // so a model emitting two calls in separate chunks was scored on
+            // the second one, and hallucinated names in an earlier chunk never
+            // reached the hard-fail gate that checks for them.
+            toolCalls.push(...chunk.message.tool_calls.map(tc => ({
               name: tc.function.name,
               args: (tc.function.arguments || {}) as Record<string, unknown>,
-            }));
+            })));
           }
         }
 
@@ -785,7 +809,7 @@ export class Benchmarker {
       context = { optimalSize: 8192, maxUsable: 32768, speedByContext: {} };
     } else {
       onProgress?.('Context probing', TEST_SUITE.length + 1, TEST_SUITE.length + 1);
-      context = await this.probeContextSizes(model.name);
+      context = await this.probeContextSizes(model.name, ollamaOverride);
     }
 
     return {
@@ -808,7 +832,13 @@ export class Benchmarker {
    * Sends a prompt with padding to fill context, checks quality + speed.
    * The "optimal" size balances quality (correct output) with speed (tok/s).
    */
-  private async probeContextSizes(modelName: string): Promise<BenchmarkResult['context']> {
+  /** Probe usable context sizes. Takes the same per-server client the rest of
+   *  benchmarkModel uses: this used to hit `this.ollama` (the proxy) even in
+   *  fleet mode, so a model only reachable on one server threw and was recorded
+   *  as {optimalSize: 4096, maxUsable: 2048} while tagged with that server's
+   *  name — and even when the proxy could see it, the timings belonged to
+   *  whatever server the proxy happened to route to. */
+  private async probeContextSizes(modelName: string, ollamaOverride?: Ollama): Promise<BenchmarkResult['context']> {
     const sizes = [2048, 4096, 8192, 16384, 32768, 65536, 131072];
     const speedByContext: Record<number, number> = {};
     let maxUsable = 2048;
@@ -829,7 +859,8 @@ export class Benchmarker {
         let responseText = '';
         let tokenCount = 0;
 
-        const stream = await this.ollama.chat({
+        const probeClient = ollamaOverride ?? this.ollama;
+        const stream = await probeClient.chat({
           model: modelName,
           messages: [
             { role: 'system', content: 'You are a helpful assistant. Answer concisely.' },
@@ -1296,17 +1327,28 @@ export class Benchmarker {
           options: { num_predict: 50, temperature: 0 },
         });
 
-        for await (const chunk of stream) {
-          if (chunk.message.content) {
-            if (ttft === 0) {
-              ttft = Date.now() - start;
-              genStart = Date.now();
+        // The in-loop deadline below can only fire when a chunk ARRIVES. A
+        // model that accepts the request and then stalls — loading a huge KV
+        // cache, or a wedged backend — yields nothing at all, so the loop
+        // awaited forever and first-launch onboarding hung with no output.
+        // checkToolSupport already guards this with a race; do the same here.
+        const drain = (async () => {
+          for await (const chunk of stream) {
+            if (chunk.message.content) {
+              if (ttft === 0) {
+                ttft = Date.now() - start;
+                genStart = Date.now();
+              }
+              tokenCount++;
             }
-            tokenCount++;
+            // Abort if model takes >90s to start generating
+            if (ttft === 0 && Date.now() - start > 90000) break;
           }
-          // Abort if model takes >90s to start generating
-          if (ttft === 0 && Date.now() - start > 90000) break;
-        }
+        })();
+        await Promise.race([
+          drain,
+          new Promise<void>((r) => setTimeout(r, SPEED_CHECK_TIMEOUT_MS)),
+        ]);
 
         const genTime = genStart > 0 ? Date.now() - genStart : 0;
         const tokPerSec = genTime > 0 ? Math.round((tokenCount / genTime) * 1000) : 0;
@@ -1419,7 +1461,7 @@ export class Benchmarker {
   private async saveRoster(roster: ModelRoster): Promise<void> {
     await mkdir(this.resultsDir, { recursive: true });
     const rosterPath = resolve(this.resultsDir, 'roster.json');
-    await writeFile(rosterPath, JSON.stringify(roster, null, 2));
+    await writeJsonAtomic(rosterPath, roster);
   }
 
   /** Load saved roster */
@@ -1461,11 +1503,11 @@ export class Benchmarker {
     await mkdir(this.resultsDir, { recursive: true });
     const filename = `benchmark-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
     const filepath = resolve(this.resultsDir, filename);
-    await writeFile(filepath, JSON.stringify(results, null, 2));
+    await writeJsonAtomic(filepath, results);
 
     // Also save as latest
     const latestPath = resolve(this.resultsDir, 'latest.json');
-    await writeFile(latestPath, JSON.stringify(results, null, 2));
+    await writeJsonAtomic(latestPath, results);
 
     return filepath;
   }
@@ -1518,10 +1560,10 @@ export class Benchmarker {
       const name = r.model.padEnd(30).slice(0, 30);
       const server = (r.server ?? 'proxy').padEnd(12).slice(0, 12);
       const size = r.parameterSize.padEnd(7);
-      const overall = colorScore(r.overall).padStart(5);
-      const tools = colorScore(r.scores.toolCalling).padStart(5);
-      const codegen = colorScore(r.scores.codeGeneration).padStart(5);
-      const edit = colorScore(r.scores.codeEditing).padStart(5);
+      const overall = colorScore(r.overall, 5);
+      const tools = colorScore(r.scores.toolCalling, 5);
+      const codegen = colorScore(r.scores.codeGeneration, 5);
+      const edit = colorScore(r.scores.codeEditing, 5);
       const follow = colorScore(r.scores.instructionFollowing).padStart(5);
       const reason = colorScore(r.scores.reasoning).padStart(5);
       const tps = String(r.performance.tokensPerSecond).padStart(5);
@@ -1641,8 +1683,12 @@ function generateContextPadding(approxTokens: number): string {
   return lines.join('\n');
 }
 
-function colorScore(score: number): string {
-  const str = String(score);
+/** Colour a score, padding to `width` BEFORE the ANSI codes are applied.
+ *  Callers used to do `colorScore(x).padStart(5)`, but the coloured string is
+ *  already far longer than 5 characters, so padStart did nothing and every
+ *  numeric column in the /benchmark table came out misaligned. */
+function colorScore(score: number, width = 0): string {
+  const str = String(score).padStart(width);
   if (score >= 80) return chalk.green(str);
   if (score >= 60) return chalk.yellow(str);
   if (score >= 40) return chalk.hex('#FFA500')(str);

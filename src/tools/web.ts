@@ -3,6 +3,37 @@ import type { ToolDef } from './types.js';
 import { ok, fail } from './types.js';
 import type { Config } from '../config.js';
 
+/** Hard ceiling on a fetched body, applied while streaming rather than after.
+ *  `res.text()` / `res.json()` buffer the WHOLE response first, so a large log
+ *  or a binary artifact could exhaust memory before any truncation ran. */
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+
+/** Read a response body, stopping once the cap is reached. */
+async function readCapped(res: Response, limit = MAX_RESPONSE_BYTES): Promise<string> {
+  const body = res.body;
+  if (!body) return '';
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) {
+        chunks.push(decoder.decode(value.slice(0, Math.max(0, value.byteLength - (total - limit))), { stream: false }));
+        chunks.push(`\n…(response truncated at ${Math.round(limit / 1024 / 1024)}MB)`);
+        break;
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* already closed */ }
+  }
+  return chunks.join('');
+}
+
 export function registerWebTools(config: Config): ToolDef[] {
   const tools: ToolDef[] = [
     createWebFetchTool(config.agentlensUrl),
@@ -53,10 +84,10 @@ async function rawFetchText(url: string): Promise<string> {
 
   const contentType = res.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {
-    return JSON.stringify(await res.json(), null, 2);
+    return JSON.stringify(JSON.parse(await readCapped(res)), null, 2);
   }
 
-  const html = await res.text();
+  const html = await readCapped(res);
   // Basic HTML stripping — remove tags, decode entities, collapse whitespace
   return html
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
@@ -148,9 +179,10 @@ function createHttpRequestTool(): ToolDef {
         let body: string;
 
         if (contentType.includes('json')) {
-          body = JSON.stringify(await res.json(), null, 2);
+          const raw = await readCapped(res);
+          try { body = JSON.stringify(JSON.parse(raw), null, 2); } catch { body = raw; }
         } else {
-          body = await res.text();
+          body = await readCapped(res);
         }
 
         const statusLine = `HTTP ${res.status} ${res.statusText}`;
