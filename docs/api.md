@@ -357,6 +357,10 @@ Send a user message to the agent. The response streams via SSE to all connected 
 { "message": "Fix the bug in auth.ts" }
 ```
 
+Returns `409` if the agent is already running a turn (see
+[One run at a time](#one-run-at-a-time)). Slash commands are exempt — they go to
+the command handler, not the agent loop.
+
 ### GET /rc/sessions
 
 List sessions (up to 20, newest first).
@@ -407,4 +411,25 @@ HTTP status codes:
 | 401 | Unauthorized (missing or invalid Bearer token) |
 | 403 | Forbidden (`/api/execute` disabled) |
 | 404 | Endpoint not found |
+| 409 | Agent busy — a run is already in progress ([one run at a time](#one-run-at-a-time)) |
 | 500 | Internal server error |
+
+### One run at a time
+
+The server shares a **single agent** across `/v1/chat/completions`, `/rc/send`
+and the TUI. That agent owns one conversation context and one abort handle, so
+runs are serialized: a request that arrives while another run is in flight is
+rejected rather than interleaved into the same history.
+
+```json
+{
+  "error": "agent busy — a run is already in progress",
+  "code": "AGENT_BUSY",
+  "retry_after_ms": 1000
+}
+```
+
+The response also carries a `Retry-After: 1` header. Clients should retry rather
+than treat this as fatal. If you need genuine parallelism, submit jobs through
+`vcode-dispatch` instead — it spawns a fresh, isolated `vcode -p` process per
+job, each with its own agent and workspace.

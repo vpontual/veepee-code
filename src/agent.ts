@@ -129,6 +129,19 @@ export function shouldForceVerify(opts: {
   return opts.mode === 'act' && opts.codeChangedUnverified && !opts.alreadyForced;
 }
 
+/**
+ * Thrown when a run is requested while another is already in flight on the
+ * same Agent. Callers that own an HTTP response should surface this as 409
+ * before committing any response headers.
+ */
+export class AgentBusyError extends Error {
+  readonly code = 'AGENT_BUSY';
+  constructor(message = 'agent busy — a run is already in progress') {
+    super(message);
+    this.name = 'AgentBusyError';
+  }
+}
+
 export class Agent {
   private ollama: Ollama;
   private context: ContextManager;
@@ -142,6 +155,8 @@ export class Agent {
   private subAgents: SubAgentManager;
   private config: Config;
   private abortController: AbortController | null = null;
+  /** True while a run is in flight. Guards the shared context + abort handle. */
+  private runLock = false;
   private effort: EffortLevel = 'medium';
   private modelStick = false; // when true, mode switches don't change the model
   private openaiBackend = false; // true when using the OpenAIChatClient adapter
@@ -496,7 +511,44 @@ export class Agent {
   }
 
   isRunning(): boolean {
-    return this.abortController !== null;
+    return this.runLock;
+  }
+
+  /**
+   * Claim the agent for a single run, then delegate to the real loop.
+   *
+   * The persistent server shares ONE Agent across /v1/chat/completions,
+   * /rc/send and the TUI. Without this guard two overlapping requests both
+   * append to the same `context` (interleaving two conversations into one
+   * history) and the second clobbers `this.abortController`, so the first run
+   * becomes unabortable and whichever finishes first nulls the handle for both.
+   *
+   * This is deliberately a plain method that *returns* a generator rather than
+   * being `async *` itself: the check-and-set below runs synchronously at call
+   * time, so there is no await gap for a second caller to slip through. An
+   * async generator's body would not execute until the first `next()`, which
+   * would leave exactly that race open.
+   */
+  run(
+    userMessage: string,
+    options?: {
+      permissionMode?: PermissionMode;
+      allowedTools?: string[] | null;
+      onTurnBoundary?: () => string[] | Promise<string[]>;
+    },
+  ): AsyncGenerator<AgentEvent> {
+    if (this.runLock) throw new AgentBusyError();
+    this.runLock = true;
+    return this.withRunLock(this._run(userMessage, options));
+  }
+
+  /** Release the run lock once the inner loop finishes, throws, or is abandoned. */
+  private async *withRunLock(inner: AsyncGenerator<AgentEvent>): AsyncGenerator<AgentEvent> {
+    try {
+      yield* inner;
+    } finally {
+      this.runLock = false;
+    }
   }
 
   setModel(model: string): void {
@@ -505,7 +557,7 @@ export class Agent {
   }
 
   /** Run the agent loop for a user message, yielding events as they occur */
-  async *run(
+  private async *_run(
     userMessage: string,
     options?: {
       permissionMode?: PermissionMode;
@@ -1204,9 +1256,11 @@ export class Agent {
       }
     }
 
-    // Stop hook for successful tool-using turns. The no-tool success path
-    // returns earlier and fires Stop before yielding its done event.
-    yield* this._fireHooks('Stop', { cwd: process.cwd(), messageCount: this.context.messageCount() });
+    // NOTE: no Stop hook here. The turn loop above is `for (;;)` with no
+    // `break` — every exit is a `return`, so this point is unreachable. The
+    // Stop hook fires in the `toolCalls.length === 0` branch, which is how
+    // *every* successful run terminates (tool-using turns simply loop until
+    // the model stops calling tools and then land there too).
   }
 
   /** Compute a preview string for a tool call that mutates files. Returns

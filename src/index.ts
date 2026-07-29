@@ -11,7 +11,7 @@ import chalk from 'chalk';
 import { loadConfig, getConfigPath } from './config.js';
 import { ModelManager } from './models.js';
 import { ToolRegistry } from './tools/registry.js';
-import { Agent } from './agent.js';
+import { Agent, AgentBusyError } from './agent.js';
 import { PermissionManager } from './permissions.js';
 import { Benchmarker } from './benchmark.js';
 import { startApiServer } from './api.js';
@@ -891,6 +891,14 @@ async function main() {
     // Agent turn — used for both normal input and for commands like /review
     // that want to run a one-off turn under a different model.
     const runTurn = async (text: string): Promise<void> => {
+      // With RC enabled the phone shares this agent, so a remote run may
+      // already be in flight. Bail before echoing the message into the UI —
+      // otherwise it looks accepted but never runs.
+      if (agent.isRunning()) {
+        tui.showInfo(theme.warning('◆ Agent is busy with a remote (RC) run — try again when it finishes, or press Ctrl+C to abort it.'));
+        return;
+      }
+
       tui.addUserMessage(text);
       const turnStart = Date.now();
       const refreshStats = () => tui.updateStats(
@@ -900,14 +908,26 @@ async function main() {
         Date.now() - sessionStart,
       );
 
+      // Defensive net for a lost race between the check above and here.
+      let turnStream;
+      try {
+        turnStream = agent.run(text, {
+          onTurnBoundary: () => tui.takeSteering(),
+        });
+      } catch (err) {
+        if (err instanceof AgentBusyError) {
+          tui.showInfo(theme.warning('◆ Agent is busy with a remote (RC) run — try again when it finishes.'));
+          return;
+        }
+        throw err;
+      }
+
       tui.startStream();
 
       let turnAssistantContent = '';
       const turnToolCalls: Array<{ name: string; success: boolean }> = [];
 
-      for await (const event of agent.run(text, {
-        onTurnBoundary: () => tui.takeSteering(),
-      })) {
+      for await (const event of turnStream) {
         switch (event.type) {
           case 'text':
             if (event.content) {
