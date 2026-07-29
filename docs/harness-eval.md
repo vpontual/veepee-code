@@ -8,7 +8,7 @@ weight: 15
 
 `vcode --eval` scores **the harness**, not the model.
 
-`/benchmark` answers "how good is this model at writing a debounce function". Useful, but it drives `ollama.chat` with its own loop, so it tells you nothing about vcode. The harness — context management, tool design, the force-act and force-verify nudges, compaction thresholds, effort budgets, permission flow — is at least as large a lever on real coding performance, and until now nothing measured it. Every change to the agent loop was unfalsifiable: it felt better, or it didn't.
+`/benchmark` answers "how good is this model at writing a debounce function". Useful, but it drives `ollama.chat` with its own loop, so it tells you nothing about vcode. The harness — context management, tool design, the [turn nudges](nudges.md), compaction thresholds, effort budgets, permission flow — is at least as large a lever on real coding performance, and until now nothing measured it. Every change to the agent loop was unfalsifiable: it felt better, or it didn't.
 
 This runs the **real `Agent`** with the **real tool registry** against tasks that only pass if it reads existing code, edits several files, runs the tests, and fixes what it broke.
 

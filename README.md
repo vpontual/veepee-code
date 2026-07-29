@@ -14,6 +14,7 @@ A Claude Code-style terminal AI assistant that runs entirely on your hardware. C
 - **Multiple modes** — Act (coding), Plan (reasoning), Chat (fast Q&A), MoE (multi-model), Ralph (Work→Review loop)
 - **Goal mode** — `/goal` works unattended until a real command exits 0, with budgets, stall detection, per-attempt checkpoints, and pause/resume
 - **Measures itself** — `--eval` scores the harness against graded coding tasks; `--improve` turns those results into a gated, reviewable branch (never merges, never deploys)
+- **Self-repair nudges** — catches turns that narrated without acting, changed code without running it, or extended one enumerated set and missed its siblings
 - **Plan persistence** — implementation plans auto-saved and restored across context compaction
 - **Session management** — save, resume, and sync sessions across devices via WebDAV
 - **Remote Connect** — phone-accessible web UI with QR code access
@@ -120,7 +121,7 @@ Additional integrations (Home Assistant, Mastodon, Spotify, Gmail, Calendar, Dri
 
 ### edit_file
 
-The edit tool supports exact match replacement, `replace_all` for bulk changes, and fuzzy whitespace matching that auto-corrects when the model gets indentation wrong — a common issue with local models.
+Exact match first, then whitespace-tolerant matching — because a model rebuilding text from `read_file`'s numbered output rarely reproduces indentation byte for byte, a common issue with local models. The **file's** indentation wins: the replacement is re-indented to the region it matched rather than to the model's guess, so an edit can't silently reformat a nested block (or change what Python means). A needle that flattened the block entirely is refused rather than reformatted, and a miss quotes the file's exact bytes back so the retry isn't another guess. See [docs/tools.md](docs/tools.md#whitespace-handling).
 
 ### Remote agent bridge
 

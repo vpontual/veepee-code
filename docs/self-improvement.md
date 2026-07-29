@@ -24,7 +24,7 @@ Analysis is deterministic. The point of the eval was to replace "it feels better
 | `regression` | A task that passed in the previous run and fails now | Highest — the cause is bounded by two commits |
 | `failing_task` | A task failing in the latest run | The direct measure |
 | `tool_errors` | ≥3 failed tool calls **and** ≥25% of them | The harness fighting itself: bad descriptions or schemas |
-| `no_self_verify` | Failed without ever running the tests | The force-verify nudge not landing |
+| `no_self_verify` | Failed without ever running the tests | The [force-verify nudge](nudges.md) not landing |
 
 ```
 Self-improvement — 6 eval run(s), latest 0% @ c25bf57
