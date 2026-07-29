@@ -42,6 +42,17 @@ By default VEEPEE Code speaks the **Ollama** wire format (`/api/chat`) to `proxy
 
 When `llmBackend` is `"openai"`: thinking is toggled via `chat_template_kwargs.enable_thinking`; tool-call `arguments` and the message history are translated to/from the strict `/v1` shape (synthesized `id`/`tool_call_id`, string-encoded arguments); and streaming requests are aborted on interrupt so they are never orphaned. The subagent (`task` tool) and model-discovery paths still use `proxyUrl`, so keep it valid as a fallback.
 
+#### Which endpoint serves which model
+
+A direct `openaiBaseUrl` is a **single vLLM server, serving a single model** — in this fleet the DGX serves Qwen3.6 and the AGX serves Gemma 4, and they don't swap. So the agent routes per turn:
+
+| Model for this turn | Goes to |
+|---|---|
+| The primary (`lockModel`, else `model`) | `openaiBaseUrl` — the direct `/v1` endpoint |
+| Anything else (e.g. `reviewModel` via `/review`) | `proxyUrl` — the gateway, which fronts the whole fleet |
+
+Without this, a `/review` turn would send `reviewModel` to the direct endpoint and get a model-not-found, since that server only holds the primary. Falling back to the gateway is never *wrong* — just an extra hop — so an unrecognized model routes there rather than failing. **Keep `proxyUrl` valid even when running the direct backend.**
+
 ### Model Preferences
 
 | Field | Default | Description |

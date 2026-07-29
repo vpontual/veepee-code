@@ -160,6 +160,11 @@ export class Agent {
   private effort: EffortLevel = 'medium';
   private modelStick = false; // when true, mode switches don't change the model
   private openaiBackend = false; // true when using the OpenAIChatClient adapter
+  /** Models the direct (openai-backend) endpoint actually serves. Empty when
+   *  the gateway is the primary transport, since it fronts the whole fleet. */
+  private directModels = new Set<string>();
+  /** Lazily-built gateway client, used for models the direct endpoint lacks. */
+  private gatewayClient: Ollama | null = null;
 
   constructor(config: Config, registry: ToolRegistry, modelManager: ModelManager, permissions: PermissionManager) {
     // Backend transport: "openai" talks straight to a vLLM /v1 server
@@ -169,6 +174,12 @@ export class Agent {
     if (config.llmBackend === 'openai' && config.openaiBaseUrl) {
       this.ollama = new OpenAIChatClient(config.openaiBaseUrl, config.openaiApiKey ?? undefined) as unknown as Ollama;
       this.openaiBackend = true;
+      // The direct endpoint is a single vLLM server, so it serves exactly the
+      // model it was stood up for — the primary. Every other model in the
+      // fleet (reviewModel, subagent models) lives behind the gateway. See
+      // clientFor().
+      const primary = config.lockModel ?? config.model;
+      if (primary) this.directModels.add(primary);
     } else {
       this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
     }
@@ -551,6 +562,36 @@ export class Agent {
     }
   }
 
+  /**
+   * Pick the transport for a given model.
+   *
+   * With `llmBackend: "openai"` the agent talks to ONE vLLM server, which
+   * serves exactly one model — the DGX serves Qwen3.6, the AGX serves Gemma 4,
+   * and they don't switch. So a turn that names a different model (`/review`
+   * routing through `reviewModel`, say) cannot go to the direct endpoint: it
+   * would come back as a model-not-found. Those turns go through the gateway,
+   * which fronts the whole fleet and can reach whichever box holds that model.
+   *
+   * Falling back to the gateway is never *wrong*, only an extra hop — so an
+   * unknown model routes there rather than failing.
+   *
+   * `isAdapter` tells the caller whether the chosen client is OpenAIChatClient:
+   * only it consumes `signal`, and passing that to the Ollama client would
+   * serialize an AbortSignal into the request body.
+   */
+  private clientFor(model: string): { client: Ollama; isAdapter: boolean } {
+    if (!this.openaiBackend || this.directModels.has(model)) {
+      return { client: this.ollama, isAdapter: this.openaiBackend };
+    }
+    if (!this.gatewayClient) {
+      this.gatewayClient = new Ollama({
+        host: this.config.proxyUrl,
+        headers: { 'x-ollama-source': 'vcode' },
+      });
+    }
+    return { client: this.gatewayClient, isAdapter: false };
+  }
+
   setModel(model: string): void {
     this.modelManager.switchTo(model);
     this.context.setSystemPrompt(model);
@@ -784,43 +825,40 @@ export class Agent {
         // use Qwen's Instruct preset. Act/plan keep thinking + Coding preset.
         const samplingPreset = this.mode === 'chat' ? QWEN_INSTRUCT_PRESET : QWEN_CODING_PRESET;
 
+        // Route to whichever endpoint serves this model — the direct vLLM
+        // server only has the primary; anything else goes via the gateway.
+        const { client: chatClient, isAdapter } = this.clientFor(currentModel);
+
+        const chatRequest = () => ({
+          model: currentModel,
+          messages,
+          ...(tools.length > 0 ? { tools } : {}),
+          stream: true as const,
+          think: useThinking,
+          keep_alive: '30m',
+          // Only the openai adapter consumes `signal`; never send it to the
+          // Ollama client (it would serialize into the request body).
+          ...(isAdapter && this.abortController ? { signal: this.abortController.signal } : {}),
+          options: {
+            ...samplingPreset,
+            ...(numCtx ? { num_ctx: numCtx } : {}),
+            ...effortOpts,
+          },
+        });
+
         // Retry wrapper: one retry with 3s backoff on connection errors
         const chatWithRetry = async () => {
           try {
-            return await this.ollama.chat({
-              model: currentModel,
-              messages,
-              ...(tools.length > 0 ? { tools } : {}),
-              stream: true,
-              think: useThinking,
-              keep_alive: '30m',
-              // Only the openai adapter consumes `signal`; never send it to the
-              // Ollama client (it would serialize into the request body).
-              ...(this.openaiBackend && this.abortController ? { signal: this.abortController.signal } : {}),
-              options: {
-                ...samplingPreset,
-                ...(numCtx ? { num_ctx: numCtx } : {}),
-                ...effortOpts,
-              },
-            } as never);
+            return await chatClient.chat(chatRequest() as never);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             // Retry on connection errors (not on model errors)
             if (msg.includes('ECONNREFUSED') || msg.includes('ECONNRESET') || msg.includes('ETIMEDOUT') || msg.includes('fetch failed')) {
               await new Promise(r => setTimeout(r, 3000));
-              return this.ollama.chat({
-                model: currentModel,
-                messages,
-                ...(tools.length > 0 ? { tools } : {}),
-                stream: true,
-                think: useThinking,
-                keep_alive: '30m',
-                options: {
-                  ...samplingPreset,
-                  ...(numCtx ? { num_ctx: numCtx } : {}),
-                  ...effortOpts,
-                },
-              } as never);
+              // Keep the abort signal on the retry too — a retried stream that
+              // can't be aborted is exactly the orphaned stream that wedges
+              // vLLM, which is what the signal was added for.
+              return chatClient.chat(chatRequest() as never);
             }
             throw err;
           }
