@@ -1,9 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'http';
-import type { Agent } from './agent.js';
+import type { Agent, AgentEvent } from './agent.js';
+import { AgentBusyError } from './agent.js';
 import type { ModelManager } from './models.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { Config } from './config.js';
 import { escalateAndLearn, type TeacherConfig } from './teacher-escalation.js';
+import { safeTokenEquals } from './auth.js';
 
 interface ApiConfig {
   port: number;
@@ -64,7 +66,7 @@ export function startApiServer(config: ApiConfig): { port: number; connectionCou
     if (apiToken && !skipAuth) {
       const authHeader = req.headers.authorization || '';
       const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-      if (token !== apiToken) {
+      if (!safeTokenEquals(token, apiToken)) {
         sendJson(res, 401, { error: 'Unauthorized — set Authorization: Bearer <token>' });
         return;
       }
@@ -114,6 +116,22 @@ export function startApiServer(config: ApiConfig): { port: number; connectionCou
             .filter(Boolean) as string[];
         }
         if (data.stream) {
+          // Claim the agent BEFORE committing response headers — once we've
+          // written a 200 + SSE headers we can no longer report a 409.
+          let stream: AsyncGenerator<AgentEvent>;
+          try {
+            stream = agent.run(userContent, {
+              permissionMode: 'auto_allow',
+              allowedTools: clientToolNames,
+            });
+          } catch (err) {
+            if (err instanceof AgentBusyError) {
+              sendBusy(res);
+              return;
+            }
+            throw err;
+          }
+
           // Streaming response (SSE)
           res.writeHead(200, {
             'Content-Type': 'text/event-stream',
@@ -130,10 +148,7 @@ export function startApiServer(config: ApiConfig): { port: number; connectionCou
           const _outcomeErrors: string[] = [];
           let _outcomeStuck = false;
 
-          for await (const event of agent.run(userContent, {
-            permissionMode: 'auto_allow',
-            allowedTools: clientToolNames,
-          })) {
+          for await (const event of stream) {
             if (event.type === 'text' && event.content) {
               if (_teacher) _assistantText += event.content;
               const chunk = {
@@ -230,10 +245,19 @@ export function startApiServer(config: ApiConfig): { port: number; connectionCou
         }
 
         // Non-streaming response
-        const result = await agent.runSync(userContent, {
-          permissionMode: 'auto_allow',
-          allowedTools: clientToolNames,
-        });
+        let result;
+        try {
+          result = await agent.runSync(userContent, {
+            permissionMode: 'auto_allow',
+            allowedTools: clientToolNames,
+          });
+        } catch (err) {
+          if (err instanceof AgentBusyError) {
+            sendBusy(res);
+            return;
+          }
+          throw err;
+        }
         const model = modelManager.getCurrentModel();
 
         // Build standard OpenAI tool_calls array
@@ -364,12 +388,20 @@ export function startApiServer(config: ApiConfig): { port: number; connectionCou
     }
   });
 
+  // Port hunting is bounded: an unbounded retry walks past 65535 and then spins
+  // on EACCES/ERANGE forever. Any other bind error (EACCES, EADDRNOTAVAIL) used
+  // to be swallowed silently, leaving a dead server nobody noticed — log it.
+  const MAX_PORT_ATTEMPTS = 20;
+  let portAttempts = 0;
   server.on('error', (err: NodeJS.ErrnoException) => {
-    if (err.code === 'EADDRINUSE') {
+    if (err.code === 'EADDRINUSE' && portAttempts < MAX_PORT_ATTEMPTS && config.port < 65535) {
+      portAttempts++;
       config.port++;
       const bindHost = config.rcEnabled ? '0.0.0.0' : (config.host || '127.0.0.1');
       server.listen(config.port, bindHost);
+      return;
     }
+    console.error(`[api] server error (${err.code || 'unknown'}): ${err.message} — API server is not listening`);
   });
 
   // Track live external connections so the TUI can hide the API indicator when
@@ -410,6 +442,16 @@ function readBody(req: IncomingMessage): Promise<string> {
     });
     req.on('end', () => resolve(body));
     req.on('error', reject);
+  });
+}
+
+/** 409 for "a run is already in flight" — the shared agent takes one at a time. */
+function sendBusy(res: ServerResponse): void {
+  res.setHeader('Retry-After', '1');
+  sendJson(res, 409, {
+    error: 'agent busy — a run is already in progress',
+    code: 'AGENT_BUSY',
+    retry_after_ms: 1000,
   });
 }
 

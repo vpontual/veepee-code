@@ -6,6 +6,7 @@ import { getRcHtml } from './rc-ui.js';
 import { listSessions, findSession } from './sessions.js';
 import { KnowledgeState } from './knowledge.js';
 import { randomBytes } from 'crypto';
+import { safeTokenEquals } from './auth.js';
 
 // ─── SSE Client Management ─────────────────────────────────────────────────
 
@@ -75,11 +76,11 @@ export function registerRcRoutes(
 
     // Check header
     const authHeader = req.headers.authorization || '';
-    if (authHeader.startsWith('Bearer ') && authHeader.slice(7) === apiToken) return true;
+    if (authHeader.startsWith('Bearer ') && safeTokenEquals(authHeader.slice(7), apiToken)) return true;
 
     // Check query param (for SSE which can't set headers)
     const url = new URL(req.url || '/', `http://localhost:${apiPort}`);
-    if (url.searchParams.get('token') === apiToken) return true;
+    if (safeTokenEquals(url.searchParams.get('token'), apiToken)) return true;
 
     return false;
   }
@@ -172,6 +173,20 @@ export function registerRcRoutes(
         return true;
       }
 
+      // The agent takes one run at a time — a second message mid-run would
+      // interleave into the same context and steal the abort handle. Reject
+      // before the ack so the phone shows a real failure, not a silent drop.
+      // Slash commands are exempt: they go to the command handler, not the
+      // agent loop.
+      if (!data.message.trim().startsWith('/') && agent.isRunning()) {
+        sendJson(res, 409, {
+          error: 'agent busy — a run is already in progress',
+          code: 'AGENT_BUSY',
+          retry_after_ms: 1000,
+        });
+        return true;
+      }
+
       // Acknowledge receipt immediately
       sendJson(res, 200, { ok: true });
 
@@ -188,8 +203,16 @@ export function registerRcRoutes(
       }
 
       // Run agent asynchronously — events broadcast to BOTH SSE clients and TUI
-      // (agent.run() adds the user message to context internally)
-      const eventStream = agent.run(data.message);
+      // (agent.run() adds the user message to context internally).
+      // The isRunning() check above already answered on the wire, so a lost
+      // race here can only be reported over SSE.
+      let eventStream: AsyncGenerator<AgentEvent>;
+      try {
+        eventStream = agent.run(data.message);
+      } catch (err) {
+        broadcast('error_event', { error: err instanceof Error ? err.message : String(err) });
+        return true;
+      }
 
       // Broadcast user message to SSE clients immediately
       broadcast('user_message', { content: data.message });
