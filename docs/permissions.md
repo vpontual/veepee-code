@@ -30,26 +30,55 @@ These tools are considered safe and never prompt for permission (hardcoded in `p
 | `list_files` | Read-only directory listing |
 | `glob` | Read-only file search |
 | `grep` | Read-only content search |
-| `git` | Most git commands are read-only (status, log, diff) |
 | `weather` | Public weather API (when surfaced via the remote bridge) |
 | `system_info` | Read-only system information |
 | `news` | Read-only news access (when surfaced via the remote bridge) |
 | `update_memory` | Writes to the knowledge state file, no external side effects |
 
-> **Note:** While `git` is in the safe list for read operations, dangerous git patterns (force push, hard reset) are caught by the dangerous pattern check and will still prompt.
+### `git` is allowed per-subcommand, not wholesale
+
+`git` used to sit in the safe list. It doesn't any more: it takes arbitrary subcommands, so blanket-allowing it meant `git push -f` and `git clean -fdx` ran with **no prompt at all**.
+
+Instead, git is auto-allowed only when the **first** token is a subcommand with no write form:
+
+```
+status  log  diff  show  blame  shortlog  whatchanged  rev-parse  rev-list
+describe  ls-files  ls-remote  ls-tree  merge-base  name-rev  cat-file
+count-objects  grep  annotate  verify-commit  check-ignore  diff-tree
+symbolic-ref
+```
+
+Everything else — `commit`, `add`, `push`, `checkout`, `branch`, `stash`, `config`, `remote` — goes through the normal prompt. Subcommands that are *usually* read-only but have destructive modes (`branch -D`, `tag -d`, `stash drop`, `reflog expire`, `config` writes) are deliberately excluded rather than special-cased.
+
+The subcommand must come first, and these flags disqualify the invocation anywhere in the arguments:
+
+`-c` · `-O` · `--config-env` · `--output` · `--upload-pack` · `--receive-pack` · `--exec` · `--ext-diff`
+
+They turn a read-only subcommand into code execution or a file write — `git -c core.pager='sh -c ...' log` runs an arbitrary command, and `git diff --output=FILE` writes to disk.
 
 ## Dangerous Patterns (Always Prompt)
 
 These patterns always require explicit approval, even if the tool has been permanently allowed. The list is hardcoded in `permissions.ts → DANGEROUS_PATTERNS`:
 
+Matching is flag-aware rather than literal, because the destructive forms have many equivalent spellings: `rm -rf`, `rm -fr`, `rm -r -f` and `rm --recursive --force` are all the same command, and `git push -f` is the same as `git push --force`. Bundled short flags (`-fdx`) are decomposed, and each shell-separated segment is inspected, so `make dist && rm -fr build` is caught.
+
 | Tool | Pattern | Reason |
 |------|---------|--------|
-| `bash` | `rm -rf` or `rm -r` | Destructive file deletion |
-| `bash` | `git push --force` | Force push to remote |
+| `bash` | recursive `rm` (any flag spelling) | Destructive file deletion |
+| `bash` | `git push` with `-f` / `--force` / `--force-with-lease` | Force push to remote |
 | `bash` | `git reset --hard` | Hard reset discards changes |
+| `bash` | `git clean` with `-f` / `--force` | Deletes untracked files (including `.env`) |
 | `bash` | `docker rm`, `docker rmi`, `docker system prune` | Container/image cleanup |
-| `git` | `push --force` | Force push |
+| `bash` | `mkfs*`, `shred` | Destroys data irrecoverably |
+| `bash` | `dd ... of=` | Raw disk write |
+| `git` | `push` with `-f` / `--force` / `--force-with-lease` | Force push |
 | `git` | `reset --hard` | Hard reset |
+| `git` | `clean` with `-f` / `--force` | Deletes untracked files |
+| `git` | `checkout .` / `restore .` | Discards all local changes |
+| `git` | `branch -D` / `-d`, `tag -d` | Deletes a branch or tag |
+| `git` | `stash drop` / `stash clear` | Discards stashed work |
+| `git` | `filter-branch`, `filter-repo` | Rewrites history |
+| `git` | `reflog delete` / `expire` | Destroys the recovery log |
 
 Tools that come from the remote agent bridge (Home Assistant device control, Mastodon posting, email sending, Spotify playback control, etc.) handle their own dangerous-action prompts at the remote agent layer — VEEPEE Code itself does not currently parse arguments for those bridged tools.
 
@@ -117,7 +146,7 @@ Output:
 
 ```
 Permissions:
-  Safe (auto-allowed): git, glob, grep, list_files, news, read_file, system_info, weather
+  Safe (auto-allowed): glob, grep, list_files, news, read_file, system_info, weather
   Always allowed: bash, write_file, edit_file
   Session allowed: docker, mastodon
 ```

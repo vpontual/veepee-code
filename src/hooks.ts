@@ -88,6 +88,10 @@ type EventPayload =
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/** How long to wait for stdio EOF after the hook process has already exited,
+ *  so a backgrounded grandchild holding the pipe can't stall the result. */
+const OUTPUT_FLUSH_GRACE_MS = 250;
+
 // ─── Trust management ──────────────────────────────────────────────────
 
 interface TrustedProjects {
@@ -218,20 +222,64 @@ function execHook(hook: HookEntry, layer: SettingsLayer, payload: EventPayload):
     let stderr = '';
     let timedOut = false;
 
+    // `detached` puts the hook in its own process group so the timeout can
+    // kill the whole tree. Killing only the direct `bash -c` child leaves
+    // grandchildren running — and holding the stdout pipe, which stalls
+    // 'close' long past the timeout the user configured.
     const proc = spawn('bash', ['-c', hook.command], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
       env: { ...process.env, VEEPEE_HOOK_LAYER: layer },
     });
+
+    let settled = false;
+    let graceTimer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (result: HookExecResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
+      proc.stdout.destroy();
+      proc.stderr.destroy();
+      resolveP(result);
+    };
+
     const timer = setTimeout(() => {
       timedOut = true;
-      proc.kill('SIGKILL');
+      try {
+        if (proc.pid !== undefined) process.kill(-proc.pid, 'SIGKILL');
+      } catch { /* group already gone */ }
+      finish({
+        stdout: stdout.trim(),
+        stderr: (stderr + `\n[hook killed after ${timeout}ms]`).trim(),
+        exitCode: 124, // conventional timeout status
+        timedOut: true,
+        hook,
+        layer,
+      });
     }, timeout);
 
     proc.stdout.on('data', (d) => { stdout += d.toString(); });
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
+
+    // See the bash tool: 'close' waits for stdio EOF, which a backgrounded
+    // grandchild can hold forever. Bound the wait once the hook itself exits.
+    proc.on('exit', () => {
+      if (settled || graceTimer) return;
+      graceTimer = setTimeout(() => {
+        finish({
+          stdout: stdout.trim(),
+          stderr: stderr.trim(),
+          exitCode: 0,
+          timedOut,
+          hook,
+          layer,
+        });
+      }, OUTPUT_FLUSH_GRACE_MS);
+    });
+
     proc.on('close', (code) => {
-      clearTimeout(timer);
-      resolveP({
+      finish({
         stdout: stdout.trim(),
         stderr: stderr.trim(),
         exitCode: code ?? 0,
@@ -241,8 +289,7 @@ function execHook(hook: HookEntry, layer: SettingsLayer, payload: EventPayload):
       });
     });
     proc.on('error', (err) => {
-      clearTimeout(timer);
-      resolveP({
+      finish({
         stdout: '',
         stderr: `hook failed to spawn: ${err.message}`,
         exitCode: 1,
@@ -252,7 +299,12 @@ function execHook(hook: HookEntry, layer: SettingsLayer, payload: EventPayload):
       });
     });
 
-    // Send event payload as JSON on stdin
+    // Send event payload as JSON on stdin.
+    // A hook that never reads stdin (`echo hi`) can exit before this write
+    // lands, and the resulting EPIPE arrives as an asynchronous 'error' EVENT
+    // on the stream — a sync try/catch around .write() does not catch it, so
+    // without this listener it becomes an unhandled error and kills vcode.
+    proc.stdin.on('error', () => { /* hook exited without reading stdin */ });
     try {
       proc.stdin.write(JSON.stringify(payload));
       proc.stdin.end();

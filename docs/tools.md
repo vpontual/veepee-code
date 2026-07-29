@@ -110,7 +110,13 @@ bash command="docker compose up -d" cwd="/home/user/project"
 bash command="curl -s https://api.example.com/health" timeout=5000
 ```
 
-> **Note:** Destructive patterns (`rm -rf`, `git push --force`, `git reset --hard`) trigger the permission system and require explicit approval.
+> **Note:** Destructive patterns (recursive `rm`, force push, `git reset --hard`, `git clean -f`) trigger the permission system and require explicit approval. Matching is flag-aware, so `rm -fr` and `git push -f` are caught too — see [permissions](permissions.md#dangerous-patterns-always-prompt).
+
+**Background processes and the timeout.** The command runs in its own process group. On timeout the *whole group* is killed, so grandchildren don't survive the parent.
+
+If a command deliberately backgrounds something (`npm run dev &`), the tool returns as soon as the command itself exits and notes that a background process is still holding the output stream — it does **not** wait for that process, and does not kill it. Previously the tool blocked until every writer released stdout, so starting a long-lived server could hang the turn indefinitely, and the `timeout` parameter did not help (it only ever targeted the direct `bash` child, which had already exited).
+
+Stdin is closed immediately: a command that reads stdin gets EOF and fails fast rather than blocking until the timeout.
 
 ### git
 

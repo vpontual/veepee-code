@@ -13,6 +13,11 @@ import { notifyLSPs } from '../lsp/manager.js';
 import { formatDiagnostics } from '../lsp/diagnostics.js';
 import { pathToFileUri } from '../lsp/uri.js';
 
+/** How long to wait for stdio EOF after a command has already exited. Covers
+ *  the normal in-flight-buffer case without waiting on a background process
+ *  that inherited the pipe and may never release it. */
+const OUTPUT_FLUSH_GRACE_MS = 250;
+
 export function registerCodingTools(ignoreManager?: IgnoreManager, fileTracker?: FileTracker, lspManager?: LspManager): ToolDef[] {
   return [
     createReadFileTool(ignoreManager, fileTracker, lspManager),
@@ -433,10 +438,13 @@ function createBashTool(fileTracker?: FileTracker): ToolDef {
           forgetReferencedPaths(fileTracker, command, cwd);
         }
 
+        // `detached` puts the command in its own process group so we can kill
+        // the whole tree. Without it a timeout only reaps the `bash -c` child
+        // and any grandchildren keep running — and keep the stdout pipe open.
         const child = spawn('bash', ['-c', params.command as string], {
           cwd,
           stdio: ['pipe', 'pipe', 'pipe'],
-          timeout,
+          detached: true,
           env: { ...process.env },
         });
 
@@ -459,17 +467,71 @@ function createBashTool(fileTracker?: FileTracker): ToolDef {
           }
         });
 
+        // The tool never feeds the command stdin, so close it immediately: a
+        // command that reads stdin gets EOF and fails fast instead of blocking
+        // until the timeout. Guard the stream — an already-exited child makes
+        // this raise EPIPE as an async 'error' event, which would be fatal.
+        child.stdin.on('error', () => { /* command exited without reading stdin */ });
+        child.stdin.end();
+
+        let settled = false;
+        let graceTimer: ReturnType<typeof setTimeout> | null = null;
+        const finish = (result: ToolResult) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(hardTimer);
+          if (graceTimer) clearTimeout(graceTimer);
+          // Stop holding the pipes so node isn't kept alive by a survivor.
+          child.stdout.destroy();
+          child.stderr.destroy();
+          res(result);
+        };
+        const compose = () => stdout + (stderr ? `\n[stderr]\n${stderr}` : '');
+
+        // Kill the whole process group. Negative pid = the group led by `child`.
+        const killTree = (signal: NodeJS.Signals) => {
+          try {
+            if (child.pid !== undefined) process.kill(-child.pid, signal);
+          } catch {
+            // Group already gone, or we lost the race — nothing to reap.
+          }
+        };
+
+        const hardTimer = setTimeout(() => {
+          killTree('SIGKILL');
+          finish(fail(
+            `Command timed out after ${timeout}ms and was killed (process group terminated).\n${compose().trim()}`,
+          ));
+        }, timeout);
+
+        // 'exit' means the command itself finished. 'close' additionally waits
+        // for stdio EOF, which a backgrounded grandchild can hold open
+        // indefinitely (`npm run dev &`, a spawned server). Prefer 'close' so
+        // output is complete, but never wait on it for more than a grace
+        // period after the command is already gone.
+        child.on('exit', () => {
+          if (settled || graceTimer) return;
+          graceTimer = setTimeout(() => {
+            const out = compose().trim();
+            finish(ok(
+              (out ? out + '\n' : '') +
+              '(note: the command exited but left a background process holding its output stream; ' +
+              'it is still running and detached from this tool call)',
+            ));
+          }, OUTPUT_FLUSH_GRACE_MS);
+        });
+
         child.on('close', (code) => {
-          const output = stdout + (stderr ? `\n[stderr]\n${stderr}` : '');
+          const output = compose();
           if (code === 0) {
-            res(ok(output.trim() || '(no output)'));
+            finish(ok(output.trim() || '(no output)'));
           } else {
-            res(fail(`Exit code ${code}\n${output.trim()}`));
+            finish(fail(`Exit code ${code}\n${output.trim()}`));
           }
         });
 
         child.on('error', (err) => {
-          res(fail(`Command failed: ${err.message}`));
+          finish(fail(`Command failed: ${err.message}`));
         });
       });
     },
