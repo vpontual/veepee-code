@@ -31,3 +31,4 @@ benchmarks/git-corpus/
 benchmarks/gates/
 benchmarks/corpus/
 .eval-grade-*/
+.veepee-worktrees/

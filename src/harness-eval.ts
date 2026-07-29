@@ -128,7 +128,15 @@ export async function loadHarnessTasks(dir: string = TASKS_DIR): Promise<Harness
 /** Run a command in the scratch workspace, bounded and group-killed. */
 function run(cmd: string, args: string[], cwd: string, timeoutMs: number): Promise<{ code: number; out: string }> {
   return new Promise((resolveP) => {
-    const proc = spawn(cmd, args, { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    // NO_COLOR because this output is stored in the result JSON and later fed
+    // to a model as evidence — ANSI escapes there are noise in the prompt and
+    // gibberish in a report.
+    const proc = spawn(cmd, args, {
+      cwd,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
+    });
     let out = '';
     let settled = false;
     const finish = (code: number) => {

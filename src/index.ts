@@ -381,6 +381,101 @@ async function main() {
   // Cleanup stale sandbox dirs on startup (>24h untouched), never this session's
   SandboxManager.cleanupStale(undefined, sessionId).catch(() => {});
 
+  // Self-improvement: `vcode --improve [--dry-run]`
+  //
+  // Reads the eval history, ranks what vcode is losing on, and — unless
+  // --dry-run — has an agent attempt ONE fix in an isolated worktree, gated on
+  // build, tests, an untouched exam, and a measurably better score.
+  //
+  // It never merges, pushes or deploys. The output is a branch and a report.
+  if (process.argv.includes('--improve')) {
+    const si = await import('./self-improve.js');
+    const history = await si.loadEvalHistory();
+    if (history.length === 0) {
+      console.error(chalk.red('No eval history. Run `vcode --eval` first — this needs something to improve against.'));
+      process.exit(1);
+    }
+    const weaknesses = si.analyzeEvalRuns(history);
+    const latest = history[history.length - 1];
+    console.error(chalk.bold(`Self-improvement — ${history.length} eval run(s), latest ${latest.score}% @ ${latest.commit}`));
+
+    // A run that never reached the model scores 0% and looks identical to a
+    // total harness collapse. Improving against it would be chasing noise.
+    const trust = si.evalIsTrustworthy(latest);
+    if (!trust.ok) {
+      console.error(chalk.yellow(`\nThe latest run measured nothing: ${trust.reason}`));
+      console.error(chalk.dim('Fix the backend and re-run `vcode --eval` before improving against it.'));
+      process.exit(1);
+    }
+
+    if (weaknesses.length === 0) {
+      console.error(chalk.green('Nothing actionable: every task in the latest run passed cleanly.'));
+      process.exit(0);
+    }
+    console.error('');
+    for (const [i, w] of weaknesses.entries()) {
+      console.error(`  ${i + 1}. ${chalk.bold(w.title)}  ${chalk.dim(`[${w.kind}]`)}`);
+      console.error(chalk.dim(`     ${w.evidence}`));
+    }
+
+    if (process.argv.includes('--dry-run')) {
+      console.error(chalk.dim('\n--dry-run: analysis only, nothing attempted.'));
+      process.exit(0);
+    }
+
+    const target = weaknesses[0];
+    console.error(chalk.bold(`\nAttempting: ${target.title}\n`));
+
+    // The candidate is measured against the harness as it stands right now, so
+    // a stale baseline from an older commit would make any comparison a lie.
+    const head = (await si.sh('git rev-parse --short HEAD', process.cwd(), 10_000)).out.trim();
+    let baseline = history.filter((h) => h.commit === head).pop() ?? null;
+    if (!baseline) {
+      console.error(chalk.dim(`No eval at the current commit (${head}) — measuring the baseline first…`));
+      baseline = await si.scoreCheckout(process.cwd());
+      if (!baseline) {
+        console.error(chalk.red('Baseline eval produced no result. Is the fleet reachable?'));
+        process.exit(1);
+      }
+      console.error(chalk.dim(`baseline: ${baseline.score}%`));
+    }
+
+    permissions.setPromptHandler(async () => 'y');
+    const run = await si.proposeImprovement(target, {
+      repoRoot: process.cwd(),
+      baseline,
+      onProgress: (m) => console.error(chalk.dim(`  ${m}`)),
+      runAgent: async (prompt, worktreePath) => {
+        // The agent works in the worktree, so its tools resolve there.
+        const prevCwd = process.cwd();
+        process.chdir(worktreePath);
+        try {
+          let text = '';
+          for await (const ev of agent.run(prompt, { permissionMode: 'auto_allow' })) {
+            if (ev.type === 'tool_call') console.error(chalk.dim(`    · ${ev.name}`));
+            else if (ev.type === 'text' && ev.content) text += ev.content;
+            else if (ev.type === 'error') throw new Error(String(ev.error ?? ev.content));
+          }
+          return text;
+        } finally {
+          process.chdir(prevCwd);
+        }
+      },
+    });
+
+    const reportPath = await si.saveImprovementReport(run);
+    console.error('');
+    console.error(run.verdict === 'proposed'
+      ? chalk.green(`PROPOSED — ${run.reason}`)
+      : chalk.yellow(`REJECTED — ${run.reason.split('\n')[0]}`));
+    console.error(chalk.dim(`  branch:   ${run.branch}`));
+    console.error(chalk.dim(`  report:   ${reportPath}`));
+    console.error(chalk.dim(`  review:   git diff main...${run.branch}`));
+    console.error(chalk.dim('  nothing was merged, pushed, or deployed.'));
+    await shutdownLspServers();
+    process.exit(run.verdict === 'proposed' ? 0 : 1);
+  }
+
   // Goal mode: `vcode --goal "<what you want>" [--verify "<cmd>"] …`
   //
   // Works unattended until a real command exits 0. Lives here rather than in

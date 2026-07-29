@@ -90,3 +90,7 @@ FAIL  fix-failing-test  1s  0 calls, 0 errors
 ```
 
 "The fleet was down" and "the model wrote the wrong code" are completely different results. A 0% score with an agent error in every task is an infrastructure problem, not a regression.
+
+## Acting on the results
+
+[`vcode --improve`](self-improvement.md) reads this history, ranks what is going wrong, and can attempt one fix in an isolated worktree — gated on the score actually moving. It proposes a branch and never merges or deploys.
