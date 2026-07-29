@@ -1,6 +1,7 @@
 import { resolve, join } from 'path';
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'fs';
 import type { LspServerConfig } from './lsp/config.js';
+import { writeFileAtomicSync } from './atomic-write.js';
 
 export interface Config {
   proxyUrl: string;
@@ -315,7 +316,7 @@ export function migrateEnvToJson(): boolean {
     config.remote = { url: env.VEEPEE_CODE_REMOTE_URL, apiKey: env.VEEPEE_CODE_REMOTE_API_KEY };
   }
 
-  writeFileSync(newPath, JSON.stringify(config, null, 2) + '\n');
+  writeFileAtomicSync(newPath, JSON.stringify(config, null, 2) + '\n');
   renameSync(envPath, resolve(configDir, '.env.backup'));
   return true;
 }
@@ -472,7 +473,9 @@ export function saveConfigFile(config: ConfigFile, layer: SettingsLayer = 'globa
     const dir = getProjectSettingsDir();
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   }
-  writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
+  // Atomic: a truncated settings.json loses apiToken/lockModel and the next
+  // start silently falls back to defaults.
+  writeFileAtomicSync(path, JSON.stringify(config, null, 2) + '\n');
 }
 
 /** Read raw contents of a single settings layer (does not apply defaults). */

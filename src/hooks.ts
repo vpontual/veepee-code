@@ -16,6 +16,7 @@
  */
 
 import { spawn } from 'child_process';
+import { writeFileAtomicSync } from './atomic-write.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve } from 'path';
 import {
@@ -122,7 +123,9 @@ function loadTrustedProjects(): TrustedProjects {
 function saveTrustedProjects(state: TrustedProjects): void {
   const dir = getConfigDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(getTrustedProjectsPath(), JSON.stringify(state, null, 2) + '\n');
+  // Atomic: this file records which projects may run hook commands, so a
+  // truncated write silently drops trust decisions.
+  writeFileAtomicSync(getTrustedProjectsPath(), JSON.stringify(state, null, 2) + '\n');
 }
 
 export type TrustState = 'trusted' | 'denied' | 'unknown';

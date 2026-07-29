@@ -264,12 +264,25 @@ async function execTool(
   }
 }
 
+/** Signal a spawned process's whole group. Without `detached: true` on the
+ *  spawn this would target our own group, so the two go together: a plain
+ *  proc.kill() reaches only the direct child, and wrappers (npx, shell
+ *  scripts, test runners) leave their real workers running. */
+function killTree(proc: { pid?: number; kill: (s: NodeJS.Signals) => boolean }, signal: NodeJS.Signals): void {
+  try {
+    if (proc.pid !== undefined) process.kill(-proc.pid, signal);
+    else proc.kill(signal);
+  } catch {
+    try { proc.kill(signal); } catch { /* already gone */ }
+  }
+}
+
 function runShell(cmd: string, cwd: string, timeoutMs: number): Promise<string> {
   return new Promise(resolveP => {
-    const proc = spawn('bash', ['-c', cmd], { cwd, env: process.env });
+    const proc = spawn('bash', ['-c', cmd], { cwd, env: process.env, detached: true });
     let out = '';
     const timer = setTimeout(() => {
-      proc.kill('SIGKILL');
+      killTree(proc, 'SIGKILL');
       resolveP(out + `\n[TIMEOUT ${timeoutMs}ms]`);
     }, timeoutMs);
     proc.stdout.on('data', d => { out += d.toString(); });
@@ -301,12 +314,13 @@ async function runVitest(scratch: string, timeoutMs: number): Promise<{ pass: bo
     const proc = spawn(
       VITEST_BIN,
       ['run'],
-      { cwd: scratch, env: { ...process.env, CI: '1' } },
+      // vitest forks worker processes; killing only the parent strands them.
+      { cwd: scratch, env: { ...process.env, CI: '1' }, detached: true },
     );
     let out = '';
     let err = '';
     const timer = setTimeout(() => {
-      proc.kill('SIGKILL');
+      killTree(proc, 'SIGKILL');
       resolveP({ pass: false, stderr: (err + out + `\n[TIMEOUT ${timeoutMs}ms]`).slice(-4000) });
     }, timeoutMs);
     proc.stdout.on('data', d => { out += d.toString(); });

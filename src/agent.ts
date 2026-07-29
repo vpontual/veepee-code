@@ -1150,7 +1150,7 @@ export class Agent {
           };
           const resultContent = result.success ? result.output : `Error: ${result.error}`;
           stepResults[idx] = resultContent;
-          this.context.addToolResult(name, resultContent, (args.path as string) || undefined);
+          this.context.addToolResult(name, resultContent, (args.path as string) || undefined, result.success);
         }
       } else {
         // Sequential execution for write/mixed calls
@@ -1163,7 +1163,7 @@ export class Agent {
             const msg = `Tool "${toolName}" not allowed`;
             yield { type: 'tool_result', name: toolName, success: false, content: `Tool "${toolName}" is not in the allowed set for this request` };
             stepResults[i] = msg;
-            this.context.addToolResult(toolName, msg);
+            this.context.addToolResult(toolName, msg, undefined, false);
             continue;
           }
 
@@ -1188,7 +1188,7 @@ export class Agent {
             yield { type: 'permission_denied', name: toolName };
             const msg = `Permission denied: user rejected ${toolName}`;
             stepResults[i] = msg;
-            this.context.addToolResult(toolName, msg);
+            this.context.addToolResult(toolName, msg, undefined, false);
             continue;
           }
 
@@ -1206,7 +1206,7 @@ export class Agent {
               error: msg,
             };
             stepResults[i] = msg;
-            this.context.addToolResult(toolName, msg, (toolArgs.path as string) || undefined);
+            this.context.addToolResult(toolName, msg, (toolArgs.path as string) || undefined, false);
             continue;
           }
 
@@ -1230,7 +1230,7 @@ export class Agent {
           const resultContent = result.success ? result.output : `Error: ${result.error}`;
           const filePath = (toolArgs.path as string) || undefined;
           stepResults[i] = resultContent;
-          this.context.addToolResult(toolName, resultContent, filePath);
+          this.context.addToolResult(toolName, resultContent, filePath, result.success);
         }
       }
 

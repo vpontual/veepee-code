@@ -76,6 +76,19 @@ interface McpTransport {
 
 // ─── Stdio transport ───────────────────────────────────────────────────
 
+/** Signal a spawned process's whole group. Without `detached: true` on the
+ *  spawn this would target our own group, so the two go together: a plain
+ *  proc.kill() reaches only the direct child, and wrappers (npx, shell
+ *  scripts, test runners) leave their real workers running. */
+function killTree(proc: { pid?: number; kill: (s: NodeJS.Signals) => boolean }, signal: NodeJS.Signals): void {
+  try {
+    if (proc.pid !== undefined) process.kill(-proc.pid, signal);
+    else proc.kill(signal);
+  } catch {
+    try { proc.kill(signal); } catch { /* already gone */ }
+  }
+}
+
 class StdioTransport implements McpTransport {
   private proc: ChildProcess;
   private buffer = '';
@@ -85,6 +98,10 @@ class StdioTransport implements McpTransport {
   constructor(serverName: string, command: string, args: string[] = [], env?: Record<string, string>, cwd?: string) {
     this.proc = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
+      // MCP servers are routinely launched through a wrapper (`npx <server>`),
+      // so the real server is a grandchild. Own process group = close() can
+      // actually reap it instead of orphaning it.
+      detached: true,
       env: { ...process.env, ...(env || {}) },
       cwd,
     });
@@ -152,7 +169,7 @@ class StdioTransport implements McpTransport {
         return;
       }
       const timer = setTimeout(() => {
-        this.proc.kill('SIGKILL');
+        killTree(this.proc, 'SIGKILL');
         resolveP();
       }, 2000);
       this.proc.once('exit', () => {
@@ -162,7 +179,7 @@ class StdioTransport implements McpTransport {
       try {
         this.proc.stdin?.end();
       } catch { /* already closed */ }
-      this.proc.kill('SIGTERM');
+      killTree(this.proc, 'SIGTERM');
     });
   }
 }

@@ -86,16 +86,34 @@ async function refreshStatusline(path: string, state: StatuslineState): Promise<
   }
 }
 
+/** Signal a spawned process's whole group. Without `detached: true` on the
+ *  spawn this would target our own group, so the two go together: a plain
+ *  proc.kill() reaches only the direct child, and wrappers (npx, shell
+ *  scripts, test runners) leave their real workers running. */
+function killTree(proc: { pid?: number; kill: (s: NodeJS.Signals) => boolean }, signal: NodeJS.Signals): void {
+  try {
+    if (proc.pid !== undefined) process.kill(-proc.pid, signal);
+    else proc.kill(signal);
+  } catch {
+    try { proc.kill(signal); } catch { /* already gone */ }
+  }
+}
+
 function runScript(path: string, state: StatuslineState): Promise<string | null> {
   return new Promise((resolveP) => {
     let stdout = '';
     let stderr = '';
     const proc = spawn('bash', [path], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
       env: { ...process.env, VEEPEE_STATUSLINE: '1' },
     });
+    // The script is never fed input; closing stdin means one that reads it
+    // gets EOF instead of blocking until the timeout.
+    proc.stdin?.on('error', () => { /* script exited without reading stdin */ });
+    proc.stdin?.end();
     const timer = setTimeout(() => {
-      proc.kill('SIGKILL');
+      killTree(proc, 'SIGKILL');
       resolveP(null);
     }, STATUSLINE_TIMEOUT_MS);
 

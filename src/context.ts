@@ -691,7 +691,18 @@ Modified: ${renderList(writes)}
     }
   }
 
-  addToolResult(toolName: string, result: string, filePath?: string): void {
+  /**
+   * Record a tool result.
+   *
+   * `success` is the tool's actual outcome, which every caller has —
+   * ToolRegistry.execute returns it. It used to be guessed with
+   * `result.toLowerCase().includes('error')`, so reading a log file, grepping
+   * for "error", or a build printing "0 errors" all counted as failures. That
+   * fed errorCount into the complexity score (models.ts: `complexity +=
+   * signals.errorCount * 3`), pushing model selection toward heavier models,
+   * and recorded false failures in the knowledge state.
+   */
+  addToolResult(toolName: string, result: string, filePath?: string, success = true): void {
     // `tool_name` lets the openai /v1 adapter match this result to the right
     // assistant tool_call id by name (results can be stored out of call order).
     // The Ollama path ignores the extra field.
@@ -703,13 +714,12 @@ Modified: ${renderList(writes)}
       this.filesWritten.add(filePath);
       this.invalidateProjectTree();
     }
-    if (result.toLowerCase().includes('error')) {
+    if (!success) {
       this.errorCount++;
     }
 
     // Track for knowledge state update
-    const isError = result.toLowerCase().includes('error');
-    this._pendingToolResults.push({ name: toolName, content: result, success: !isError });
+    this._pendingToolResults.push({ name: toolName, content: result, success });
   }
 
   /** Called after all tool results for a turn are collected */

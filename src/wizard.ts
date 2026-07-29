@@ -9,6 +9,7 @@
 import { resolve } from 'path';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { execSync, spawn } from 'child_process';
+import { writeFileAtomicSync } from './atomic-write.js';
 import chalk from 'chalk';
 import { theme, box, icons } from './tui/theme.js';
 import {
@@ -773,7 +774,7 @@ function saveConfig(values: Record<string, string>): void {
     };
   }
 
-  writeFileSync(resolve(configDir, 'settings.json'), JSON.stringify(config, null, 2) + '\n');
+  writeFileAtomicSync(resolve(configDir, 'settings.json'), JSON.stringify(config, null, 2) + '\n');
 }
 
 // ─── Step Runner ────────────────────────────────────────────────────────────
