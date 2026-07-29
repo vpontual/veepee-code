@@ -118,6 +118,15 @@ When a tool call requires approval, the TUI displays:
 - Apply to the tool name globally
 - Can be revoked with `/revoke`
 
+> **Scope is the whole tool, deliberately.** Pressing `a` on `bash "npm test"`
+> allows every later `bash` call, in any directory, until revoked — it is not
+> narrowed to `npm` or to the current project. This is a chosen trade-off, not
+> an oversight: the friction of per-command grants isn't worth it when the
+> genuinely destructive forms are covered by the dangerous-pattern check, which
+> runs *before* the always-allow check and therefore still prompts every time.
+> If you'd rather trade friction for tighter scope, use `s` (session) instead,
+> and `/revoke bash` to drop a grant you regret.
+
 ### Project-Scoped Permissions
 
 - Granted by pressing `p` at the prompt
