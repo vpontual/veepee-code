@@ -30,3 +30,4 @@ benchmarks/exercises-aider/
 benchmarks/git-corpus/
 benchmarks/gates/
 benchmarks/corpus/
+.eval-grade-*/

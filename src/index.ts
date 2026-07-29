@@ -151,6 +151,47 @@ async function main() {
     }
   }
 
+  // Harness evaluation: `vcode --eval [task-or-tag] [--json]`.
+  //
+  // Runs the REAL agent against the tasks in benchmarks/harness/, in a scratch
+  // copy of each task's workspace, and grades with a test file the agent never
+  // sees. This measures vcode, not the model — the point is that a change to
+  // the agent loop can be shown to help or hurt instead of merely felt.
+  if (process.argv.includes('--eval')) {
+    const { runHarnessSuite, saveEvalResult, loadHarnessTasks } = await import('./harness-eval.js');
+    const evalIdx = process.argv.indexOf('--eval');
+    const only = process.argv[evalIdx + 1]?.startsWith('--') ? undefined : process.argv[evalIdx + 1];
+
+    const tasks = await loadHarnessTasks();
+    if (tasks.length === 0) {
+      console.error(chalk.red('No harness tasks found in benchmarks/harness/.'));
+      process.exit(1);
+    }
+    console.error(chalk.bold(`Harness eval — ${modelManager.getCurrentModel()}`));
+    console.error(chalk.dim(`${tasks.length} task(s) available${only ? `, filtering on "${only}"` : ''}\n`));
+
+    const result = await runHarnessSuite(config, modelManager, {
+      only,
+      onProgress: (msg) => console.error(chalk.dim(msg)),
+    });
+
+    console.error('');
+    console.error(chalk.bold(`Score: ${result.score}% (${result.passed}/${result.total})  @ ${result.commit}`));
+    for (const r of result.results) {
+      const mark = r.passed ? chalk.green('PASS') : chalk.red('FAIL');
+      console.error(`  ${mark}  ${r.task.padEnd(24)} ${Math.round(r.wallMs / 1000)}s  ` +
+        `${r.toolCalls} calls, ${r.toolErrors} errors${r.selfVerified ? ', self-verified' : ''}`);
+      if (!r.passed && r.detail) {
+        console.error(chalk.dim(r.detail.split('\n').slice(0, 4).map((l) => `        ${l}`).join('\n')));
+      }
+    }
+    const saved = await saveEvalResult(result);
+    console.error(chalk.dim(`\nSaved: ${saved}`));
+    if (process.argv.includes('--json')) console.log(JSON.stringify(result, null, 2));
+    await shutdownLspServers();
+    process.exit(result.passed === result.total ? 0 : 1);
+  }
+
   const allModels = modelManager.getAllModels();
   if (allModels.length === 0) {
     console.error(chalk.red('No models found on the proxy. Is Ollama running?'));

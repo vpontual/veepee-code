@@ -1,0 +1,5 @@
+{
+  "tags": ["debug", "multi-file", "self-verify"],
+  "timeout_ms": 420000,
+  "description": "Agent must run the suite, read the failure, locate the bug across two files, and fix it. Passing requires actually executing the tests rather than guessing."
+}

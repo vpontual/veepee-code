@@ -1,0 +1,5 @@
+{
+  "tags": ["read-first", "multi-file", "conventions"],
+  "timeout_ms": 420000,
+  "description": "Requires reading existing code to infer conventions (validation, dispatch, exports) before writing. A model that writes from imagination without reading fails the validation and registry assertions."
+}
