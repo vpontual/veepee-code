@@ -1,0 +1,5 @@
+{
+  "name": "fmt",
+  "type": "module",
+  "scripts": { "test": "vitest run" }
+}

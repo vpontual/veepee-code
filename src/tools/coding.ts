@@ -181,6 +181,65 @@ export function normalizeWithMap(s: string): { text: string; map: number[] } {
   return { text, map };
 }
 
+/** Drop leading indentation from every line, for indentation-blind comparison. */
+const deindent = (s: string) => s.split('\n').map((l) => l.trimStart()).join('\n');
+
+/** `read_file` returns numbered lines ("   12  code"). A model that copies from
+ *  that output brings the numbers with it, and every match then fails. */
+const LINE_NUMBERED = /^\s*\d+\s\s/;
+const stripLineNumbers = (s: string) =>
+  s.split('\n').map((l) => l.replace(LINE_NUMBERED, '')).join('\n');
+
+/**
+ * Explain a miss well enough that the next attempt succeeds.
+ *
+ * "old_string not found — read the file first" is a dead end when the model has
+ * already read the file: it says the text is absent without saying what IS
+ * there, so the retry is another guess. In the harness eval this was the second
+ * largest source of tool failures, and one run flailed for 15 turns before loop
+ * detection stopped it.
+ *
+ * So before giving up, check the two ways a needle is usually almost-right and
+ * hand back the file's EXACT bytes for the region. Nothing is applied on the
+ * model's behalf — a guess about intent could silently corrupt code — but the
+ * information needed to get it right next time is in the message.
+ */
+export function describeMiss(content: string, oldStr: string, relPath: string): string {
+  const base = `old_string not found in ${relPath}.`;
+  const lines = content.split('\n');
+
+  // 1. Did the model paste read_file's line numbers along with the code?
+  const stripped = stripLineNumbers(oldStr);
+  if (stripped !== oldStr && normalizeWithMap(content).text.includes(normalizeWithMap(stripped).text)) {
+    return `${base} It looks like the line numbers from read_file were included. ` +
+      `Send just the code:\n${stripped}`;
+  }
+
+  // 2. Does it match if indentation is ignored? Then quote the real thing.
+  const target = deindent(normalizeWithMap(oldStr).text).trim();
+  if (target) {
+    const needleLines = oldStr.split('\n').length;
+    for (let i = 0; i + needleLines <= lines.length; i++) {
+      const window = lines.slice(i, i + needleLines).join('\n');
+      if (deindent(normalizeWithMap(window).text).trim() === target) {
+        return `${base} The same code is at line ${i + 1} with different indentation. ` +
+          `Use this text exactly:\n${window}`;
+      }
+    }
+  }
+
+  // 3. Fall back to showing where the first line seems to live.
+  const firstLine = oldStr.split('\n')[0].trim();
+  const lineIdx = firstLine ? lines.findIndex((l) => l.trim().includes(firstLine)) : -1;
+  const hint = lineIdx >= 0
+    ? `\nNearest match around line ${lineIdx + 1}:\n${lines
+        .slice(Math.max(0, lineIdx - 1), lineIdx + 3)
+        .map((l, i) => `  ${Math.max(1, lineIdx) + i}: ${l}`)
+        .join('\n')}`
+    : '';
+  return `${base} Read the file first to get the exact content.${hint}`;
+}
+
 export function applySingleEdit(
   content: string,
   oldStr: string,
@@ -229,12 +288,7 @@ export function applySingleEdit(
   }
 
   if (spans.length === 0) {
-    const firstLine = oldStr.split('\n')[0].trim();
-    const lineIdx = content.split('\n').findIndex(l => l.trim().includes(firstLine));
-    const hint = lineIdx >= 0
-      ? `\nNearest match around line ${lineIdx + 1}:\n${content.split('\n').slice(Math.max(0, lineIdx - 1), lineIdx + 3).map((l, i) => `  ${lineIdx + i}: ${l}`).join('\n')}`
-      : '';
-    return { ok: false, error: `old_string not found in ${relPathForErrors}. Read the file first to get the exact content.${hint}` };
+    return { ok: false, error: describeMiss(content, oldStr, relPathForErrors) };
   }
 
   if (!replaceAll && spans.length > 1) {
@@ -255,10 +309,10 @@ export function applySingleEdit(
 function createEditFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker, lspManager?: LspManager): ToolDef {
   return {
     name: 'edit_file',
-    description: 'Edit a file by replacing a string match. Provide old_string (text to find) and new_string (replacement). By default old_string must be unique; set replace_all=true to replace every occurrence.',
+    description: 'Edit a file by replacing a string match. You must read_file it first in this session — editing an unread file is refused. Provide old_string (copied exactly from the file, without read_file\'s line numbers) and new_string. By default old_string must be unique; set replace_all=true to replace every occurrence.',
     schema: z.object({
       path: z.string().describe('File path to edit'),
-      old_string: z.string().describe('The exact string to find and replace'),
+      old_string: z.string().describe('Exact text from the file, copied without the line numbers read_file prints. Whitespace runs may differ; indentation must be present.'),
       new_string: z.string().describe('The replacement string'),
       replace_all: z.boolean().optional().default(false).describe('Replace all occurrences instead of requiring uniqueness'),
     }),
@@ -303,7 +357,7 @@ function createEditFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTra
 function createMultiEditTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker, lspManager?: LspManager): ToolDef {
   return {
     name: 'multi_edit',
-    description: 'Apply multiple edits to a single file with atomic validation. All edits are checked sequentially against the running content; if any one would fail, no changes are written and the error reports which op failed and how many would have succeeded. Use for multi-step refactors on a single file to avoid partial writes when the model batches several edits in one turn.',
+    description: 'Apply multiple edits to a single file, atomically. You must read_file it first in this session. Every edit is checked against the running content and ALL failures are reported together; if any would fail, nothing is written. Use for multi-step refactors on one file to avoid partial writes.',
     schema: z.object({
       path: z.string().describe('File path to edit'),
       edits: z.array(z.object({
@@ -328,16 +382,36 @@ function createMultiEditTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
 
         // Phase 1: validate-and-simulate. Walk edits in order against the
         // running content; bail on the first failure WITHOUT writing.
+        // Every edit is checked, not just up to the first failure. Bailing early
+        // reported one broken op at a time, so a call with two bad edits cost
+        // two full retries to learn about the second — and the whole batch was
+        // rewritten each round. Writing nothing unless ALL succeed is kept: a
+        // half-applied file is worse than a rejected call.
         let working = original;
         const matches: number[] = [];
+        const failures: string[] = [];
         for (let i = 0; i < edits.length; i++) {
           const e = edits[i];
           const r = applySingleEdit(working, e.old_string, e.new_string, e.replace_all ?? false, relPath);
           if (!r.ok) {
-            return fail(`multi_edit: ${i}/${edits.length} edits would succeed, but op ${i} failed: ${r.error}\nNo changes written. Re-read the file and retry.`);
+            failures.push(`  op ${i}: ${r.error}`);
+            continue;
           }
           working = r.updated;
           matches.push(r.matchCount);
+        }
+        if (failures.length > 0) {
+          const okCount = edits.length - failures.length;
+          return fail(
+            `multi_edit: ${failures.length} of ${edits.length} edits failed. No changes written.\n` +
+            `${failures.join('\n')}\n` +
+            (okCount > 0
+              ? `The other ${okCount} edit${okCount === 1 ? '' : 's'} matched — resend the whole batch with the failing one${failures.length === 1 ? '' : 's'} corrected.`
+              : `Re-read the file and retry.`) +
+            (failures.length > 1
+              ? `\nNote: later ops were checked against the file without the failed edits applied, so a message may change once the earlier ones are fixed.`
+              : ''),
+          );
         }
 
         // Phase 2: commit. Single write of the fully-simulated content.

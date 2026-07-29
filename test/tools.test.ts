@@ -325,8 +325,12 @@ describe('multi_edit', () => {
       ],
     });
     expect(result.success).toBe(false);
-    expect(result.error).toContain('op 1 failed');
-    expect(result.error).toContain('1/3 edits would succeed');
+    // Names the failing op and how many were fine. The wording changed when
+    // multi_edit started checking every edit instead of stopping at the first
+    // failure; the guarantee this test exists for — no partial write — did not.
+    expect(result.error).toContain('op 1:');
+    expect(result.error).toContain('1 of 3 edits failed');
+    expect(result.error).toMatch(/other 2 edits matched/);
     // No partial write — file is untouched.
     expect(readFileSync(p, 'utf-8')).toBe(original);
   });

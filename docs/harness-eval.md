@@ -49,6 +49,12 @@ Score: 83% (1/2)  @ 3a8fd62
 
 Every run is saved to `~/.veepee-code/harness-evals/<timestamp>-<commit>.json`. That is the point: results are keyed by the commit the harness was at, so "did this change help?" becomes a diff instead of an opinion.
 
+**Scores are not comparable across a change to the task set.** Adding a task
+changes the denominator: the suite went from 83% (5/6) to 92% (11/12) purely by
+gaining two tasks the agent happens to pass, and nothing about the harness
+improved in between. `compareRuns` marks new tasks with `+` for this reason.
+When you add tasks, compare per-task pass rates, not the headline percentage.
+
 ## Metrics
 
 Beyond pass/fail, each task records:

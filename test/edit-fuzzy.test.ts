@@ -156,7 +156,7 @@ describe('applySingleEdit — replace_all on the fuzzy path', () => {
   });
 });
 
-describe('applySingleEdit — genuinely absent text', () => {
+describe('applySingleEdit — a miss must be recoverable', () => {
   it('reports not-found with a nearby-line hint', () => {
     const r = apply(FILE, 'case "drop_column":', 'x');
     expect(r.ok).toBe(false);
@@ -164,6 +164,50 @@ describe('applySingleEdit — genuinely absent text', () => {
       expect(r.error).toMatch(/not found in file\.ts/);
       expect(r.error).toMatch(/Read the file first/);
     }
+  });
+
+  it('hands back the exact text when only the indentation is wrong', () => {
+    // The dead end this replaces: "not found — read the file first", to a model
+    // that had already read the file. The retry was another guess; one run
+    // flailed 15 turns. Now the next attempt is deterministic.
+    const needle = 'switch (op.type) {\ncase "add_column":';
+    const r = apply(FILE, needle, 'X');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toMatch(/different indentation/);
+      expect(r.error).toContain('  switch (op.type) {');
+      expect(r.error).toContain('    case "add_column":');
+    }
+  });
+
+  it('the quoted text actually works when fed straight back in', () => {
+    const r1 = apply(FILE, 'switch (op.type) {\ncase "add_column":', 'X');
+    expect(r1.ok).toBe(false);
+    if (r1.ok) return;
+    // Take what the error told us to use and retry with it verbatim.
+    const quoted = r1.error.split('Use this text exactly:\n')[1];
+    const r2 = apply(FILE, quoted, 'REPLACED');
+    expect(r2.ok).toBe(true);
+    if (r2.ok) expect(r2.updated).toContain('REPLACED');
+  });
+
+  it('spots read_file line numbers pasted into old_string', () => {
+    // read_file prints "   12  code"; a model copying from that output brings
+    // the numbers along and every match fails for a reason nothing explains.
+    const numbered = '    2    switch (op.type) {\n    3      case "add_column":';
+    const r = apply(FILE, numbered, 'X');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toMatch(/line numbers from read_file/);
+      expect(r.error).toContain('switch (op.type) {');
+      expect(r.error).not.toMatch(/^\s*\d+\s\s+switch/m);
+    }
+  });
+
+  it('does not cry line-numbers at code that legitimately starts with a number', () => {
+    const r = apply('const x = 42;\n', '99 bottles', 'X');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).not.toMatch(/line numbers from read_file/);
   });
 });
 
@@ -187,5 +231,61 @@ describe('edit_file end to end', () => {
 
     expect(result.success).toBe(true);
     expect(readFileSync(path, 'utf-8')).toContain('case "add_column": // handled');
+  });
+});
+
+describe('multi_edit reports every failure at once', () => {
+  let tmp: string;
+  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'vcode-medit-')); });
+  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+
+  const run = async (edits: Array<{ old_string: string; new_string: string }>) => {
+    const path = join(tmp, 'render.ts');
+    writeFileSync(path, FILE);
+    const registry = new ToolRegistry();
+    for (const t of registerCodingTools()) registry.register(t);
+    const result = await registry.execute('multi_edit', { path, edits });
+    return { result, after: readFileSync(path, 'utf-8') };
+  };
+
+  it('names both broken edits instead of one per round trip', async () => {
+    // Bailing on the first failure cost a full retry to discover the second,
+    // and the whole batch was rewritten each round.
+    const { result } = await run([
+      { old_string: 'case "nope_one":', new_string: 'x' },
+      { old_string: 'case "nope_two":', new_string: 'y' },
+    ]);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('op 0');
+    expect(result.error).toContain('op 1');
+    expect(result.error).toMatch(/2 of 2 edits failed/);
+  });
+
+  it('says which edits were fine so they need not be re-derived', async () => {
+    const { result } = await run([
+      { old_string: '      throw new Error("unknown");', new_string: '      return null;' },
+      { old_string: 'case "nope":', new_string: 'y' },
+    ]);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/The other 1 edit matched/);
+  });
+
+  it('still writes nothing when any edit fails', async () => {
+    const { result, after } = await run([
+      { old_string: '      throw new Error("unknown");', new_string: '      return null;' },
+      { old_string: 'case "nope":', new_string: 'y' },
+    ]);
+    expect(result.success).toBe(false);
+    expect(after).toBe(FILE); // a half-applied file is worse than a rejected call
+  });
+
+  it('applies every edit when they all match', async () => {
+    const { result, after } = await run([
+      { old_string: '      throw new Error("unknown");', new_string: '      return null;' },
+      { old_string: 'case "add_column":', new_string: 'case "add_col":' },
+    ]);
+    expect(result.success).toBe(true);
+    expect(after).toContain('return null;');
+    expect(after).toContain('case "add_col":');
   });
 });
