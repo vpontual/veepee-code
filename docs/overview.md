@@ -36,7 +36,7 @@ VEEPEE Code (v0.3.0) is an AI coding assistant that runs entirely on your own ha
 
 - **Configurable Model Size Limits** -- Set `VEEPEE_CODE_MAX_MODEL_SIZE` and `VEEPEE_CODE_MIN_MODEL_SIZE` to control which models the agent considers. No arbitrary tier system -- the benchmark measures actual performance.
 
-- **Operating Modes** -- `/act` for execution (uses roster's act model), `/plan` for thinking-first architecture and design (uses roster's plan model), `/chat` for conversational web-connected Q&A (uses roster's chat model), `/moe` for Mixture of Experts (3 models in parallel with synthesize/debate/vote/fastest strategies), and `/ralph` for iterative Work→Review loops with worker and reviewer models. Plan mode auto-activates when it detects planning intent in your message.
+- **Operating Modes** -- `/act` for execution (uses roster's act model), `/plan` for thinking-first architecture and design (uses roster's plan model), `/chat` for conversational web-connected Q&A (uses roster's chat model), `/moe` for Mixture of Experts (3 models in parallel with synthesize/debate/vote/fastest strategies), and `/ralph` for iterative Work→Review loops with worker and reviewer models. Plan mode auto-activates when it detects planning intent in your message. `/goal` runs unattended until a real command exits 0 — see [Goal Mode](goal-mode.md).
 
 - **Session Management** -- Save conversations with `/save`, list them with `/sessions`, and resume with `/resume` or the `--resume` CLI flag. Sessions are stored as JSON at `~/.veepee-code/sessions/`.
 

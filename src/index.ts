@@ -381,6 +381,122 @@ async function main() {
   // Cleanup stale sandbox dirs on startup (>24h untouched), never this session's
   SandboxManager.cleanupStale(undefined, sessionId).catch(() => {});
 
+  // Goal mode: `vcode --goal "<what you want>" [--verify "<cmd>"] …`
+  //
+  // Works unattended until a real command exits 0. Lives here rather than in
+  // the TUI because the whole point is to leave it running — on this fleet the
+  // GPUs cost the same idle or busy, so an hour of unattended iteration is the
+  // resource worth spending. Ctrl+C pauses and saves rather than discarding.
+  if (process.argv.includes('--goal')) {
+    const { GoalEngine, detectVerifyCommand, formatGoalSummary, DEFAULT_BUDGET } = await import('./goal.js');
+    const argAfter = (flag: string): string | undefined => {
+      const i = process.argv.indexOf(flag);
+      if (i < 0) return undefined;
+      const v = process.argv[i + 1];
+      return v && !v.startsWith('--') ? v : undefined;
+    };
+    const num = (flag: string): number | undefined => {
+      const v = argAfter(flag);
+      const n = v === undefined ? NaN : Number(v);
+      return Number.isFinite(n) && n > 0 ? n : undefined;
+    };
+
+    if (process.argv.includes('--list')) {
+      const runs = await GoalEngine.list(process.cwd());
+      console.error(runs.length === 0
+        ? chalk.dim('No goal runs recorded in this directory.')
+        : runs.map(formatGoalSummary).join('\n'));
+      process.exit(0);
+    }
+
+    await checkpoints.init().catch(() => false);
+    permissions.setPromptHandler(async () => 'y');
+    const engine = new GoalEngine(agent, checkpoints, process.cwd());
+
+    const budget = {
+      maxAttempts: num('--max-attempts') ?? DEFAULT_BUDGET.maxAttempts,
+      maxWallMs: (num('--budget-minutes') ?? DEFAULT_BUDGET.maxWallMs / 60_000) * 60_000,
+      maxTokens: num('--max-tokens') ?? null,
+    };
+
+    const resumeId = argAfter('--resume');
+    const goalText = argAfter('--goal');
+    if (!resumeId && !goalText) {
+      console.error('Usage: vcode --goal "<what you want done>" [--verify "<command>"] [--max-attempts N] [--budget-minutes M]');
+      console.error('       vcode --goal --resume <id>    vcode --goal --list');
+      process.exit(2);
+    }
+
+    const verifyCommand = argAfter('--verify') ?? detectVerifyCommand(process.cwd()) ?? undefined;
+    console.error(chalk.bold(`Goal mode — ${modelManager.getCurrentModel()}`));
+    console.error(chalk.dim(`  verify:  ${verifyCommand ?? '(none found — pass --verify)'}`));
+    console.error(chalk.dim(`  budget:  ${budget.maxAttempts} attempts, ${Math.round(budget.maxWallMs / 60_000)}m\n`));
+
+    // Ctrl+C pauses. A run may represent an hour of work; throwing it away
+    // because someone wanted to stop watching would be the wrong default.
+    let paused = false;
+    const onSigint = () => {
+      if (paused) process.exit(130);
+      paused = true;
+      console.error(chalk.yellow('\nPausing after this attempt — Ctrl+C again to quit now.'));
+      engine.pause();
+    };
+    process.on('SIGINT', onSigint);
+
+    try {
+      const events = resumeId
+        ? engine.resume(resumeId, { budget })
+        : engine.run(goalText as string, { verifyCommand, budget });
+
+      for await (const ev of events) {
+        switch (ev.type) {
+          case 'attempt_start':
+            console.error(chalk.bold(`\n── Attempt ${ev.n}/${ev.of} ${'─'.repeat(30)}`));
+            break;
+          case 'agent_event':
+            if (ev.event.type === 'tool_call') console.error(chalk.dim(`  · ${ev.event.name}`));
+            else if (ev.event.type === 'error') console.error(chalk.red(`  ! ${ev.event.error ?? ev.event.content}`));
+            break;
+          case 'verify_start':
+            console.error(chalk.dim(`  running: ${ev.command}`));
+            break;
+          case 'verify_done':
+            console.error(ev.exit === 0
+              ? chalk.green('  verify: PASS')
+              : chalk.red(`  verify: FAIL (exit ${ev.exit})`));
+            if (ev.exit !== 0) {
+              console.error(chalk.dim(ev.tail.split('\n').slice(-6).map((l) => `    ${l}`).join('\n')));
+            }
+            break;
+          case 'note':
+            console.error(chalk.yellow(`  ${ev.message}`));
+            break;
+          case 'done': {
+            const s = ev.state;
+            const colour = s.status === 'succeeded' ? chalk.green
+              : s.status === 'paused' ? chalk.yellow : chalk.red;
+            console.error(`\n${colour(s.status.toUpperCase())} — ${s.outcome}`);
+            console.error(chalk.dim(
+              `  ${s.attempts.length} attempt(s), ${Math.round(s.spent.wallMs / 60_000)}m` +
+              `${s.spent.tokens ? `, ${s.spent.tokens} tokens` : ''}`,
+            ));
+            console.error(chalk.dim(`  state: .veepee/goals/${s.id}.json`));
+            if (s.attempts.some((a) => a.checkpointId)) {
+              console.error(chalk.dim('  every attempt was checkpointed — /rewind to undo one'));
+            }
+            process.off('SIGINT', onSigint);
+            await shutdownLspServers();
+            process.exit(s.status === 'succeeded' ? 0 : 1);
+          }
+        }
+      }
+    } catch (err) {
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+      await shutdownLspServers();
+      process.exit(2);
+    }
+  }
+
   // Print mode: run query, output to stdout, exit
   if (printQuery) {
     const jsonSchemaArg = process.argv.find(a => a.startsWith('--json-schema='));
@@ -1404,6 +1520,7 @@ async function handleCommand(
         `  ${theme.accent('/fork [name]')}      Fork current session ${theme.accent('/projects')}    List tracked projects`,
         `  ${theme.accent('/add-dir <path>')}   Add working dir     ${theme.accent('/worktree')}     Git worktree isolation`,
         `  ${theme.accent('/rewind')}           Undo file changes   ${theme.dim('/rewind <id> [yes]')}`,
+        `  ${theme.accent('/goal <task>')}       Work until it passes ${theme.dim('/goal --verify "npm test" <task>')}`,
         `  ${theme.accent('/ralph <task>')}      Work→Review loop    ${theme.dim('/ralph --max <n> <task>')}`,
         `  ${theme.accent('/effort low|med|hi')} Set response depth  ${theme.accent('/settings')}    View/toggle settings`,
         '',
@@ -2931,6 +3048,101 @@ ${gathered.join('\n\n')}`;
     case '/projects': {
       const projects = await listProjects();
       tui.showInfo(formatProjectList(projects));
+      return;
+    }
+
+    case '/goal': {
+      const { GoalEngine, parseGoalArgs, detectVerifyCommand, formatGoalSummary, DEFAULT_BUDGET } =
+        await import('./goal.js');
+      const args = parseGoalArgs(input.slice(parts[0].length).trim());
+
+      if (args.list) {
+        const runs = await GoalEngine.list(process.cwd());
+        tui.showInfo(runs.length === 0
+          ? theme.dim('No goal runs recorded in this directory.')
+          : runs.map(formatGoalSummary).join('\n'));
+        return;
+      }
+
+      if (!args.goal && !args.resume) {
+        const detected = detectVerifyCommand(process.cwd());
+        tui.showInfo([
+          `${theme.textBold('Goal mode')} — work autonomously until a command passes`,
+          '',
+          `  /goal <what you want done>`,
+          `  /goal --verify "npm test" <what you want done>`,
+          `  /goal --max-attempts 20 --budget-minutes 90 <…>`,
+          `  /goal --resume <id>        /goal --list`,
+          '',
+          `  Verify command: ${detected ? theme.accent(detected) : theme.warning('none found — pass --verify')}`,
+          `  Default budget: ${DEFAULT_BUDGET.maxAttempts} attempts, ${DEFAULT_BUDGET.maxWallMs / 60_000}m`,
+          '',
+          theme.dim('  Success is that command exiting 0 — never the model saying so.'),
+          theme.dim('  Every attempt is checkpointed; Ctrl+C pauses and saves.'),
+        ].join('\n'));
+        return;
+      }
+
+      const engine = new GoalEngine(agent, checkpoints, process.cwd());
+      // Ctrl+C must stop the LOOP, not just the current attempt. Left alone,
+      // the TUI's handler aborts the agent and the loop cheerfully starts
+      // attempt N+1 — the opposite of what pressing it means.
+      tui.setAbortHandler(() => engine.pause());
+      const savedPromptHandler = permissions.getPromptHandler();
+      permissions.setPromptHandler(async () => 'y');
+
+      tui.showInfo([
+        `${theme.accent('Goal mode')} — ${args.goal || `resuming ${args.resume}`}`,
+        theme.dim(`  verify: ${args.verifyCommand ?? detectVerifyCommand(process.cwd()) ?? '(none)'}`),
+        '',
+      ].join('\n'));
+
+      try {
+        const events = args.resume
+          ? engine.resume(args.resume, { budget: args.budget })
+          : engine.run(args.goal, { verifyCommand: args.verifyCommand, budget: args.budget });
+
+        for await (const ev of events) {
+          switch (ev.type) {
+            case 'attempt_start':
+              tui.showInfo(theme.dim(`\n── Attempt ${ev.n}/${ev.of} ──`));
+              break;
+            case 'agent_event':
+              if (ev.event.type === 'tool_call') tui.showInfo(theme.dim(`  · ${ev.event.name}`));
+              else if (ev.event.type === 'error') tui.showInfo(theme.error(`  ! ${ev.event.error ?? ev.event.content}`));
+              break;
+            case 'verify_start':
+              tui.showInfo(theme.dim(`  running: ${ev.command}`));
+              break;
+            case 'verify_done':
+              tui.showInfo(ev.exit === 0
+                ? theme.success('  verify: PASS')
+                : theme.error(`  verify: FAIL (exit ${ev.exit})`));
+              break;
+            case 'note':
+              tui.showInfo(theme.warning(`  ${ev.message}`));
+              break;
+            case 'done': {
+              const s = ev.state;
+              const col = s.status === 'succeeded' ? theme.success
+                : s.status === 'paused' ? theme.warning : theme.error;
+              tui.showInfo([
+                '',
+                `${theme.textBold('Goal')} ${col(s.status.toUpperCase())} — ${s.outcome}`,
+                theme.dim(`  ${s.attempts.length} attempt(s), ${Math.round(s.spent.wallMs / 60_000)}m` +
+                  `${s.spent.tokens ? `, ${s.spent.tokens} tokens` : ''}`),
+                theme.dim(`  state: .veepee/goals/${s.id}.json  —  /rewind undoes any attempt`),
+              ].join('\n'));
+              break;
+            }
+          }
+        }
+      } catch (err) {
+        tui.showInfo(theme.error(err instanceof Error ? err.message : String(err)));
+      } finally {
+        tui.setAbortHandler(() => agent.abort());
+        if (savedPromptHandler) permissions.setPromptHandler(savedPromptHandler);
+      }
       return;
     }
 

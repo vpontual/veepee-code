@@ -12,6 +12,7 @@ A Claude Code-style terminal AI assistant that runs entirely on your hardware. C
 - **Project-aware** — auto-detects language, framework, package manager, and test runner
 - **Smart model routing** — benchmarks your models and picks the best one per task
 - **Multiple modes** — Act (coding), Plan (reasoning), Chat (fast Q&A), MoE (multi-model), Ralph (Work→Review loop)
+- **Goal mode** — `/goal` works unattended until a real command exits 0, with budgets, stall detection, per-attempt checkpoints, and pause/resume
 - **Plan persistence** — implementation plans auto-saved and restored across context compaction
 - **Session management** — save, resume, and sync sessions across devices via WebDAV
 - **Remote Connect** — phone-accessible web UI with QR code access

@@ -168,6 +168,13 @@ export class PermissionManager {
     this.promptHandler = handler;
   }
 
+  /** The handler currently installed, so a mode that swaps in its own (goal
+   *  mode auto-allows, since there is nobody watching) can put back exactly
+   *  what was there rather than guessing at the default. */
+  getPromptHandler(): PromptHandler | null {
+    return this.promptHandler;
+  }
+
   /** For backwards compat — unused with TUI but needed for API mode */
   setReadline(_rl: unknown): void {
     // no-op when TUI is handling prompts

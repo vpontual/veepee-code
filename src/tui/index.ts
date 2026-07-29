@@ -89,6 +89,7 @@ const COMMANDS: CommandDef[] = [
   { name: '/resume', args: '<name>', description: 'Resume a saved session' },
   { name: '/rename', args: '<name>', description: 'Rename current session' },
   { name: '/rewind', args: '[id] [yes]', description: 'Undo file changes — list checkpoints, preview, or restore the working tree' },
+  { name: '/goal', args: '<what you want done>', description: 'Work autonomously until a real command passes — /goal --verify "npm test" …, --resume <id>, --list' },
   { name: '/tree', args: '', description: 'Open the tree picker — arrow nav, Enter rewind, Ctrl+O filter, Shift+L bookmark (JSONL only)' },
   { name: '/clone', args: '[name]', description: 'Duplicate the current branch into a new session (JSONL only)' },
   { name: '/label', args: '<name>', description: 'Bookmark the current leaf entry (JSONL only)' },

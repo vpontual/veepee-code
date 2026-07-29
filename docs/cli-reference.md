@@ -305,6 +305,22 @@ Covers changes made by shell commands as well as by the edit tools; ignores what
 
 Distinct from `/tree`, which rewinds the conversation rather than the files.
 
+#### /goal &lt;task&gt;
+
+Work autonomously until a real command exits 0.
+
+```
+/goal fix the failing auth tests
+/goal --verify "npm test" make the retry logic handle 429s
+/goal --max-attempts 20 --budget-minutes 90 port the CLI to the new config loader
+/goal --resume ab12cd          # continue a paused run
+/goal --list                   # runs recorded in this directory
+```
+
+Success is the verify command's exit code, never the model's own assessment. The command is supplied by you or read from the project's manifest, and the agent is told not to modify it. Each attempt is checkpointed, the same failure three times running ends the run as `stalled`, and two consecutive agent errors end it as `failed` in seconds rather than burning the budget against a dead backend. Ctrl+C pauses and saves.
+
+Also available headless as `vcode --goal "…"`. See [Goal Mode](goal-mode.md).
+
 #### /worktree [list|create [name]|cleanup]
 
 Manage git worktree isolation for experiments.
