@@ -153,7 +153,35 @@ type EditApplyResult =
   | { ok: true; updated: string; matchCount: number }
   | { ok: false; error: string };
 
-function applySingleEdit(
+/**
+ * Collapse runs of spaces/tabs to one space and CRLF to LF, while recording
+ * where each output character came from.
+ *
+ * The map is what lets a fuzzy match be applied to the ORIGINAL text: find the
+ * needle in normalized space, then translate the offsets back. Without it you
+ * can only answer "is it in there somewhere", which is exactly how the count
+ * and the location came to disagree.
+ */
+export function normalizeWithMap(s: string): { text: string; map: number[] } {
+  let text = '';
+  const map: number[] = [];
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '\r' && s[i + 1] === '\n') continue; // CRLF → LF
+    if (ch === ' ' || ch === '\t') {
+      const runStart = i;
+      while (i + 1 < s.length && (s[i + 1] === ' ' || s[i + 1] === '\t')) i++;
+      text += ' ';
+      map.push(runStart);
+      continue;
+    }
+    text += ch;
+    map.push(i);
+  }
+  return { text, map };
+}
+
+export function applySingleEdit(
   content: string,
   oldStr: string,
   newStr: string,
@@ -170,13 +198,37 @@ function applySingleEdit(
     return { ok: true, updated, matchCount: occurrences };
   }
 
-  // Fuzzy whitespace match
-  const normalize = (s: string) => s.replace(/[ \t]+/g, ' ').replace(/\r\n/g, '\n');
-  const normalizedContent = normalize(content);
-  const normalizedOld = normalize(oldStr);
-  const fuzzyOccurrences = normalizedContent.split(normalizedOld).length - 1;
+  // ── Fuzzy whitespace match ──────────────────────────────────────────────────
+  //
+  // Counting and locating MUST be the same operation. They used to differ:
+  // occurrences were counted with a substring search over the whole normalized
+  // file, but the position was then found by requiring a window of exactly
+  // `oldStr`'s line count to normalize to the *entire* needle. Any old_string
+  // that started or ended mid-line — different indentation on the first line,
+  // the commonest case there is — was counted as present and then reported as
+  // "Whitespace-fuzzy match found but could not locate exact position", which
+  // is a message telling the model to retry the thing it just did.
+  //
+  // It was the single largest source of tool failures in the harness eval:
+  // 4 of 27 calls on one task. Now one search produces both the count and the
+  // exact spans, so the two cannot disagree and that error no longer exists.
+  const { text: normContent, map } = normalizeWithMap(content);
+  const normOld = normalizeWithMap(oldStr).text;
 
-  if (fuzzyOccurrences === 0) {
+  const spans: Array<{ start: number; end: number }> = [];
+  for (let from = 0; ;) {
+    const idx = normContent.indexOf(normOld, from);
+    if (idx === -1) break;
+    spans.push({
+      start: map[idx],
+      // Where the character AFTER the match begins in the original text, so a
+      // run of whitespace collapsed into the match is replaced along with it.
+      end: idx + normOld.length < map.length ? map[idx + normOld.length] : content.length,
+    });
+    from = idx + normOld.length;
+  }
+
+  if (spans.length === 0) {
     const firstLine = oldStr.split('\n')[0].trim();
     const lineIdx = content.split('\n').findIndex(l => l.trim().includes(firstLine));
     const hint = lineIdx >= 0
@@ -185,28 +237,19 @@ function applySingleEdit(
     return { ok: false, error: `old_string not found in ${relPathForErrors}. Read the file first to get the exact content.${hint}` };
   }
 
-  if (!replaceAll && fuzzyOccurrences > 1) {
-    return { ok: false, error: `old_string found ${fuzzyOccurrences} times (with whitespace normalization) — include more context.` };
+  if (!replaceAll && spans.length > 1) {
+    return { ok: false, error: `old_string found ${spans.length} times (with whitespace normalization) — include more context.` };
   }
 
-  const lines = content.split('\n');
-  const oldLines = oldStr.split('\n');
-  let startLine = -1;
-
-  for (let i = 0; i <= lines.length - oldLines.length; i++) {
-    const slice = lines.slice(i, i + oldLines.length).join('\n');
-    if (normalize(slice) === normalizedOld) {
-      startLine = i;
-      break;
-    }
+  // Splice back to front so earlier offsets stay valid. The old code called
+  // content.replace(actualOld, newStr), which replaces only the FIRST match
+  // even when replace_all was set — a silent second bug on this same path.
+  const targets = replaceAll ? spans : spans.slice(0, 1);
+  let updated = content;
+  for (const { start, end } of [...targets].reverse()) {
+    updated = updated.slice(0, start) + newStr + updated.slice(end);
   }
-
-  if (startLine === -1) {
-    return { ok: false, error: `Whitespace-fuzzy match found but could not locate exact position. Read the file and retry with exact content.` };
-  }
-
-  const actualOld = lines.slice(startLine, startLine + oldLines.length).join('\n');
-  return { ok: true, updated: content.replace(actualOld, newStr), matchCount: 1 };
+  return { ok: true, updated, matchCount: targets.length };
 }
 
 function createEditFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTracker, lspManager?: LspManager): ToolDef {

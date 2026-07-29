@@ -170,8 +170,13 @@ async function main() {
     console.error(chalk.bold(`Harness eval — ${modelManager.getCurrentModel()}`));
     console.error(chalk.dim(`${tasks.length} task(s) available${only ? `, filtering on "${only}"` : ''}\n`));
 
+    const repeatIdx = process.argv.indexOf('--repeat');
+    const repeat = repeatIdx >= 0 ? Math.max(1, Number(process.argv[repeatIdx + 1]) || 1) : 1;
+    if (repeat > 1) console.error(chalk.dim(`Repeating each task ${repeat}x — single runs vary too much to compare.\n`));
+
     const result = await runHarnessSuite(config, modelManager, {
       only,
+      repeat,
       onProgress: (msg) => console.error(chalk.dim(msg)),
     });
 
@@ -179,10 +184,16 @@ async function main() {
     console.error(chalk.bold(`Score: ${result.score}% (${result.passed}/${result.total})  @ ${result.commit}`));
     for (const r of result.results) {
       const mark = r.passed ? chalk.green('PASS') : chalk.red('FAIL');
-      console.error(`  ${mark}  ${r.task.padEnd(24)} ${Math.round(r.wallMs / 1000)}s  ` +
+      const rate = r.runs > 1 ? chalk.dim(` ${r.passes}/${r.runs}`) : '';
+      console.error(`  ${mark}${rate}  ${r.task.padEnd(24)} ${Math.round(r.wallMs / 1000)}s  ` +
         `${r.toolCalls} calls, ${r.toolErrors} errors${r.selfVerified ? ', self-verified' : ''}`);
       if (!r.passed && r.detail) {
         console.error(chalk.dim(r.detail.split('\n').slice(0, 4).map((l) => `        ${l}`).join('\n')));
+      }
+      // Which tools failed, even on a task that passed — a high failure rate is
+      // a harness problem worth seeing regardless of the outcome.
+      for (const g of r.toolErrorDetail ?? []) {
+        console.error(chalk.dim(`        ${g.tool} ×${g.count}: ${g.error.slice(0, 110)}`));
       }
     }
     const saved = await saveEvalResult(result);
@@ -428,11 +439,19 @@ async function main() {
 
     // The candidate is measured against the harness as it stands right now, so
     // a stale baseline from an older commit would make any comparison a lie.
+    const improveRepeatIdx = process.argv.indexOf('--repeat');
+    const improveRepeat = improveRepeatIdx >= 0
+      ? Math.max(1, Number(process.argv[improveRepeatIdx + 1]) || 3)
+      : 3;
     const head = (await si.sh('git rev-parse --short HEAD', process.cwd(), 10_000)).out.trim();
-    let baseline = history.filter((h) => h.commit === head).pop() ?? null;
+    const sampledSame = (h: typeof history[number]) =>
+      h.results.length > 0 && h.results.every((t) => (t.runs ?? 1) === improveRepeat);
+    let baseline = history.filter((h) => h.commit === head && sampledSame(h)).pop() ?? null;
     if (!baseline) {
-      console.error(chalk.dim(`No eval at the current commit (${head}) — measuring the baseline first…`));
-      baseline = await si.scoreCheckout(process.cwd());
+      console.error(chalk.dim(
+        `No ${improveRepeat}x eval at the current commit (${head}) — measuring the baseline first…`,
+      ));
+      baseline = await si.scoreCheckout(process.cwd(), undefined, improveRepeat);
       if (!baseline) {
         console.error(chalk.red('Baseline eval produced no result. Is the fleet reachable?'));
         process.exit(1);
@@ -444,6 +463,7 @@ async function main() {
     const run = await si.proposeImprovement(target, {
       repoRoot: process.cwd(),
       baseline,
+      evalRepeat: improveRepeat,
       onProgress: (m) => console.error(chalk.dim(`  ${m}`)),
       runAgent: async (prompt, worktreePath) => {
         // The agent works in the worktree, so its tools resolve there.

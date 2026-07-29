@@ -35,7 +35,7 @@ import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, symlinkSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import type { HarnessEvalResult } from './harness-eval.js';
+import { linkNodeModules, type HarnessEvalResult } from './harness-eval.js';
 import { createWorktree, type WorktreeInfo } from './worktree.js';
 
 // ─── Weakness analysis ────────────────────────────────────────────────────────
@@ -121,15 +121,22 @@ export function analyzeEvalRuns(runs: HarnessEvalResult[]): Weakness[] {
     }
 
     if (r.toolCalls > 0 && r.toolErrors >= MIN_TOOL_ERRORS && r.toolErrors / r.toolCalls >= TOOL_ERROR_RATE) {
+      // Name the tools and the messages. "26% of calls failed" is a fact nobody
+      // can act on; "read_file failed 4x with <message>" is a bug report.
+      const groups = r.toolErrorDetail ?? [];
+      const breakdown = groups.length > 0
+        ? groups.map((g) => `${g.tool} ×${g.count}: ${plain(g.error).slice(0, 140)}`).join(' | ')
+        : 'no per-tool detail recorded (run predates error capture)';
       out.push({
         kind: 'tool_errors',
         severity: 50,
         title: `${r.task}: ${r.toolErrors}/${r.toolCalls} tool calls failed`,
-        evidence: `A ${Math.round((r.toolErrors / r.toolCalls) * 100)}% tool failure rate means the model ` +
-          `cannot drive the tools it was given.`,
-        brief: `On the harness task "${r.task}", ${r.toolErrors} of ${r.toolCalls} tool calls failed. ` +
-          `That is a harness problem, not a model problem: look at the tool descriptions and argument ` +
-          `schemas in src/tools/ and at how tool errors are worded, and make the failing calls succeed.`,
+        evidence: `${Math.round((r.toolErrors / r.toolCalls) * 100)}% tool failure rate. ${breakdown}`,
+        brief: `On the harness task "${r.task}", ${r.toolErrors} of ${r.toolCalls} tool calls failed:\n` +
+          groups.map((g) => `  - ${g.tool} failed ${g.count}x: ${plain(g.error).slice(0, 200)}`).join('\n') +
+          `\nThat is a harness problem, not a model problem. Fix the specific cause — the tool's ` +
+          `description, its argument schema, or the wording of that error so the model can recover ` +
+          `from it — in src/tools/. Do not just make the message prettier.`,
       });
     }
 
@@ -260,8 +267,12 @@ export function sh(cmd: string, cwd: string, timeoutMs: number): Promise<CmdResu
  * Must be a subprocess: measuring the candidate means running the candidate's
  * code, not the copy this process imported at startup.
  */
-export async function scoreCheckout(dir: string, timeoutMs = 40 * 60_000): Promise<HarnessEvalResult | null> {
-  const r = await sh('node dist/index.js --eval --json', dir, timeoutMs);
+export async function scoreCheckout(
+  dir: string,
+  timeoutMs = 40 * 60_000,
+  repeat = 3,
+): Promise<HarnessEvalResult | null> {
+  const r = await sh(`node dist/index.js --eval --json --repeat ${repeat}`, dir, timeoutMs);
   // --eval exits non-zero when tasks fail, which is not an error here; the JSON
   // on stdout is what matters. Everything else goes to stderr.
   const start = r.out.indexOf('{');
@@ -271,16 +282,6 @@ export async function scoreCheckout(dir: string, timeoutMs = 40 * 60_000): Promi
   } catch {
     return null;
   }
-}
-
-/** A git worktree has no node_modules of its own. Link the repo's rather than
- *  spending several minutes on `npm ci` for a throwaway checkout. */
-export function linkNodeModules(worktreePath: string, repoRoot: string): void {
-  const target = join(worktreePath, 'node_modules');
-  if (existsSync(target)) return;
-  try {
-    symlinkSync(join(repoRoot, 'node_modules'), target, 'dir');
-  } catch { /* tests will fail loudly enough if this did not work */ }
 }
 
 /**
@@ -359,6 +360,9 @@ export interface ProposeOptions {
   buildTimeoutMs?: number;
   testTimeoutMs?: number;
   evalTimeoutMs?: number;
+  /** Runs per task when measuring. One run cannot tell an improvement from
+   *  noise — the same commit has scored 50% and 100% minutes apart. */
+  evalRepeat?: number;
   onProgress?: (msg: string) => void;
 }
 
@@ -449,9 +453,19 @@ export async function proposeImprovement(w: Weakness, opts: ProposeOptions): Pro
   }
 
   log('re-measuring the modified harness…');
-  const after = await scoreCheckout(wt.path, opts.evalTimeoutMs);
+  const after = await scoreCheckout(wt.path, opts.evalTimeoutMs, opts.evalRepeat ?? 3);
   if (!after) return reject('the candidate eval produced no result — cannot tell whether this helped');
   run.candidateScore = after.score;
+
+  // Two scores taken with different sample counts are not comparable. Better to
+  // refuse than to publish a percentage-point difference built on one run.
+  const samples = (r: HarnessEvalResult) => r.results.reduce((a, t) => a + (t.runs ?? 1), 0);
+  if (samples(after) !== samples(opts.baseline)) {
+    return reject(
+      `baseline was measured over ${samples(opts.baseline)} run(s) and the candidate over ${samples(after)} — ` +
+      `re-measure the baseline with the same --repeat before trusting a comparison`,
+    );
+  }
 
   if (after.score < opts.baseline.score) {
     return reject(`score dropped ${opts.baseline.score}% → ${after.score}%`);

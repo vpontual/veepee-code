@@ -18,19 +18,33 @@ This runs the **real `Agent`** with the **real tool registry** against tasks tha
 vcode --eval                       # Run every task
 vcode --eval fix-failing-test      # Run one task by name
 vcode --eval debug                 # Run every task carrying a tag
+vcode --eval --repeat 3            # Run each task 3x and score the pass RATE
 vcode --eval --json                # Also emit the full result to stdout
 ```
+
+## Run it more than once
+
+A single sample is not a measurement. The same commit scored **50%, 100%, 100%**
+on three consecutive runs — so a one-run comparison cannot tell a real
+improvement from which path the model happened to take that time.
+
+`--repeat N` runs each task N times and scores the **pass rate** across every
+run. A task that passes 2 of 3 shows as `FAIL 2/3`, which is the information a
+single run destroys in both directions. Metrics are averaged, and tool errors
+are merged across runs so an intermittent failure is not lost just because the
+run that hit it happened to pass.
+
+`--improve` measures at `--repeat 3` by default, and refuses to compare two
+scores taken with different sample counts.
 
 Output:
 
 ```
-Harness eval — Qwen/Qwen3.6-35B-A3B-FP8
-2 task(s) available
-
-[1/2] extend-existing-pattern: FAIL (40s, 15 tool calls)
-[2/2] fix-failing-test: PASS (26s, 12 tool calls, self-verified)
-
-Score: 50% (1/2)  @ ce18a49
+Score: 83% (1/2)  @ 3a8fd62
+  FAIL 2/3  extend-existing-pattern  92s  24 calls, 5 errors, self-verified
+        edit_file ×4: File src/operations.ts was not read in this session. Read it first
+        edit_file ×3: old_string not found in src/render.ts. Read the file first …
+  PASS 3/3  fix-failing-test         19s   9 calls, 1 errors, self-verified
 ```
 
 Every run is saved to `~/.veepee-code/harness-evals/<timestamp>-<commit>.json`. That is the point: results are keyed by the commit the harness was at, so "did this change help?" becomes a diff instead of an opinion.
@@ -43,6 +57,7 @@ Beyond pass/fail, each task records:
 |---|---|
 | `toolCalls` | How much work the harness needed to get there |
 | `toolErrors` | Tool calls that failed. A high count means the harness is fighting itself — bad tool descriptions, bad argument schemas, or a model that cannot drive them |
+| `toolErrorDetail` | **Which** tools failed and with what message, grouped by error shape. The count alone is unactionable: "26% of calls failed" names no tool and no message. This is the part you can fix — it is how the `edit_file` fuzzy-match bug was found |
 | `selfVerified` | Whether the agent ran the tests **unprompted**. The force-verify nudge exists to make this true; this is how you find out if it works |
 | `turns` | Loop iterations |
 | `wallMs` | Wall clock, which on a self-hosted fleet is the only real budget |
@@ -74,9 +89,11 @@ Always confirm a new task's grader **fails on the untouched workspace**. A grade
 
 MCP servers, remote-bridge tools and skills are deliberately excluded: they depend on the machine and the network, and including them would make scores incomparable between runs.
 
-### Two details that were wrong at first, and matter
+### Three details that were wrong at first, and matter
 
 **Grading runs inside the repository, not in `/tmp`.** vitest's config imports `vitest/config`, which Node resolves by walking up from the config file — from `/tmp` that finds nothing and vitest dies before running a single assertion. At the exit-code level that is indistinguishable from a real failure, so grading silently depended on whether the agent had happened to run `npm install`. The grading copy now lives under the repo so `node_modules` resolves normally.
+
+**The scratch workspace gets the repo's `node_modules`.** The task workspaces declare `"test": "vitest run"`, so without it every `npm test` the agent ran failed with `vitest: command not found` — in a task whose instruction is "run the tests". The agent then worked around it with `npx vitest`, which pulled a *different* vitest version off the network, making the eval quietly dependent on registry access and grading with one version what the agent ran with another.
 
 **The eval registers the same toolset as the CLI.** An earlier version registered only the coding and devops groups; the model promptly hallucinated a `syntax` tool, called it ten times and was stopped by loop detection — a failure caused entirely by the eval. An eval that runs a different toolset measures a different harness.
 

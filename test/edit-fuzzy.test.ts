@@ -1,0 +1,191 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { applySingleEdit, normalizeWithMap, registerCodingTools } from '../src/tools/coding.js';
+import { ToolRegistry } from '../src/tools/registry.js';
+
+/**
+ * Regression tests for the whitespace-fuzzy edit path.
+ *
+ * This was the largest single source of tool failures in the harness eval —
+ * `edit_file` reported "Whitespace-fuzzy match found but could not locate exact
+ * position" on 4 of 27 calls, an error whose advice ("read the file and retry
+ * with exact content") is the thing the model had just done. Counting and
+ * locating were two different searches that could disagree.
+ */
+
+const FILE = [
+  'export function render(op) {',
+  '  switch (op.type) {',
+  '    case "add_column":',
+  '      return `ALTER TABLE ${op.table} ADD COLUMN ${op.column}`;',
+  '    default:',
+  '      throw new Error("unknown");',
+  '  }',
+  '}',
+  '',
+].join('\n');
+
+const apply = (content: string, oldStr: string, newStr: string, replaceAll = false) =>
+  applySingleEdit(content, oldStr, newStr, replaceAll, 'file.ts');
+
+describe('normalizeWithMap', () => {
+  it('collapses runs of spaces and tabs to one space', () => {
+    expect(normalizeWithMap('a \t  b').text).toBe('a b');
+  });
+
+  it('turns CRLF into LF', () => {
+    expect(normalizeWithMap('a\r\nb').text).toBe('a\nb');
+  });
+
+  it('maps each output character back to where it came from', () => {
+    const { text, map } = normalizeWithMap('a   b');
+    expect(text).toBe('a b');
+    expect(map).toEqual([0, 1, 4]); // 'a', the run starting at 1, then 'b' at 4
+  });
+
+  it('produces a map the same length as the text', () => {
+    for (const s of ['', 'plain', '  lead', 'trail  ', 'a\r\n  b\tc']) {
+      const { text, map } = normalizeWithMap(s);
+      expect(map).toHaveLength(text.length);
+    }
+  });
+});
+
+describe('applySingleEdit — exact matching is unchanged', () => {
+  it('replaces a unique exact match', () => {
+    const r = apply(FILE, '      throw new Error("unknown");', '      return null;');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.updated).toContain('      return null;');
+  });
+
+  it('refuses a non-unique match without replace_all', () => {
+    const r = apply('x\nx\n', 'x', 'y');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/must be unique/);
+  });
+
+  it('replaces every occurrence with replace_all', () => {
+    const r = apply('x\nx\n', 'x', 'y', true);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.updated).toBe('y\ny\n');
+  });
+});
+
+describe('applySingleEdit — the regression', () => {
+  it('applies a match whose indentation differs from the file', () => {
+    // The exact case that produced "could not locate exact position": the
+    // needle is real but its leading whitespace does not match the file's.
+    const r = apply(FILE, 'case "add_column":', 'case "add_column": // handled', false);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.updated).toContain('case "add_column": // handled');
+  });
+
+  it('applies a multi-line match whose indentation WIDTH differs', () => {
+    // Normalization collapses runs of whitespace; it does not delete them. So
+    // across a newline the indentation has to be present but may be any width
+    // — which is the realistic case (a model re-indenting what it read).
+    const needle = '  switch (op.type) {\n        case "add_column":';
+    const r = apply(FILE, needle, '  switch (op.type) {\n    case "renamed":');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.updated).toContain('case "renamed":');
+  });
+
+  it('does not match a needle that drops indentation entirely across lines', () => {
+    // Documents the boundary: this is a miss, and it must be reported as
+    // "not found" rather than as a match it cannot place.
+    const r = apply(FILE, 'switch (op.type) {\ncase "add_column":', 'X');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/not found/);
+  });
+
+  it('matches an LF needle against a CRLF file', () => {
+    const crlf = FILE.replace(/\n/g, '\r\n');
+    const r = apply(crlf, '  }\n}', '  }\n}\n// done');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.updated).toContain('// done');
+  });
+
+  it('never reports a match it cannot locate', () => {
+    // The old failure mode in one assertion: whatever the counter finds, the
+    // locator must be able to place. There is no longer a code path that says
+    // "found but cannot locate".
+    const needles = [
+      'case "add_column":',
+      '   switch (op.type) {',
+      'return `ALTER TABLE ${op.table} ADD COLUMN ${op.column}`;',
+      '}\n',
+    ];
+    for (const n of needles) {
+      const r = apply(FILE, n, 'REPLACED');
+      if (!r.ok) expect(r.error).not.toMatch(/could not locate exact position/);
+    }
+  });
+
+  it('preserves the rest of the file byte for byte', () => {
+    const r = apply(FILE, 'case "add_column":', 'case "add_column":');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.updated).toBe(FILE);
+  });
+});
+
+describe('applySingleEdit — replace_all on the fuzzy path', () => {
+  it('replaces EVERY fuzzy occurrence, not just the first', () => {
+    // The old code called content.replace(actualOld, newStr) here, which
+    // replaces one occurrence — silently ignoring replace_all.
+    const content = 'a  b\nzzz\na    b\nzzz\na\tb\n';
+    const r = apply(content, 'a b', 'X', true);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.updated).toBe('X\nzzz\nX\nzzz\nX\n');
+      expect(r.matchCount).toBe(3);
+    }
+  });
+
+  it('still refuses multiple fuzzy matches without replace_all', () => {
+    const r = apply('a  b\na    b\n', 'a b', 'X');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/found 2 times/);
+  });
+
+  it('consumes the whitespace run it matched, leaving no debris', () => {
+    const r = apply('x   y', 'x y', 'z');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.updated).toBe('z');
+  });
+});
+
+describe('applySingleEdit — genuinely absent text', () => {
+  it('reports not-found with a nearby-line hint', () => {
+    const r = apply(FILE, 'case "drop_column":', 'x');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toMatch(/not found in file\.ts/);
+      expect(r.error).toMatch(/Read the file first/);
+    }
+  });
+});
+
+describe('edit_file end to end', () => {
+  let tmp: string;
+  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'vcode-edit-')); });
+  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+
+  it('writes an indentation-mismatched edit through the real tool', async () => {
+    const path = join(tmp, 'render.ts');
+    writeFileSync(path, FILE);
+
+    const registry = new ToolRegistry();
+    for (const t of registerCodingTools()) registry.register(t);
+
+    const result = await registry.execute('edit_file', {
+      path,
+      old_string: 'case "add_column":',
+      new_string: 'case "add_column": // handled',
+    });
+
+    expect(result.success).toBe(true);
+    expect(readFileSync(path, 'utf-8')).toContain('case "add_column": // handled');
+  });
+});

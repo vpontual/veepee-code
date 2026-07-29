@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { loadHarnessTasks, compareRuns, saveEvalResult, type HarnessEvalResult } from '../src/harness-eval.js';
+import { loadHarnessTasks, compareRuns, saveEvalResult, groupToolErrors, errorSignature, aggregateRuns, type HarnessEvalResult, type HarnessTaskResult } from '../src/harness-eval.js';
 
 let tmp: string;
 beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'vcode-heval-')); });
@@ -62,6 +62,115 @@ describe('loadHarnessTasks', () => {
   });
 });
 
+describe('tool error grouping', () => {
+  it('collapses the same failure with different paths into one group', () => {
+    // Otherwise ten instances of one bug read as ten separate problems and
+    // crowd out the others.
+    const groups = groupToolErrors([
+      { tool: 'read_file', error: "File not found: '/tmp/a/src/x.ts'" },
+      { tool: 'read_file', error: "File not found: '/tmp/b/src/y.ts'" },
+      { tool: 'read_file', error: "File not found: '/tmp/c/src/z.ts'" },
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].count).toBe(3);
+    expect(groups[0].tool).toBe('read_file');
+  });
+
+  it('keeps genuinely different failures apart', () => {
+    const groups = groupToolErrors([
+      { tool: 'read_file', error: 'File not found' },
+      { tool: 'edit_file', error: 'String not found in file' },
+    ]);
+    expect(groups).toHaveLength(2);
+  });
+
+  it('separates the same message coming from different tools', () => {
+    const groups = groupToolErrors([
+      { tool: 'read_file', error: 'File not found' },
+      { tool: 'write_file', error: 'File not found' },
+    ]);
+    expect(groups.map((g) => g.tool).sort()).toEqual(['read_file', 'write_file']);
+  });
+
+  it('puts the most frequent failure first and caps the list', () => {
+    const errors = [
+      ...Array.from({ length: 5 }, () => ({ tool: 'bash', error: 'Exit code 1' })),
+      ...Array.from({ length: 9 }, (_, i) => ({ tool: `t${i}`, error: `distinct ${i}` })),
+    ];
+    const groups = groupToolErrors(errors, 3);
+    expect(groups).toHaveLength(3);
+    expect(groups[0]).toMatchObject({ tool: 'bash', count: 5 });
+  });
+
+  it('normalises line numbers and quoted names but not the wording', () => {
+    expect(errorSignature("Cannot find 'foo' at line 42"))
+      .toBe(errorSignature("Cannot find 'bar' at line 7"));
+    expect(errorSignature('Cannot find it')).not.toBe(errorSignature('Permission denied'));
+  });
+
+  it('survives an empty error message', () => {
+    expect(groupToolErrors([{ tool: 'bash', error: '' }])[0].count).toBe(1);
+  });
+
+  it('returns nothing when no tool failed', () => {
+    expect(groupToolErrors([])).toEqual([]);
+  });
+});
+
+describe('aggregateRuns', () => {
+  const r = (over: Partial<HarnessTaskResult> = {}): HarnessTaskResult => ({
+    task: 't', passed: true, runs: 1, passes: 1, detail: '', tags: [], turns: 2,
+    toolCalls: 10, toolErrors: 0, selfVerified: true, wallMs: 1000, model: 'm',
+    ...over,
+  });
+
+  it('reports how many of the runs passed', () => {
+    const agg = aggregateRuns([r(), r({ passed: false, passes: 0 }), r()]);
+    expect(agg.runs).toBe(3);
+    expect(agg.passes).toBe(2);
+  });
+
+  it('marks the task passed only when every run passed', () => {
+    // A task that passes 2 of 3 is not a passing task — that intermittency is
+    // exactly what a single-sample score hides.
+    expect(aggregateRuns([r(), r({ passes: 0, passed: false })]).passed).toBe(false);
+    expect(aggregateRuns([r(), r()]).passed).toBe(true);
+  });
+
+  it('averages the metrics rather than keeping one arbitrary run', () => {
+    const agg = aggregateRuns([r({ toolCalls: 10, wallMs: 1000 }), r({ toolCalls: 20, wallMs: 3000 })]);
+    expect(agg.toolCalls).toBe(15);
+    expect(agg.wallMs).toBe(2000);
+  });
+
+  it('keeps the detail of the first failing run, not of a passing one', () => {
+    const agg = aggregateRuns([r(), r({ passes: 0, passed: false, detail: 'expected 1 to be 2' })]);
+    expect(agg.detail).toBe('expected 1 to be 2');
+  });
+
+  it('merges tool errors across runs so an intermittent one is not lost', () => {
+    // Without merging, a failure seen only in the run that happened to pass
+    // disappears from the report entirely.
+    const agg = aggregateRuns([
+      r({ toolErrorDetail: [{ tool: 'edit_file', error: 'not found', count: 2 }] }),
+      r({ toolErrorDetail: [{ tool: 'edit_file', error: 'not found', count: 1 }] }),
+    ]);
+    expect(agg.toolErrorDetail).toEqual([{ tool: 'edit_file', error: 'not found', count: 3 }]);
+  });
+
+  it('only claims self-verification when it happened every time', () => {
+    expect(aggregateRuns([r({ selfVerified: true }), r({ selfVerified: false })]).selfVerified).toBe(false);
+  });
+
+  it('is a no-op for a single run', () => {
+    const one = r({ toolCalls: 7 });
+    const agg = aggregateRuns([one]);
+    expect(agg.runs).toBe(1);
+    expect(agg.passes).toBe(1);
+    expect(agg.toolCalls).toBe(7);
+  });
+});
+
 describe('compareRuns', () => {
   const run = (commit: string, results: Array<[string, boolean]>): HarnessEvalResult => ({
     at: '2026-07-29T00:00:00.000Z',
@@ -71,7 +180,7 @@ describe('compareRuns', () => {
     total: results.length,
     score: Math.round((results.filter(([, p]) => p).length / results.length) * 100),
     results: results.map(([task, passed]) => ({
-      task, passed, detail: '', tags: [], turns: 1, toolCalls: 1,
+      task, passed, runs: 1, passes: passed ? 1 : 0, detail: '', tags: [], turns: 1, toolCalls: 1,
       toolErrors: 0, selfVerified: false, wallMs: 1, model: 'test-model',
     })),
   });

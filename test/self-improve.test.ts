@@ -13,13 +13,12 @@ import {
   proposeImprovement,
   formatImprovementReport,
   saveImprovementReport,
-  linkNodeModules,
   copyProjectConfig,
   sh,
   type Weakness,
   type ImprovementRun,
 } from '../src/self-improve.js';
-import type { HarnessEvalResult, HarnessTaskResult } from '../src/harness-eval.js';
+import { linkNodeModules, type HarnessEvalResult, type HarnessTaskResult } from '../src/harness-eval.js';
 
 let tmp: string;
 beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'vcode-si-')); });
@@ -27,7 +26,7 @@ afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
 
 function task(over: Partial<HarnessTaskResult> = {}): HarnessTaskResult {
   return {
-    task: 't1', passed: true, detail: '', tags: [], turns: 1,
+    task: 't1', passed: true, runs: 1, passes: 1, detail: '', tags: [], turns: 1,
     toolCalls: 10, toolErrors: 0, selfVerified: true, wallMs: 1000, model: 'm',
     ...over,
   };
