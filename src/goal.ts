@@ -48,6 +48,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Agent } from './agent.js';
+import { report as reportAgentState } from './agentstate.js';
 import type { CheckpointManager } from './checkpoint.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -493,6 +494,15 @@ export class GoalEngine {
     state.outcome = outcome;
     state.updatedAt = new Date().toISOString();
     await this.save(state);
+    // The single funnel every goal outcome passes through, so one report covers
+    // success, exhaustion, and pause alike. Goal mode is the unattended path — the
+    // whole point is that nobody is watching — so publishing the terminal state is
+    // what lets a supervisor (or `veepee_wait until=agent-state state=done,blocked`)
+    // find out it ended without sitting on the window. `succeeded` is `done`;
+    // exhausted/paused report `blocked`, because both mean "stopped, and it needs a
+    // human to decide what happens next" — reporting them as `done` would tell a
+    // watcher the work finished when it did not.
+    reportAgentState(status === 'succeeded' ? 'done' : 'blocked', `goal ${status}`);
     yield { type: 'done', state };
   }
 

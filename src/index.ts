@@ -12,6 +12,7 @@ import { loadConfig, getConfigPath } from './config.js';
 import { ModelManager } from './models.js';
 import { ToolRegistry } from './tools/registry.js';
 import { Agent, AgentBusyError } from './agent.js';
+import { installExitReporter } from './agentstate.js';
 import { PermissionManager } from './permissions.js';
 import { Benchmarker } from './benchmark.js';
 import { startApiServer } from './api.js';
@@ -86,6 +87,10 @@ async function shutdownLspServers(timeoutMs = 2500): Promise<void> {
 async function main() {
   const profiler = new Profiler(process.argv.includes('--profile'));
   profiler.mark('main() entered');
+
+  // Publish `idle` on the way out so a session that exits mid-supervision doesn't
+  // leave a stale `working`/`blocked` claim behind for whatever was watching it.
+  installExitReporter();
 
   // Project list: vcode --projects
   if (process.argv.includes('--projects')) {

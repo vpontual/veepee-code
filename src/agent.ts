@@ -10,6 +10,7 @@ import { ModelManager } from './models.js';
 import type { ModelRoster } from './benchmark.js';
 import { SubAgentManager } from './subagent.js';
 import { runHooks, shouldBlock, type HookExecResult } from './hooks.js';
+import { report as reportAgentState } from './agentstate.js';
 import { previewEdit, previewWrite } from './diff.js';
 import { PLAN_DISABLED_TOOLS } from './tools/plan-gate.js';
 import type { CheckpointManager } from './checkpoint.js';
@@ -565,6 +566,11 @@ export class Agent {
       yield* inner;
     } finally {
       this.runLock = false;
+      // The turn is over — however it ended. This sits in the SAME finally as the
+      // run lock on purpose: a run that threw, was aborted, or was abandoned
+      // mid-stream must not leave vcode advertising `working` forever, which would
+      // make every supervisor watching it wait on a turn that is already gone.
+      reportAgentState('idle');
     }
   }
 
@@ -686,6 +692,11 @@ export class Agent {
     const allowedTools = options?.allowedTools ? new Set(options.allowedTools) : null;
     const onTurnBoundary = options?.onTurnBoundary;
     this.abortController = new AbortController();
+
+    // A turn is now in flight. Reported to veeWM (and written to the terminal
+    // title) so anything watching this window can distinguish "busy" from the two
+    // states that look identical from outside: idle, and stopped for approval.
+    reportAgentState('working');
 
     // UserPromptSubmit hook — fires on raw user input, before any expansion
     // or model interaction. Hook stdout is shown to the user; non-zero exit

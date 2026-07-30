@@ -19,6 +19,7 @@ veepee-code/
 │   ├── context.ts         # System prompt builder, context manager
 │   ├── config.ts          # vcode.config.json loading, .env→JSON migration, Config interface
 │   ├── permissions.ts     # Permission system
+│   ├── agentstate.ts      # Publish idle/working/blocked/done (veeWM report-agent + terminal title)
 │   ├── api.ts             # OpenAI-compatible HTTP API server
 │   ├── benchmark.ts       # Benchmark runner, test suite, roster builder
 │   ├── knowledge.ts       # KnowledgeState class (compressed context, serialize/deserialize, disk persistence)
@@ -499,6 +500,15 @@ Each agent turn:
 7. **Hierarchical VEEPEE.md.** Inspired by how `.gitignore` and `.editorconfig` work -- local overrides global.
 
 8. **Benchmark-driven roster.** No hardcoded model preferences. The smart benchmark discovers what works best on your actual hardware and builds the roster empirically.
+
+9. **Agent state is reported, on two layered channels** (`src/agentstate.ts`). An unattended run's dominant failure mode is stopping for a permission prompt that nobody notices — from outside the window, "thinking hard" and "waiting 40 minutes for a `y`" look identical, so nothing can tell you. vcode therefore publishes `idle`/`working`/`blocked`/`done`:
+
+   - **veeWM `report-agent` (authoritative)** when running inside veepOS. Structured, queryable via `agent-state`, and *waitable* — a supervisor can block on `wait until=agent-state state=done,blocked` instead of polling. Targeted by `pid`; the compositor resolves it through the process's ancestors to the window that contains it, so there is nothing to discover or cache here.
+   - **The terminal title (OSC 2), always.** Free, works in every terminal, and it is exactly what the agent multiplexers' state detection reads — so a vcode outside veepOS stays legible to whatever is watching, and inside veepOS it feeds veeWM's existing `title-change` event for nothing.
+
+   This layering (report authoritative, screen/title shape as fallback) is the right way round. The inversion — scrape first — is what forces a per-agent pattern table that rots.
+
+   Report points are chosen so the state cannot get stuck: `working` at turn start; `idle` in `withRunLock`'s `finally`, so an aborted or abandoned run still clears; `blocked` around the permission prompt via `whileBlocked`, whose `finally` clears it on approval, denial, *and* throw; `done`/`blocked` from `GoalEngine.finish`, the single funnel every goal outcome passes through. Reporting never throws and never blocks — observability must not be able to break a coding session — and a duplicate report is dropped, so a busy agent cannot turn a progress spinner into an event storm.
 
 ## Dependencies
 

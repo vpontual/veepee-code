@@ -1,6 +1,7 @@
 import { writeFile, mkdir } from 'fs/promises';
 import { resolve, isAbsolute, relative } from 'path';
 import { existsSync, readFileSync } from 'fs';
+import { whileBlocked } from './agentstate.js';
 
 export type PermissionDecision = 'allow' | 'allow_always' | 'deny';
 
@@ -239,7 +240,16 @@ export class PermissionManager {
       return 'deny';
     }
 
-    const answer = await this.promptHandler(toolName, args, reason, preview);
+    // THE moment an unattended run dies: stopped, waiting for a human, and
+    // indistinguishable from "thinking hard" to anything watching from outside.
+    // Announce it (veeWM `report-agent` + the terminal title) for as long as the
+    // prompt is up, so a supervisor — or the user's status bar — can see that this
+    // session needs a person. `whileBlocked` restores `working` however the prompt
+    // ends, including a denial or an abort.
+    const answer = await whileBlocked(
+      `approve: ${toolName}${reason ? ` (${reason})` : ''}`,
+      () => this.promptHandler!(toolName, args, reason, preview),
+    );
     const choice = answer.trim().toLowerCase();
 
     if (choice === 'y' || choice === 'yes') {
