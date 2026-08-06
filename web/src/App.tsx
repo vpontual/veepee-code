@@ -20,6 +20,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [queued, setQueued] = useState<QueuedAhead>(null);
   const [showSessions, setShowSessions] = useState(false);
+  const [lastTurn, setLastTurn] = useState<{ tokens?: number; tps?: number } | null>(null);
   const clientRef = useRef<RcClient | null>(null);
 
   const apply = useCallback((event: ServerEvent) => {
@@ -28,6 +29,7 @@ export function App() {
     if (event.type === 'queued') setQueued(event.ahead);
     // Any output means our turn actually started, so the queue notice goes.
     if (event.type === 'text' || event.type === 'tool_call') setQueued(null);
+    if (event.type === 'done') setLastTurn({ tokens: event.evalCount, tps: event.tokensPerSecond });
     if (event.type === 'done' || event.type === 'error_event') { setBusy(false); setQueued(null); }
     if (event.type === 'permission_request') {
       setPermission({ callId: event.callId, tool: event.tool, args: event.args });
@@ -74,14 +76,29 @@ export function App() {
     clientRef.current?.reconnect();
   }, []);
 
+  /** Start a fresh conversation. `/clear` goes to the command handler, not the
+   *  agent loop, so it never contends for a generation and works while busy. */
+  const onNew = useCallback(async () => {
+    await send(token, '/clear').catch(() => undefined);
+    setEntries([]);
+    setLastTurn(null);
+    setQueued(null);
+  }, [token]);
+
   const header = useMemo(() => (
     <header className="bar">
       <span className="logo">veepee<b>code</b></span>
+      <button className="ghost" onClick={() => void onNew()}>new</button>
       <button className="ghost" onClick={() => setShowSessions((v) => !v)}>sessions</button>
+      {lastTurn?.tps != null && !busy && (
+        <span className="stat" title={`${lastTurn.tokens ?? '?'} tokens generated`}>
+          {lastTurn.tps.toFixed(1)} tok/s
+        </span>
+      )}
       <span className={`state state--${state}`}>{STATE_LABEL[state]}</span>
       {busy && <button className="stop" onClick={onAbort}>stop</button>}
     </header>
-  ), [state, busy, onAbort]);
+  ), [state, busy, onAbort, onNew, lastTurn]);
 
   if (!token) return <TokenGate onToken={setToken} />;
 

@@ -47,6 +47,8 @@ body {
 .logo { color: var(--brand); letter-spacing: 0.02em; }
 .logo b { color: var(--accent); font-weight: 600; }
 
+.stat { margin-left: auto; font-size: 11px; color: var(--dim); }
+.stat + .state { margin-left: 0; }
 .state { margin-left: auto; font-size: 12px; color: var(--dim); }
 .state--live { color: var(--ok); }
 .state--retrying { color: var(--warn); }
