@@ -17,6 +17,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { pathToFileUri } from '../src/lsp/uri.js';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { ToolRegistry } from '../src/tools/registry.js';
@@ -85,28 +86,66 @@ afterAll(async () => {
 });
 
 /**
- * How long to let a REAL typescript-language-server warm up.
+ * Wait for a condition instead of guessing how long it takes.
  *
- * Was 1500ms, which is ample when this file runs alone and not nearly enough
- * when it runs alongside 60 other files — the server is starved, diagnostics
- * have not arrived, and tests 2 and 3 fail on a commit that passes in
- * isolation. Retries did not help: the server is started once in beforeAll, so
- * re-running a single test just waits on the same cold server again.
+ * This file drives a REAL typescript-language-server, and every wait in it used
+ * to be `setTimeout(1500)`. Alone that is ample; alongside 60 other test files
+ * the server is starved and has not finished starting, so tests 2 and 3 failed
+ * intermittently on commits that passed in isolation. A fixed sleep is always
+ * both too long on an idle machine and too short on a busy one.
  *
- * The principled fix is to poll for readiness rather than sleep. This is the
- * blunt one: buy enough headroom for a loaded machine, at a few seconds of
- * suite time.
+ * Retries were not the answer either: the server starts once in beforeAll, so
+ * re-running a single test only waits on the same cold server again.
+ *
+ * Polls fast, gives up loudly, and — the point — returns the instant the thing
+ * is actually ready, so the common case costs milliseconds rather than seconds.
  */
-const LSP_WARMUP_MS = 6000;
+async function waitFor(
+  what: string,
+  predicate: () => boolean,
+  timeoutMs = 20_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (predicate()) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+    }
+    await new Promise((res) => setTimeout(res, 25));
+  }
+}
+
+const serverRunning = () => manager.runningLabels().includes('typescript');
+
+/**
+ * Block until the server has started AND published diagnostics for `file`.
+ *
+ * waitForDiagnostics is the correct readiness signal because it resolves on an
+ * EMPTY result too — a clean file still gets a publishDiagnostics notification.
+ * The obvious-looking alternative, polling manager.getAllDiagnostics() for the
+ * URI, cannot work: that method drops entries with zero diagnostics
+ * (`if (diags.length === 0) continue`), so a clean file never appears in it and
+ * the poll can only ever time out. Which is exactly what it did.
+ */
+async function warmFile(file: string, diagTimeoutMs = 5_000): Promise<void> {
+  await waitFor('the typescript LSP to start', serverRunning, 30_000);
+  const client = await manager.getClientByLabel('typescript');
+  if (!client) throw new Error('LSP client missing immediately after it reported running');
+  // Capped well under the per-test budget: this is a readiness wait, not an
+  // assertion. After earlier tests have edited the file the version gate can
+  // leave nothing left to notify, and blocking the full 20s there burned the
+  // whole test timeout in the reference/definition cases, which do not depend
+  // on diagnostics at all.
+  await client.waitForDiagnostics(pathToFileUri(file), diagTimeoutMs);
+}
 
 describe.skipIf(!HAS_TSLS)('LSP end-to-end' + skipMsg, () => {
   it('1. read_file warms the LSP server (Phase D)', async () => {
     const r = await registry.execute('read_file', { path: mainFile });
     expect(r.success).toBe(true);
-    // Give the fire-and-forget didOpen a moment to land.
-    await new Promise((res) => setTimeout(res, LSP_WARMUP_MS));
-    // The server should now know about main.ts; subsequent diagnostics
-    // queries should be near-instant.
+    // read_file fires didOpen and does not await it, so wait for the server to
+    // actually come up rather than assuming a duration.
+    await warmFile(mainFile);
     expect(manager.runningLabels()).toContain('typescript');
   }, 20_000);
 
@@ -172,7 +211,8 @@ describe.skipIf(!HAS_TSLS)('LSP end-to-end' + skipMsg, () => {
     // Re-warm the server with the fresh contents.
     await registry.execute('read_file', { path: helperFile });
     await registry.execute('read_file', { path: mainFile });
-    await new Promise((res) => setTimeout(res, LSP_WARMUP_MS));
+    await warmFile(helperFile);
+    await warmFile(mainFile);
 
     // `greet` is declared on line 1 of helper.ts at character 16
     // (`export function greet(...)`). Line is 1-based, character is 0-based.
@@ -189,7 +229,7 @@ describe.skipIf(!HAS_TSLS)('LSP end-to-end' + skipMsg, () => {
 
   it('6. lsp_definition jumps from a usage to the declaration', async () => {
     await registry.execute('read_file', { path: mainFile });
-    await new Promise((res) => setTimeout(res, 500));
+    await warmFile(mainFile);
 
     // In main.ts, `greet` is used on line 3 at around column 25.
     // `const message: string = greet('world');`
