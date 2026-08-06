@@ -1,0 +1,5 @@
+{
+  "tags": ["multi-file", "refactor", "cross-file"],
+  "timeout_ms": 600000,
+  "description": "The name appears in four JS files and once as a string in handlers.json. The JSON reference is the one that a rename driven by imports alone misses, and it fails at runtime rather than at import time — so the visible test has to actually exercise the dispatcher to catch it."
+}

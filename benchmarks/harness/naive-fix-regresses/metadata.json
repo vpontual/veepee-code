@@ -1,0 +1,5 @@
+{
+  "tags": ["debug", "regression", "self-verify"],
+  "timeout_ms": 420000,
+  "description": "The obvious fix (toFixed(1)) turns one failing test into two different failing tests. Only an agent that re-runs the FULL suite after editing notices, which makes this the task that measures whether the force-verify nudge produces real verification or just one npm test at the end."
+}

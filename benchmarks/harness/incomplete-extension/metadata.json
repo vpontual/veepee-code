@@ -1,0 +1,5 @@
+{
+  "tags": ["completeness", "multi-file", "conventions"],
+  "timeout_ms": 420000,
+  "description": "The level set is enumerated in FIVE places across three files (the union type, LEVELS, SEVERITY, the prefix switch, the colour record). Updating some but not all of them is the exact failure the incomplete-extension nudge targets, and this task is what measures whether that nudge works."
+}

@@ -1,0 +1,5 @@
+{
+  "tags": ["edit-precision", "single-file"],
+  "timeout_ms": 420000,
+  "description": "The three-line guard block is byte-identical in four functions, so the obvious old_string is ambiguous. Measures whether edit_file forces enough surrounding context to hit the right occurrence, or silently rewrites the first match."
+}

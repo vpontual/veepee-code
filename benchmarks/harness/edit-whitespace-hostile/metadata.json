@@ -1,0 +1,5 @@
+{
+  "tags": ["edit-precision", "conventions", "single-file"],
+  "timeout_ms": 420000,
+  "description": "The file is tab-indented except for one deliberately four-space function. Measures whether edit_file's fuzzy whitespace matching lands an edit without reindenting the surrounding block or the untouched function."
+}

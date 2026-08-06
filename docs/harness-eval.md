@@ -86,6 +86,18 @@ Two rules make a task worth having:
 
 Always confirm a new task's grader **fails on the untouched workspace**. A grader that cannot fail scores nothing.
 
+```bash
+node scripts/check-harness-tasks.mjs
+```
+
+That checks both halves of it for every task, without spending a model call:
+the grader must fail on the untouched workspace, and the visible `npm test` must
+start in the state the task assumes — green, or red for the tasks whose premise
+is a failing suite. It caught a real one: the `typecheck-only-failure` grader
+shelled out to `tsc` relative to `process.cwd()`, which meant it typechecked
+whatever project the runner happened to be launched from and passed. Graders
+that invoke a tool must resolve paths from `import.meta.url`, never the cwd.
+
 ## How a task is run
 
 1. The task's `workspace/` is copied to a scratch directory in `/tmp`.

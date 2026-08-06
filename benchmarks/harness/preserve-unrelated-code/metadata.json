@@ -1,0 +1,5 @@
+{
+  "tags": ["surgical", "read-first", "single-file"],
+  "timeout_ms": 420000,
+  "description": "Two failure modes in one task: the documented dotfile case punishes a reflexive indexOf->lastIndexOf swap, and the grader asserts the header and the three vendored helpers survive byte-for-byte, which punishes a whole-file rewrite that happens to pass."
+}

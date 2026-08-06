@@ -1,0 +1,5 @@
+{
+  "name": "validators",
+  "type": "module",
+  "scripts": { "test": "vitest run" }
+}

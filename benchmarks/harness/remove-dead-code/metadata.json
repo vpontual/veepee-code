@@ -1,0 +1,5 @@
+{
+  "tags": ["refactor", "deletion", "multi-file"],
+  "timeout_ms": 600000,
+  "description": "Deletion is a different failure mode from addition: the agent must find every caller before removing the definition, and pick the option ({ style: 'short' }) that reproduces the old output rather than the default. Leaving the function in place while migrating callers looks like success and fails the source scan."
+}

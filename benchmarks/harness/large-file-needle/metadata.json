@@ -1,0 +1,5 @@
+{
+  "tags": ["long-context", "single-file", "edit-precision"],
+  "timeout_ms": 600000,
+  "description": "One wrong identifier inside ~640 lines across two files, surrounded by 44 structurally identical functions. Measures whether the agent locates it with grep and a targeted read, or burns the context window reading both files end to end — and whether the resulting edit lands on the right one of 45 near-identical bodies."
+}

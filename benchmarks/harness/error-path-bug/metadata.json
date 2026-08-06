@@ -1,0 +1,5 @@
+{
+  "tags": ["debug", "edge-case", "read-first"],
+  "timeout_ms": 420000,
+  "description": "Nothing is failing — the visible suite covers only the happy path, which already works. The whole task lives in the documented error cases, so it measures whether the agent reads the contract and enumerates the failure modes instead of running the tests, seeing green, and stopping."
+}

@@ -1,0 +1,5 @@
+{
+  "tags": ["multi-file", "conventions", "read-first"],
+  "timeout_ms": 420000,
+  "description": "Unlike extend-existing-pattern this needs a NEW file plus two registration points (the barrel re-export and REGISTRY). The unwritten convention — optional validators skip empty values, only `required` complains about them — is discoverable only by reading email.js, and the grader checks it."
+}

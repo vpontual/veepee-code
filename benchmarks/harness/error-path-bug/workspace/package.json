@@ -1,0 +1,5 @@
+{
+  "name": "range",
+  "type": "module",
+  "scripts": { "test": "vitest run" }
+}
