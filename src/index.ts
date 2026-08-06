@@ -262,15 +262,32 @@ async function main() {
   // below instead.
   activeLspManager = lspManager;
 
-  // Discover remote tools (e.g. from Llama Rider)
+  // Discover remote tools (e.g. from Llama Rider) — WITHOUT blocking startup.
+  //
+  // This used to be awaited, so an unreachable bridge cost the discovery
+  // timeout on every single launch before the TUI drew anything. Measured with
+  // `vcode --profile` against a Mac Mini that was simply switched off: 5014ms
+  // of a 5080ms startup. Everything else in init put together was 66ms.
+  //
+  // Nothing needs these tools before the first turn, and the registry is read
+  // per-turn rather than snapshotted, so tools that arrive late are picked up
+  // by the next request with no further wiring. A bridge that is down now
+  // costs nothing instead of costing five seconds.
   if (config.remote) {
     const localNames = new Set(registry.names());
-    const remoteTools = await discoverRemoteTools(config.remote, localNames);
-    for (const tool of remoteTools) registry.register(tool);
-    if (remoteTools.length > 0) {
-      console.error(chalk.dim(`  ${remoteTools.length} remote tools loaded`));
-    }
-    profiler.mark('remote tools discovered');
+    void discoverRemoteTools(config.remote, localNames)
+      .then((remoteTools) => {
+        for (const tool of remoteTools) registry.register(tool);
+        if (remoteTools.length > 0) {
+          console.error(chalk.dim(`  ${remoteTools.length} remote tools loaded`));
+        }
+      })
+      .catch(() => {
+        // discoverRemoteTools already swallows its own failures; this is here so
+        // an unexpected throw cannot become an unhandled rejection that takes
+        // the process down long after startup.
+      });
+    profiler.mark('remote tools dispatched');
   }
 
   // Connect to configured MCP servers and register their tools. Failures
