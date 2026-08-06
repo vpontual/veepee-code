@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { Entry } from './protocol';
+import { Markdown } from './markdown';
 
 export function Transcript({ entries }: { entries: Entry[] }) {
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -40,7 +41,7 @@ function EntryView({ entry }: { entry: Entry }) {
     case 'assistant':
       return (
         <div className={`entry entry--assistant${entry.streaming ? ' is-streaming' : ''}`}>
-          {entry.text}
+          <Markdown text={entry.text} />
         </div>
       );
 
