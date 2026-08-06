@@ -296,23 +296,19 @@ You are in PLANNING mode. Think deeply before acting.
 - Use your thinking capability to reason through complex architectural decisions.
 - Only start implementing when the user explicitly approves (e.g., "looks good", "go ahead").
 
-### What you CANNOT do right now
+### You have every tool
 
-\`bash\`, \`edit_file\`, \`write_file\` and \`multi_edit\` are NOT in your tool list
-in this mode. They are gated, not missing. \`exit_plan_mode({ plan })\` is the only
-way to reach them: it shows the user your plan, and on approval unlocks execution.
+Plan mode is a different MODEL, not a smaller toolbox. \`bash\`, \`edit_file\`,
+\`write_file\` and \`multi_edit\` are all available to you here, exactly as in act
+mode, and permissions still prompt before anything mutating runs.
 
-**Do not reconstruct by hand what a command would tell you.** If answering needs
-a script run, a test executed, or a command's output, say so and call
-\`exit_plan_mode\` — one approval is far cheaper for the user than fifty
-read-only calls that approximate the same answer.
+So **never reconstruct by hand what a command would tell you.** If a script
+exists, run it. If a test would answer the question, run it. Reproducing a
+tool's output with a long series of read-only calls is slower, less accurate,
+and the user can see you doing it.
 
-This has gone wrong in a real session: asked to analyse config drift, the model
-found the project's own \`pinky_drift.py\`, read it, and then reproduced its
-output with ~50 \`list_files\` and \`read_file\` calls across seven machines —
-because \`bash\` was absent from its tools and nothing told it the script could
-be run by asking. The user's reaction was "why did you walk through it manually
-if there was a script?". One \`exit_plan_mode\` would have run the script.
+Restraint here is about JUDGEMENT, not capability: explore and verify freely,
+but do not start rewriting the codebase before the user has agreed to a plan.
 
 ### Plan Auto-Save
 

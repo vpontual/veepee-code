@@ -211,38 +211,45 @@ describe('ContextManager', () => {
   });
 });
 
-describe('plan mode tells the model what it cannot do', () => {
-  // A real session: asked to analyse drift, the model found the project's own
-  // pinky_drift.py, READ it, and then reproduced its output with ~50 read-only
-  // calls across seven machines — because bash is filtered out of the tool list
-  // in plan mode and nothing told it the script could be run by asking. The
-  // user's reaction was "why did you walk through it manually if there was a
-  // script?". The prompt has to name the gate and the way through it.
+describe('plan mode is a model switch, not a smaller toolbox', () => {
+  // The gate used to filter bash/edit_file/write_file/multi_edit out of the
+  // tool list. That produced the worst failure mode available: the model could
+  // not see the tools, so it could neither use them NOR tell the user they were
+  // unavailable — it silently improvised. Asked to analyse config drift, it
+  // found the project's own pinky_drift.py, READ it, and then rebuilt its
+  // output with ~50 read-only calls across seven machines.
+  //
+  // Permissions are the right layer for "do not let it mutate things": they
+  // prompt per call and the model can see them. A mode is a poor access
+  // control, because it is invisible to the thing being controlled.
   const cm = new ContextManager({} as never);
   cm.setMode('plan');
   const prompt = cm.getSystemPrompt();
 
-  it('names the gated tools', () => {
+  it('tells the model it has every tool', () => {
+    expect(prompt).toMatch(/Plan mode is a different MODEL, not a smaller toolbox/);
+  });
+
+  it('names the tools that are available, not withheld', () => {
     for (const tool of ['bash', 'edit_file', 'write_file', 'multi_edit']) {
       expect(prompt).toContain(tool);
     }
+    expect(prompt).not.toMatch(/gated, not missing/i);
+    expect(prompt).not.toMatch(/NOT in your tool list/i);
   });
 
-  it('says they are gated rather than missing', () => {
-    expect(prompt).toMatch(/gated, not missing/i);
+  it('tells the model to run the script rather than reproduce it by hand', () => {
+    expect(prompt).toMatch(/never reconstruct by hand/i);
+    expect(prompt).toMatch(/If a script\s+exists, run it/i);
   });
 
-  it('points at exit_plan_mode as the way through', () => {
-    expect(prompt).toContain('exit_plan_mode');
-  });
-
-  it('tells the model not to reconstruct a command by hand', () => {
-    expect(prompt).toMatch(/Do not reconstruct by hand/i);
+  it('frames the restraint as judgement, not capability', () => {
+    expect(prompt).toMatch(/JUDGEMENT, not capability/);
   });
 
   it('does not add any of this in act mode', () => {
     const act = new ContextManager({} as never);
     act.setMode('act');
-    expect(act.getSystemPrompt()).not.toMatch(/gated, not missing/i);
+    expect(act.getSystemPrompt()).not.toMatch(/not a smaller toolbox/i);
   });
 });

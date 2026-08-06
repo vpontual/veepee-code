@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
 
 // The Agent class requires Ollama + Config + ToolRegistry + PermissionManager to construct,
 // so we cannot instantiate it in unit tests. Instead we test the static/exported patterns
@@ -482,5 +483,31 @@ describe('shouldForceVerify — force verify-and-fix after an unverified code ch
   it('treats write/edit/multi_edit as code mutations (and not read_file/bash/grep)', () => {
     for (const t of ['write_file', 'edit_file', 'multi_edit']) expect(CODE_MUTATION_TOOLS.has(t)).toBe(true);
     for (const t of ['read_file', 'bash', 'grep', 'glob', 'git']) expect(CODE_MUTATION_TOOLS.has(t)).toBe(false);
+  });
+});
+
+describe('plan mode no longer withholds tools', () => {
+  it('PLAN_DISABLED_TOOLS is not used to filter the tool list', () => {
+    // The set still exists in plan-gate.ts for exit_plan_mode's own docs, but
+    // agent.ts must not filter on it — plan and act differ only by model.
+    const src = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
+    expect(src).not.toMatch(/PLAN_DISABLED_TOOLS\.has/);
+    expect(src).toMatch(/Plan mode gets the SAME tools as act/);
+  });
+
+  it('an explicitly configured planModel wins over the roster', () => {
+    // The only path that works under lockModel, which synthesises one profile
+    // and skips discovery — so a roster-based choice cannot resolve gemma.
+    const src = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
+    const configured = src.indexOf('const configured = this.config.planModel');
+    const roster = src.indexOf('this.roster?.plan && this.modelManager.getProfile');
+    expect(configured).toBeGreaterThan(-1);
+    expect(roster).toBeGreaterThan(-1);
+    expect(configured).toBeLessThan(roster);
+  });
+
+  it('does not require a discovered profile for the configured plan model', () => {
+    const src = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
+    expect(src).toMatch(/if \(configured\) \{\s*\n\s*this\.modelManager\.switchTo\(configured\);/);
   });
 });

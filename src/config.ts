@@ -20,6 +20,9 @@ export interface Config {
   model: string | null;
   lockModel: string | null;
   reviewModel: string | null;
+  /** Model used in plan mode. Set explicitly because lockModel skips discovery,
+   *  so a roster-based choice cannot work on a locked install. */
+  planModel: string | null;
   /** Model used for compaction summaries. Falls back to the current chat
    *  model when null. Pin a smaller/cheaper model here to keep summaries
    *  fast and stop them from blocking the main loop on a large model. */
@@ -148,6 +151,7 @@ export interface ConfigFile {
   model?: string | null;
   lockModel?: string | null;
   reviewModel?: string | null;
+  planModel?: string | null;
   summarizerModel?: string | null;
   autoSwitch?: boolean;
   maxModelSize?: number;
@@ -185,6 +189,7 @@ const DEFAULTS: Config = {
   model: null,
   lockModel: null,
   reviewModel: null,
+  planModel: null,
   summarizerModel: null,
   autoSwitch: true,
   maxModelSize: 40,
@@ -425,6 +430,7 @@ export function loadConfig(configPath?: string): Config {
     model: merged.model ?? DEFAULTS.model,
     lockModel: merged.lockModel ?? DEFAULTS.lockModel,
     reviewModel: merged.reviewModel ?? DEFAULTS.reviewModel,
+    planModel: merged.planModel ?? DEFAULTS.planModel,
     summarizerModel: merged.summarizerModel ?? DEFAULTS.summarizerModel,
     autoSwitch: merged.autoSwitch ?? DEFAULTS.autoSwitch,
     maxModelSize: merged.maxModelSize ?? DEFAULTS.maxModelSize,

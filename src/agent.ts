@@ -12,7 +12,7 @@ import { SubAgentManager } from './subagent.js';
 import { runHooks, shouldBlock, type HookExecResult } from './hooks.js';
 import { report as reportAgentState } from './agentstate.js';
 import { previewEdit, previewWrite } from './diff.js';
-import { PLAN_DISABLED_TOOLS } from './tools/plan-gate.js';
+
 import type { CheckpointManager } from './checkpoint.js';
 import { signatureOf, detectStuckSignature, LOOP_WINDOW, LOOP_MAX_REPEATS, type SignedStep } from './loop-detection.js';
 import { generationLimiter } from './generation-limit.js';
@@ -321,10 +321,22 @@ export class Agent {
     this.previousModel = this.modelManager.getCurrentModel();
 
     if (!this.modelStick) {
-      // Use roster's plan model if available
-      const planModel = this.roster?.plan;
-      if (planModel && this.modelManager.getProfile(planModel)) {
-        this.modelManager.switchTo(planModel);
+      // An explicitly configured plan model wins, and is NOT required to have a
+      // discovered profile.
+      //
+      // This is the only path that works under lockModel, which is the setup
+      // this matters for: lock synthesises exactly one profile and skips
+      // discovery, so every other model on the fleet is unknown to the manager.
+      // Without this, plan mode on a locked install fell through to the
+      // heavy-tier fallback, found only the locked model, and switched to
+      // itself — the user got plan mode's restrictions and the same model,
+      // which is the worst of both. switchTo() does not validate, and a
+      // non-primary model routes via the gateway by design (see clientFor).
+      const configured = this.config.planModel;
+      if (configured) {
+        this.modelManager.switchTo(configured);
+      } else if (this.roster?.plan && this.modelManager.getProfile(this.roster.plan)) {
+        this.modelManager.switchTo(this.roster.plan);
       } else {
         // Fallback: best heavy model with thinking
         const heavyModels = this.modelManager.getModelsByTier('heavy')
@@ -974,16 +986,23 @@ export class Agent {
         // model thought anyway. Once the proxy began translating it, act
         // mode genuinely went to instruct mode and tool-use quality cratered.
         const useThinking = this.mode !== 'chat';
+        // Plan mode gets the SAME tools as act. The only difference between the
+        // two is which model answers.
+        //
+        // It used to filter out bash/edit_file/write_file/multi_edit as a hard
+        // gate. That produced the worst possible failure: the model could not
+        // see the tools, so it could not tell the user they were unavailable or
+        // ask for them — it silently improvised. Asked to analyse config drift,
+        // it found the project's own pinky_drift.py, read it, and rebuilt its
+        // output with ~50 read-only calls because bash was not in its list.
+        //
+        // Permissions are the right layer for "do not let it mutate things",
+        // and they already prompt per call. A mode is a poor access-control
+        // mechanism: it is invisible to the thing being controlled.
         let tools = this.mode === 'chat'
           ? this.registry.toOllamaTools().filter(t => {
               const name = t.function?.name || '';
               return CHAT_TOOLS.includes(name);
-            })
-          : this.mode === 'plan'
-          ? this.registry.toOllamaTools().filter(t => {
-              const name = t.function?.name || '';
-              // Block mutations until exit_plan_mode is approved. Hard gate.
-              return !PLAN_DISABLED_TOOLS.has(name);
             })
           : this.registry.toOllamaTools();
 
