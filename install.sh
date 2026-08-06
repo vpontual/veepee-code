@@ -116,6 +116,23 @@ info "Building..."
 npm run build
 ok "Build complete"
 
+# The Remote Connect web UI is a separate Vite app that builds into dist/web.
+#
+# Best-effort on purpose. It needs its own npm install (React, Vite), which is
+# a lot of bytes for someone who only ever uses the terminal — and rc.ts falls
+# back to the legacy inline page when dist/web is absent, so a failure here
+# costs the new UI and nothing else. Never let it fail the whole install.
+#
+# Skipped entirely with VEEPEE_SKIP_WEB=1.
+if [ "${VEEPEE_SKIP_WEB:-0}" != "1" ] && [ -d web ]; then
+  info "Building the web UI..."
+  if (cd web && { npm ci --silent 2>/dev/null || npm install --silent; } && npm run build --silent) >/dev/null 2>&1; then
+    ok "Web UI built"
+  else
+    warn "Web UI build failed — /rc will serve the legacy page. Build it later with: (cd web && npm install && npm run build)"
+  fi
+fi
+
 # ─── Step 5: Link binary ────────────────────────────────────────────────────
 
 # Prefer npm link (uses nvm's bin dir, no sudo needed)
