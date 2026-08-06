@@ -545,6 +545,13 @@ export class TUI {
     this.dispatch({ type: 'SET_VIEW', view: 'conversation' });
   }
 
+  /** Invoked on Shift+Tab. Set by index.ts, which owns the agent. */
+  private cyclePostureCb: (() => void) | null = null;
+
+  onCyclePosture(cb: () => void): void {
+    this.cyclePostureCb = cb;
+  }
+
   showInfo(msg: string): void {
     this.dispatch({ type: 'ADD_MESSAGE', message: { role: 'system', content: coerceToString(msg) } });
     const state = this.getState();
@@ -688,6 +695,15 @@ export class TUI {
     const key = raw;
     const state = this.getState();
     if (!state) return;
+
+    // Shift+Tab — cycle the permission posture. Handled before every
+    // view-specific branch so it works no matter what is on screen, and never
+    // reaches the input buffer as text. Terminals send CSI Z for back-tab; the
+    // modified form is bound too because a few emit that instead.
+    if (key === '\x1b[Z' || key === '\x1b[27;2;9~') {
+      this.cyclePostureCb?.();
+      return;
+    }
 
     // Tree-view picker takes precedence over everything except global Ctrl+C.
     if (state.treeViewActive && this.treeViewResolve) {

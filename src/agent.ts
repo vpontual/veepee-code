@@ -16,6 +16,7 @@ import { previewEdit, previewWrite } from './diff.js';
 import type { CheckpointManager } from './checkpoint.js';
 import { signatureOf, detectStuckSignature, LOOP_WINDOW, LOOP_MAX_REPEATS, type SignedStep } from './loop-detection.js';
 import { generationLimiter } from './generation-limit.js';
+import type { PermissionPosture } from './permissions.js';
 import { readFile, readFile as readFileAsync, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, relative } from 'path';
 import { existsSync, readFileSync } from 'fs';
@@ -241,6 +242,8 @@ export class Agent {
   private runLock = false;
   private effort: EffortLevel = 'medium';
   private modelStick = false; // when true, mode switches don't change the model
+  /** How much the user wants to be asked. Cycled with Shift+Tab in the TUI. */
+  private posture: PermissionPosture = 'manual';
   private openaiBackend = false; // true when using the OpenAIChatClient adapter
   /** Models the direct (openai-backend) endpoint actually serves. Empty when
    *  the gateway is the primary transport, since it fronts the whole fleet. */
@@ -316,6 +319,25 @@ export class Agent {
   }
 
   /** Enter plan mode — thinking ON, best reasoning model from roster (unless model_stick is on) */
+  /**
+   * The posture in force for a turn.
+   *
+   * `auto_allow` is the legacy option name used by the eval harness, goal mode
+   * and `-p`, all of which run unattended — it maps to `auto`. Otherwise the
+   * agent's own posture applies, which the TUI cycles with Shift+Tab.
+   */
+  private postureFor(mode: PermissionMode): PermissionPosture {
+    return mode === 'auto_allow' ? 'auto' : this.posture;
+  }
+
+  getPosture(): PermissionPosture {
+    return this.posture;
+  }
+
+  setPosture(posture: PermissionPosture): void {
+    this.posture = posture;
+  }
+
   enterPlanMode(): { model: string } {
     this.mode = 'plan';
     this.previousModel = this.modelManager.getCurrentModel();
@@ -1328,11 +1350,16 @@ export class Agent {
             earlyResults.push({ idx: i, name, args, result: { success: false, output: '', error: `Tool "${name}" not allowed` } });
             continue;
           }
-          const decision = permissionMode === 'auto_allow'
-            ? 'allow'
-            : await this.permissions.check(name, args);
+          const verdict = await this.permissions.checkWithPosture(
+            this.postureFor(permissionMode), name, args,
+          );
+          const decision = typeof verdict === 'string' ? verdict : verdict.decision;
           if (decision === 'deny') {
-            earlyResults.push({ idx: i, name, args, result: { success: false, output: '', error: 'Permission denied' } });
+            // Carry the REASON when there is one. A bare "Permission denied"
+            // tells the model nothing it can act on, which is how plan mode
+            // used to end with the model quietly reimplementing a tool by hand.
+            const error = typeof verdict === 'string' ? 'Permission denied' : verdict.reason;
+            earlyResults.push({ idx: i, name, args, result: { success: false, output: '', error } });
             continue;
           }
           // PreToolUse hook — non-zero exit blocks the tool call.
@@ -1394,12 +1421,15 @@ export class Agent {
           yield { type: 'tool_call', name: toolName, args: toolArgs };
 
           const preview = this._previewToolCall(toolName, toolArgs);
-          const decision = permissionMode === 'auto_allow'
-            ? 'allow'
-            : await this.permissions.check(toolName, toolArgs, preview);
+          const verdict = await this.permissions.checkWithPosture(
+            this.postureFor(permissionMode), toolName, toolArgs, preview,
+          );
+          const decision = typeof verdict === 'string' ? verdict : verdict.decision;
           if (decision === 'deny') {
             yield { type: 'permission_denied', name: toolName };
-            const msg = `Permission denied: user rejected ${toolName}`;
+            const msg = typeof verdict === 'string'
+              ? `Permission denied: user rejected ${toolName}`
+              : verdict.reason;
             stepResults[i] = msg;
             this.context.addToolResult(toolName, msg, undefined, false);
             continue;

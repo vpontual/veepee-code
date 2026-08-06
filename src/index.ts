@@ -35,6 +35,7 @@ import { CheckpointManager } from './checkpoint.js';
 import { PreviewManager } from './preview.js';
 import { SyncManager } from './sync.js';
 import { registerRcRoutes, generateRcToken } from './rc.js';
+import { nextPosture, POSTURE_LABEL } from './permissions.js';
 import { checkForUpdate } from './update.js';
 import { resolveApiHost } from './api-host.js';
 
@@ -382,6 +383,7 @@ async function main() {
   agent.getContext().setRegisteredTools(registry.names());
   agent.getContext().setSystemPrompt(defaultModel);
   if (config.modelStick) agent.setModelStick(true);
+
 
   // Capture shell history for context (once on startup, if enabled)
   // Opt-IN, tested positively. `!== false` reads as default-on for a feature
@@ -796,6 +798,20 @@ async function main() {
   // Initialize TUI
   profiler.mark('api server started');
   const tui = new TUI();
+  // Shift+Tab cycles how much the agent asks: manual -> accept edits -> plan ->
+  // auto. Independent of which model is answering, so any posture works with
+  // either qwen or gemma.
+  tui.onCyclePosture(() => {
+    const next = nextPosture(agent.getPosture());
+    agent.setPosture(next);
+    const blurb: Record<string, string> = {
+      manual: 'asks before anything that is not read-only',
+      accept_edits: 'file edits go through; bash still asks',
+      plan: 'read-only — mutations are refused with a reason',
+      auto: 'everything except rm -rf / force-push / reset --hard',
+    };
+    tui.showInfo(`${theme.accent(`\u21e5 ${POSTURE_LABEL[next]}`)} ${theme.dim('— ' + blurb[next])}`);
+  });
   profiler.flush();
   tui.setProgressBar(config.progressBar);
   tui.start({

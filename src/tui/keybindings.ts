@@ -11,7 +11,8 @@ export type KeyAction =
   | 'cursorWordLeft' | 'cursorWordRight'
   | 'deleteBack' | 'deleteForward' | 'deleteWord' | 'deleteLine'
   | 'clearScreen' | 'copyResponse'
-  | 'tab';
+  | 'tab'
+  | 'cyclePosture';
 
 /** Raw key codes to named actions */
 export interface KeybindingMap {
@@ -45,6 +46,11 @@ const DEFAULT_BINDINGS: KeybindingMap = {
   '\x0c': 'clearScreen', // Ctrl+L
   '\x19': 'copyResponse', // Ctrl+Y
   '\t': 'tab',
+  // Shift+Tab cycles the permission posture: manual -> accept edits -> plan ->
+  // auto. Terminals send CSI Z ("back-tab") for this; a few send the modified
+  // form, so both are bound.
+  '\x1b[Z': 'cyclePosture',
+  '\x1b[27;2;9~': 'cyclePosture',
 
   // Scroll — chat viewport
   '\x1b[5~': 'scrollPageUp',     // PgUp

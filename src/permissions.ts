@@ -5,6 +5,55 @@ import { whileBlocked } from './agentstate.js';
 
 export type PermissionDecision = 'allow' | 'allow_always' | 'deny';
 
+/**
+ * How much the user wants to be asked. Cycled with Shift+Tab.
+ *
+ * Modelled on Claude Code's ring, with one deliberate difference noted below.
+ *
+ *  manual       — ask before anything that is not read-only. The default.
+ *  accept_edits — file edits go through; bash and everything else still ask.
+ *                 Edits are reviewable after the fact (checkpoints, git); a
+ *                 shell command is not.
+ *  plan         — mutations are REFUSED, with a reason the model can read.
+ *                 Not by hiding the tools: vcode used to filter them out of the
+ *                 tool list, and the model, unable to see bash, silently
+ *                 reproduced a script's output with ~50 read-only calls instead
+ *                 of saying it could not run it. A refusal it can read is
+ *                 recoverable; an absence is not.
+ *  auto         — approve everything except the DANGEROUS_PATTERNS.
+ *
+ * On `auto`: Claude Code keeps full bypass OUT of the shift-tab ring and behind
+ * a startup flag, on the reasoning that a keystroke away from "approve
+ * everything" is how accidents happen. This ring includes it because it was
+ * asked for, but the dangerous patterns — rm -rf, git push --force, git reset
+ * --hard, docker rm/prune — still prompt. That is the line: auto removes
+ * friction, it does not remove the guard on the handful of things that are not
+ * undoable.
+ */
+export type PermissionPosture = 'manual' | 'accept_edits' | 'plan' | 'auto';
+
+export const PERMISSION_POSTURES: PermissionPosture[] = ['manual', 'accept_edits', 'plan', 'auto'];
+
+/** Short labels for the status bar. */
+export const POSTURE_LABEL: Record<PermissionPosture, string> = {
+  manual: 'manual',
+  accept_edits: 'accept edits',
+  plan: 'plan',
+  auto: 'auto',
+};
+
+/** Next posture in the ring. */
+export function nextPosture(current: PermissionPosture): PermissionPosture {
+  const i = PERMISSION_POSTURES.indexOf(current);
+  return PERMISSION_POSTURES[(i + 1) % PERMISSION_POSTURES.length];
+}
+
+/** Tools that change the workspace. */
+export const EDIT_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'notebook_edit']);
+
+/** Tools plan mode refuses outright — edits plus anything that can run. */
+export const PLAN_REFUSED_TOOLS = new Set([...EDIT_TOOLS, 'bash', 'shell']);
+
 /** Split on shell separators so `ls; rm -rf /` is inspected segment by segment. */
 function segments(command: string): string[] {
   return command.split(/[;&|]+|\n/);
@@ -186,6 +235,44 @@ export class PermissionManager {
    *  so the user can decide knowing what's about to change. Caller computes
    *  the preview (e.g. unified diff for edit_file/write_file) — keeps this
    *  module agnostic of tool semantics. */
+  /**
+   * Apply the posture, then fall through to the normal check.
+   *
+   * Dangerous patterns are evaluated FIRST and are never skipped, in any
+   * posture including auto — those are the operations that cannot be undone by
+   * a checkpoint or a git reset, so the one prompt they cost is worth it.
+   *
+   * Returns a refusal REASON for plan mode rather than a bare 'deny', so the
+   * model is told why and can adjust — that is the whole difference between
+   * this and the tool-filtering it replaces.
+   */
+  async checkWithPosture(
+    posture: PermissionPosture,
+    toolName: string,
+    args: Record<string, unknown>,
+    preview?: string,
+  ): Promise<PermissionDecision | { decision: 'deny'; reason: string }> {
+    const dangerous = PermissionManager.DANGEROUS_PATTERNS.find(
+      p => p.tool === toolName && p.check(args)
+    );
+    if (dangerous) return this.prompt(toolName, args, dangerous.reason, preview);
+
+    if (posture === 'plan' && PLAN_REFUSED_TOOLS.has(toolName)) {
+      return {
+        decision: 'deny',
+        reason:
+          `${toolName} is not available in plan mode — you are working out an approach, not applying it. ` +
+          `Read, search and analyse freely, then present the plan and let the user switch mode to run it. ` +
+          `Do NOT reproduce by hand what this tool would have told you.`,
+      };
+    }
+
+    if (posture === 'auto') return 'allow';
+    if (posture === 'accept_edits' && EDIT_TOOLS.has(toolName)) return 'allow';
+
+    return this.check(toolName, args, preview);
+  }
+
   async check(toolName: string, args: Record<string, unknown>, preview?: string): Promise<PermissionDecision> {
     const dangerous = PermissionManager.DANGEROUS_PATTERNS.find(
       p => p.tool === toolName && p.check(args)
