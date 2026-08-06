@@ -798,8 +798,21 @@ export class Agent {
       }
     }
 
-    // Auto-detect planning intent and switch modes if needed
-    if (this.mode === 'act' && this.detectPlanningIntent(expandedMessage)) {
+    // Auto-detect planning intent and switch modes — OFF unless asked for.
+    //
+    // This used to be unconditional, and it moved people out of the mode they
+    // chose based on how they happened to phrase a sentence. A real session:
+    // "so how would we do a round of analyzing and fixing drift? can you do it"
+    // matched /\bhow\s+(should|would|could)\s+(we|i|you)\b/ and silently entered
+    // plan mode. Plan mode filters out bash — so when the model found the
+    // project's own pinky_drift.py and read it, it could not run it, and
+    // reproduced the script's output with ~50 read-only calls across seven
+    // machines. The user, who had never left Act, asked "why did you walk
+    // through it manually if there was a script?".
+    //
+    // Inferring a mode from wording is a guess about intent that the user has
+    // already stated explicitly by choosing a mode. `/plan` is one keystroke.
+    if (this.config.autoPlanMode && this.mode === 'act' && this.detectPlanningIntent(expandedMessage)) {
       const { model } = this.enterPlanMode();
       yield { type: 'model_switch', content: `Entering plan mode (thinking enabled)`, from: this.previousModel || '', to: model };
     }

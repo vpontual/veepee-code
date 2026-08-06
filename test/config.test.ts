@@ -130,3 +130,19 @@ describe('loadConfig', () => {
     expect(config.searxngUrl).toBe('http://10.0.153.99:8888');
   });
 });
+
+describe('autoPlanMode', () => {
+  // A regex over the user's wording used to move them out of the mode they had
+  // chosen. "so how would we do a round of analyzing and fixing drift?" matched
+  // /\bhow\s+(should|would|could)\s+(we|i|you)\b/ and silently entered plan
+  // mode, which filters out bash — so the model, having found and READ the
+  // project's own pinky_drift.py, could not run it and reproduced its output
+  // with ~50 read-only calls. The user had never left Act.
+  it('defaults to OFF', () => {
+    expect(loadConfig().autoPlanMode).toBe(false);
+  });
+
+  it('is a real boolean, so a user who wants it must ask by name', () => {
+    expect(typeof loadConfig().autoPlanMode).toBe('boolean');
+  });
+});

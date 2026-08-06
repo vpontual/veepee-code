@@ -46,6 +46,9 @@ export interface Config {
   remote: { url: string; apiKey: string; allow?: string[] } | null;
   langfuse: { secretKey: string; publicKey: string; host?: string } | null;
   shellHistoryContext: boolean;
+  /** Infer plan mode from the wording of a message. Off by default: it moved
+   *  users out of the mode they had chosen, and plan mode filters out bash. */
+  autoPlanMode: boolean;
   fleet: Array<{ name: string; url: string }>;
   hooks: HooksConfig | null;
   /** MCP servers, keyed by name. Tools register as `[mcp:<name>]` source.
@@ -162,6 +165,7 @@ export interface ConfigFile {
   remote?: { url: string; apiKey: string; allow?: string[] } | null;
   langfuse?: { secretKey: string; publicKey: string; host?: string } | null;
   shellHistoryContext?: boolean;
+  autoPlanMode?: boolean;
   fleet?: Array<{ name: string; url: string }>;
   hooks?: HooksConfig | null;
   mcpServers?: Record<string, McpServerConfig> | null;
@@ -198,6 +202,7 @@ const DEFAULTS: Config = {
   remote: null,
   langfuse: null,
   shellHistoryContext: false,
+  autoPlanMode: false,
   fleet: [],
   hooks: null,
   mcpServers: null,
@@ -437,6 +442,7 @@ export function loadConfig(configPath?: string): Config {
     remote: merged.remote ?? DEFAULTS.remote,
     langfuse: merged.langfuse ?? DEFAULTS.langfuse,
     shellHistoryContext: merged.shellHistoryContext ?? DEFAULTS.shellHistoryContext,
+    autoPlanMode: merged.autoPlanMode ?? DEFAULTS.autoPlanMode,
     fleet: merged.fleet ?? DEFAULTS.fleet,
     hooks: merged.hooks ?? DEFAULTS.hooks,
     mcpServers: merged.mcpServers ?? DEFAULTS.mcpServers,

@@ -114,9 +114,25 @@ describe('PermissionManager — fails closed and loads grants synchronously', ()
     // Entry points state their policy explicitly (-p approves, --serve denies,
     // TUI prompts) and auto_allow bypasses check() entirely, so reaching here
     // means someone forgot — answer no.
-    const perms = new PermissionManager();
-    const decision = await perms.check('bash', { command: 'echo hi' });
-    expect(decision).toBe('deny');
+    //
+    // HOME is isolated, as it is in the test below. Without that, PermissionManager
+    // loads the DEVELOPER'S OWN ~/.veepee-code/permissions.json, and this test
+    // passed only for as long as nobody had granted `bash` on the machine
+    // running it. It went red the day its author approved a bash command in
+    // their own vcode session — a test whose result depends on the tester's
+    // shell history is not a test.
+    const home = join(tmp, 'home-no-handler');
+    mkdirSync(join(home, '.veepee-code'), { recursive: true });
+    const prevHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const perms = new PermissionManager();
+      const decision = await perms.check('bash', { command: 'echo hi' });
+      expect(decision).toBe('deny');
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+    }
   });
 
   it('has saved grants available on the very first check, with no await gap', async () => {

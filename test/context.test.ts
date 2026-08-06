@@ -210,3 +210,39 @@ describe('ContextManager', () => {
     });
   });
 });
+
+describe('plan mode tells the model what it cannot do', () => {
+  // A real session: asked to analyse drift, the model found the project's own
+  // pinky_drift.py, READ it, and then reproduced its output with ~50 read-only
+  // calls across seven machines — because bash is filtered out of the tool list
+  // in plan mode and nothing told it the script could be run by asking. The
+  // user's reaction was "why did you walk through it manually if there was a
+  // script?". The prompt has to name the gate and the way through it.
+  const cm = new ContextManager({} as never);
+  cm.setMode('plan');
+  const prompt = cm.getSystemPrompt();
+
+  it('names the gated tools', () => {
+    for (const tool of ['bash', 'edit_file', 'write_file', 'multi_edit']) {
+      expect(prompt).toContain(tool);
+    }
+  });
+
+  it('says they are gated rather than missing', () => {
+    expect(prompt).toMatch(/gated, not missing/i);
+  });
+
+  it('points at exit_plan_mode as the way through', () => {
+    expect(prompt).toContain('exit_plan_mode');
+  });
+
+  it('tells the model not to reconstruct a command by hand', () => {
+    expect(prompt).toMatch(/Do not reconstruct by hand/i);
+  });
+
+  it('does not add any of this in act mode', () => {
+    const act = new ContextManager({} as never);
+    act.setMode('act');
+    expect(act.getSystemPrompt()).not.toMatch(/gated, not missing/i);
+  });
+});
