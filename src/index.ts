@@ -724,7 +724,17 @@ async function main() {
   let currentSessionId: string | null = null;
 
   if (rcEnabled) {
-    const rc = registerRcRoutes(agent, permissions, preview, parseInt(cliPort || String(config.apiPort), 10), apiToken);
+    // The factory gives the phone its own conversation rather than continuing
+    // whatever the laptop is mid-way through. Same tools, same model manager,
+    // same permissions — only the context is separate.
+    const rc = registerRcRoutes(
+      agent,
+      permissions,
+      preview,
+      parseInt(cliPort || String(config.apiPort), 10),
+      apiToken,
+      () => new Agent(config, registry, modelManager, permissions),
+    );
     rcHandler = rc.handleRequest;
     rcInstallPermissions = rc.installPermissionHandler;
     rcOnRemoteMessage = rc.onRemoteMessage;

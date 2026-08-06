@@ -136,13 +136,25 @@ describe('busy handling at the HTTP entry points', () => {
     expect(source).toContain("'AGENT_BUSY'");
   });
 
-  it('rc.ts rejects a busy /rc/send before acknowledging it', () => {
+  it('rc.ts decides whether /rc/send will queue BEFORE acknowledging it', () => {
+    // The contract changed: a busy agent used to mean 409, and now means the
+    // message is queued behind the running turn. What has to stay true is the
+    // ordering — busy-ness is determined before the ack, because the ack
+    // carries `queued` and would otherwise be lying about it.
     const source = readFileSync(new URL('../src/rc.ts', import.meta.url), 'utf-8');
-    const busy = source.indexOf('agent.isRunning()');
+    const busy = source.indexOf('agentFor().isRunning()');
     const ack = source.indexOf('// Acknowledge receipt immediately');
     expect(busy).toBeGreaterThan(-1);
     expect(ack).toBeGreaterThan(-1);
     expect(busy).toBeLessThan(ack);
+    expect(source).toContain('{ ok: true, queued: willQueue }');
+  });
+
+  it('never calls run() on a turn that is still queued', () => {
+    // Calling agent.run() early would throw AgentBusyError AND add the user
+    // message to the context of a turn that has not started.
+    const source = readFileSync(new URL('../src/rc.ts', import.meta.url), 'utf-8');
+    expect(source).toContain('turnQueue.stream(() => agentFor().run(data.message))');
   });
 
   it('the TUI bails out before echoing a message it cannot run', () => {

@@ -45,7 +45,7 @@ describe('Remote Connect source invariants', () => {
     const source = readFileSync(new URL('../src/rc.ts', import.meta.url), 'utf-8');
 
     expect(source).toContain("if (path === '/rc/abort' && req.method === 'POST')");
-    expect(source).toContain('agent.abort();');
+    expect(source).toContain('agentFor().abort();');
   });
 
   it('resets message history before replaying history after reconnect', () => {

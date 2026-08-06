@@ -11,6 +11,7 @@ import { readFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { TurnQueue } from './turn-queue.js';
+import { SessionRegistry } from './session-registry.js';
 
 /**
  * One generation at a time, across every remote message.
@@ -92,11 +93,23 @@ export function generateRcToken(): string {
 // ─── Route Registration ─────────────────────────────────────────────────────
 
 export function registerRcRoutes(
-  agent: Agent,
+  sharedAgent: Agent,
   permissions: PermissionManager,
   preview: PreviewManager,
   apiPort: number,
   apiToken: string | null,
+  /**
+   * Builds a fresh Agent for the remote client.
+   *
+   * When supplied, the phone gets its OWN conversation instead of continuing
+   * whatever the laptop is in the middle of — and `/clear` from one no longer
+   * wipes the other. When omitted, RC keeps sharing the TUI's agent exactly as
+   * before, so nothing that already works has to change to adopt this.
+   *
+   * They still share one working directory: every filesystem tool resolves
+   * against process.cwd(). Separate cwds per session is a much larger change.
+   */
+  createAgent?: () => Agent,
 ): {
   handleRequest: (req: IncomingMessage, res: ServerResponse, url: URL) => Promise<boolean>;
   installPermissionHandler: () => void;
@@ -108,6 +121,18 @@ export function registerRcRoutes(
   let remoteMessageHandler: ((message: string, events: AsyncGenerator<AgentEvent>) => void) | null = null;
   let remoteCommandHandler: ((message: string) => Promise<void>) | null = null;
   let sessionChangeHandler: ((sessionId: string, name: string) => void) | null = null;
+
+  /**
+   * The agent every remote request runs against.
+   *
+   * One registry entry today — the phone is one client — but going through the
+   * registry rather than holding an Agent directly is what makes adding a
+   * second thread a routing change instead of a rewrite. Falls back to the
+   * TUI's agent when no factory was given, preserving the old shared behaviour.
+   */
+  const sessions = createAgent ? new SessionRegistry(createAgent) : null;
+  const REMOTE_SESSION_ID = 'remote';
+  const agentFor = (): Agent => (sessions ? sessions.get(REMOTE_SESSION_ID) : sharedAgent);
 
   /** Check auth for RC routes */
   function checkAuth(req: IncomingMessage): boolean {
@@ -203,7 +228,7 @@ export function registerRcRoutes(
       res.write(': connected\n\n');
 
       // Replay recent message history so the client catches up
-      const recentMessages = agent.getContext().getAllMessages().slice(-20);
+      const recentMessages = agentFor().getContext().getAllMessages().slice(-20);
       for (const msg of recentMessages) {
         if (msg.role === 'user' && msg.content) {
           res.write(`event: history\ndata: ${JSON.stringify({ role: 'user', content: msg.content })}\n\n`);
@@ -251,7 +276,7 @@ export function registerRcRoutes(
       //
       // Slash commands are still exempt: they go to the command handler, not
       // the agent loop, so they never contend for a generation.
-      const willQueue = !data.message.trim().startsWith('/') && agent.isRunning();
+      const willQueue = !data.message.trim().startsWith('/') && agentFor().isRunning();
 
       // Acknowledge receipt immediately
       sendJson(res, 200, { ok: true, queued: willQueue });
@@ -269,14 +294,14 @@ export function registerRcRoutes(
       }
 
       // Run agent asynchronously — events broadcast to BOTH SSE clients and TUI
-      // (agent.run() adds the user message to context internally).
+      // (agentFor().run() adds the user message to context internally).
       // The isRunning() check above already answered on the wire, so a lost
       // race here can only be reported over SSE.
-      // Queued, not run. agent.run() is not called until the slot is free —
+      // Queued, not run. agentFor().run() is not called until the slot is free —
       // calling it early would throw AgentBusyError, and would also add the
       // message to context for a turn that has not started.
       if (willQueue) broadcast('queued', { ahead: turnQueue.state.waiting + 1 });
-      const eventStream: AsyncGenerator<AgentEvent> = turnQueue.stream(() => agent.run(data.message));
+      const eventStream: AsyncGenerator<AgentEvent> = turnQueue.stream(() => agentFor().run(data.message));
 
       // Broadcast user message to SSE clients immediately
       broadcast('user_message', { content: data.message });
@@ -307,7 +332,7 @@ export function registerRcRoutes(
 
     // Abort the current generation
     if (path === '/rc/abort' && req.method === 'POST') {
-      agent.abort();
+      agentFor().abort();
       sendJson(res, 200, { ok: true });
       return true;
     }
@@ -339,20 +364,20 @@ export function registerRcRoutes(
       }
 
       // Clear and restore
-      agent.clear();
+      agentFor().clear();
       if (session.knowledgeState) {
         const ks = await KnowledgeState.load(session.id);
-        if (ks) agent.getContext().setKnowledgeState(ks);
+        if (ks) agentFor().getContext().setKnowledgeState(ks);
       }
 
       const recentMessages = session.messages.slice(-6);
       for (const msg of recentMessages) {
         if (msg.role === 'user') {
-          agent.getContext().addUser(msg.content || '');
+          agentFor().getContext().addUser(msg.content || '');
         } else if (msg.role === 'assistant') {
-          agent.getContext().addAssistant(msg.content || '', msg.tool_calls);
+          agentFor().getContext().addAssistant(msg.content || '', msg.tool_calls);
         } else if (msg.role === 'tool') {
-          agent.getContext().addToolResult('resumed', msg.content || '');
+          agentFor().getContext().addToolResult('resumed', msg.content || '');
         }
       }
 
