@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { loadHarnessTasks, compareRuns, saveEvalResult, groupToolErrors, errorSignature, aggregateRuns, type HarnessEvalResult, type HarnessTaskResult } from '../src/harness-eval.js';
+import { symlinkSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { loadHarnessTasks, compareRuns, saveEvalResult, groupToolErrors, errorSignature, aggregateRuns, seedGitRepo, type HarnessEvalResult, type HarnessTaskResult } from '../src/harness-eval.js';
 
 let tmp: string;
 beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'vcode-heval-')); });
@@ -59,6 +61,53 @@ describe('loadHarnessTasks', () => {
   it('sorts by name so runs are ordered consistently', async () => {
     task('zebra'); task('alpha'); task('mid');
     expect((await loadHarnessTasks(tmp)).map((t) => t.name)).toEqual(['alpha', 'mid', 'zebra']);
+  });
+});
+
+describe('seedGitRepo', () => {
+  function workspace(): string {
+    const dir = join(tmp, 'ws');
+    mkdirSync(join(dir, 'src'), { recursive: true });
+    writeFileSync(join(dir, 'package.json'), '{"name":"ws"}');
+    writeFileSync(join(dir, 'src', 'a.js'), 'export const a = 1;\n');
+    return dir;
+  }
+
+  const git = (dir: string, ...args: string[]): string =>
+    execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+
+  it('makes git commands work in the workspace', () => {
+    const dir = workspace();
+    seedGitRepo(dir);
+    // This is the whole point: `git diff` used to exit 128 with "not a git
+    // repository", which the eval recorded as the agent's tool error.
+    expect(() => git(dir, 'diff')).not.toThrow();
+    expect(git(dir, 'status', '--short').trim()).toBe('');
+  });
+
+  it('shows the agent its own edits', () => {
+    const dir = workspace();
+    seedGitRepo(dir);
+    writeFileSync(join(dir, 'src', 'a.js'), 'export const a = 2;\n');
+    expect(git(dir, 'diff', '--stat')).toContain('src/a.js');
+  });
+
+  it('does not commit a node_modules SYMLINK', () => {
+    const dir = workspace();
+    // node_modules is symlinked in, not copied. `node_modules/` with a trailing
+    // slash matches only a directory, so git treated the symlink as a plain
+    // file and committed it — putting a bogus entry in every diff the agent read.
+    mkdirSync(join(tmp, 'real_modules'), { recursive: true });
+    symlinkSync(join(tmp, 'real_modules'), join(dir, 'node_modules'), 'dir');
+    seedGitRepo(dir);
+    const tracked = git(dir, 'ls-files').split('\n').filter(Boolean);
+    expect(tracked).not.toContain('node_modules');
+    expect(tracked).toEqual(['package.json', 'src/a.js']);
+    expect(git(dir, 'status', '--short').trim()).toBe('');
+  });
+
+  it('does not throw on a directory git cannot initialise', () => {
+    expect(() => seedGitRepo(join(tmp, 'does-not-exist'))).not.toThrow();
   });
 });
 
