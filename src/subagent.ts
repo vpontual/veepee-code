@@ -3,6 +3,7 @@ import type { Message, ToolCall } from 'ollama';
 import type { Config } from './config.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { ModelRoster } from './benchmark.js';
+import { generationLimiter } from './generation-limit.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -156,14 +157,17 @@ export class SubAgent {
 
     try {
       for (let turn = 0; turn < this.maxTurns; turn++) {
-        const response = await this.ollama.chat({
+        // Through the limiter: a background subagent generates while its parent
+        // carries on, and parallel() fans several out at once. Same model means
+        // same box, so those must not overlap.
+        const response = await generationLimiter.run(this.model, () => this.ollama.chat({
           model: this.model,
           messages,
           ...(tools.length > 0 ? { tools } : {}),
           stream: false,
           keep_alive: '30m',
           options: { num_predict: 1024 },
-        } as never) as unknown as { message: { content: string; tool_calls?: ToolCall[] } };
+        } as never)) as unknown as { message: { content: string; tool_calls?: ToolCall[] } };
 
         const content = response.message.content || '';
         const toolCalls = response.message.tool_calls || [];
@@ -276,14 +280,17 @@ class GenericSubAgent {
             elapsed: Date.now() - start, success: false, error: 'aborted',
           };
         }
-        const response = await this.ollama.chat({
+        // Through the limiter: a background subagent generates while its parent
+        // carries on, and parallel() fans several out at once. Same model means
+        // same box, so those must not overlap.
+        const response = await generationLimiter.run(this.model, () => this.ollama.chat({
           model: this.model,
           messages,
           ...(tools.length > 0 ? { tools } : {}),
           stream: false,
           keep_alive: '30m',
           options: { num_predict: 1024 },
-        } as never) as unknown as { message: { content: string; tool_calls?: ToolCall[] } };
+        } as never)) as unknown as { message: { content: string; tool_calls?: ToolCall[] } };
 
         const content = response.message.content || '';
         const toolCalls = response.message.tool_calls || [];

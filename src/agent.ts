@@ -15,6 +15,7 @@ import { previewEdit, previewWrite } from './diff.js';
 import { PLAN_DISABLED_TOOLS } from './tools/plan-gate.js';
 import type { CheckpointManager } from './checkpoint.js';
 import { signatureOf, detectStuckSignature, LOOP_WINDOW, LOOP_MAX_REPEATS, type SignedStep } from './loop-detection.js';
+import { generationLimiter } from './generation-limit.js';
 import { readFile, readFile as readFileAsync, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, relative } from 'path';
 import { existsSync, readFileSync } from 'fs';
@@ -951,7 +952,10 @@ export class Agent {
         };
 
         resetStallTimer();
-        const stream = await chatWithRetry();
+        // One generation per model at a time, across this agent and every
+        // subagent it spawns. The slot is held for the whole stream and
+        // released before tools run, so it never blocks the work between turns.
+        const stream = generationLimiter.stream(currentModel, chatWithRetry);
 
         for await (const chunk of stream) {
           resetStallTimer();
