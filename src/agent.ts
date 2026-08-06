@@ -92,8 +92,11 @@ export const FORCE_ACT_MIN_CHARS = 200;
 export const FORCE_ACT_NUDGE =
   '[SYSTEM] You produced analysis but called no tool — and this is an ACT task, so nothing ' +
   'has changed yet. Stop narrating and take your first concrete action NOW: call a tool ' +
-  '(read_file / edit_file / bash / grep / …) based on your best current hypothesis. If the task ' +
-  'is genuinely already complete, or truly needs no tools, say so explicitly in one short sentence instead.';
+  '(read_file / edit_file / bash / grep / …) based on your best current hypothesis. ' +
+  'If the task is genuinely already complete, or truly needs no tools, simply END YOUR TURN ' +
+  'and output nothing further. Do NOT explain that no tools were needed, do not mention this ' +
+  'instruction, and do not repeat your previous answer — the user never saw this message, so ' +
+  'any commentary about it is noise to them.';
 
 /** Pure decision: should the loop force one more ACT turn instead of accepting a no-tool-call
  *  completion? The DGX (and Qwen3.6 on vLLM) reason WITHOUT <think> tags, so on open-ended
@@ -104,12 +107,32 @@ export const FORCE_ACT_NUDGE =
 /**
  * A user message that asks for information rather than for work.
  *
- * Interrogatives, or an explicit request to explain. Deliberately NOT matching
- * a bare trailing "?" — "can you fix the failing test?" is a question in form
- * and a task in substance.
+ * NOT anchored to the start. The first version was, and "can you let me know
+ * what pinky is" sailed straight past it — the interrogative sits in the middle
+ * of the sentence, behind a politeness preamble. Anchoring only ever catches
+ * the phrasings someone thought to enumerate.
  */
-const LOOKUP_REQUEST =
-  /^\s*(what|who|when|where|which|why\s+is|why\s+are|why\s+does|how\s+does|how\s+do|is|are|does|do|did|can\s+you\s+(tell|explain)|tell\s+me|explain|describe|remind\s+me)\b/i;
+const ASKS_FOR_INFO =
+  /\b(what\s+(is|are|was|does|do)|what'?s|who\s+(is|are|owns)|when\s+(is|was|did)|where\s+(is|are)|which\s+\w+\s+(is|are)|why\s+(is|are|does|do|did)|how\s+(does|do|did)|tell\s+me|let\s+me\s+know|explain|describe|remind\s+me|do\s+you\s+know|any\s+idea|walk\s+me\s+through)\b/i;
+
+/**
+ * A yes/no question — "is the DGX up", "does newsfeed use pgvector".
+ *
+ * Anchored, unlike the pattern above, because these auxiliaries are far too
+ * common mid-sentence to be a signal anywhere else ("check if the DGX is up"
+ * is an instruction, and contains "is").
+ */
+const YES_NO_QUESTION = /^\s*(is|are|was|were|does|do|did|has|have|can|could|should|will|would)\s+\w/i;
+
+/**
+ * A user message asking for work to be done.
+ *
+ * Checked alongside the above because the two co-occur: "explain why the test
+ * fails and fix it" both asks and instructs, and the nudge should still fire.
+ * An imperative anywhere wins.
+ */
+const ASKS_FOR_WORK =
+  /\b(fix|add|implement|create|write|refactor|update|remove|delete|rename|migrate|build|install|run|debug|change|make|set\s+up|clean\s+up|commit|deploy|test\s+the|check\s+(if|whether|that))\b/i;
 
 /**
  * The model announcing work it has not done — the thing this nudge exists for.
@@ -154,7 +177,8 @@ export function shouldForceAct(opts: {
   if (opts.alreadyForced) return false;
   if (opts.content.trim().length < FORCE_ACT_MIN_CHARS) return false;
 
-  const askedForInfo = LOOKUP_REQUEST.test(opts.userMessage ?? '');
+  const msg = opts.userMessage ?? '';
+  const askedForInfo = (ASKS_FOR_INFO.test(msg) || YES_NO_QUESTION.test(msg)) && !ASKS_FOR_WORK.test(msg);
   const promisedAction = STATED_INTENT.test(opts.content);
   if (askedForInfo && !promisedAction) return false;
 

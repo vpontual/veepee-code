@@ -325,7 +325,7 @@ describe('Agent <think>-tag stream processing', () => {
 });
 
 // --- Tier 3 #1: force-act guard (shouldForceAct) ---
-import { shouldForceAct, FORCE_ACT_MIN_CHARS, shouldForceVerify, CODE_MUTATION_TOOLS } from '../src/agent.js';
+import { shouldForceAct, FORCE_ACT_MIN_CHARS, FORCE_ACT_NUDGE, shouldForceVerify, CODE_MUTATION_TOOLS } from '../src/agent.js';
 
 describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', () => {
   const long = 'x'.repeat(FORCE_ACT_MIN_CHARS);
@@ -408,6 +408,55 @@ describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', ()
 
   it('is not fooled by a bare trailing question mark on a task', () => {
     expect(shouldForceAct({ ...base, userMessage: 'can you fix the failing test?' })).toBe(true);
+  });
+
+  // The first fix anchored the pattern to the start of the message, and this
+  // phrasing walked straight past it — the interrogative sits mid-sentence,
+  // behind a politeness preamble. Anchoring only catches phrasings someone
+  // thought to enumerate.
+  for (const q of [
+    'can you let me know what pinky is',
+    'could you tell me what the fleet looks like',
+    'do you know what veetv runs on',
+    'any idea what pinky is',
+    'walk me through the auth flow',
+    "what's the DGX serving",
+    'remind me where the inventory lives',
+  ]) {
+    it(`does NOT fire for ${JSON.stringify(q)}`, () => {
+      expect(shouldForceAct({ ...base, content: PINKY_ANSWER, userMessage: q })).toBe(false);
+    });
+  }
+
+  // Asking AND instructing in one breath still deserves the nudge.
+  for (const q of [
+    'explain why the cart test fails and fix it',
+    'tell me what pinky is, then add a section to it',
+    'describe the bug and write a test for it',
+  ]) {
+    it(`STILL fires for ${JSON.stringify(q)}`, () => {
+      expect(shouldForceAct({ ...base, content: PINKY_ANSWER, userMessage: q })).toBe(true);
+    });
+  }
+});
+
+describe('FORCE_ACT_NUDGE wording', () => {
+  // The model obeyed the old escape hatch literally and printed "The task is
+  // already complete — I answered your question about Pinky in the previous
+  // response. No tools needed." to a user who never saw the instruction it was
+  // responding to. The escape hatch must ask for silence, not for a sentence.
+  it('asks the model to end its turn rather than explain itself', () => {
+    expect(FORCE_ACT_NUDGE).toMatch(/END YOUR TURN/);
+    expect(FORCE_ACT_NUDGE).toMatch(/output nothing further/i);
+  });
+
+  it('does not ask the model to say anything to the user', () => {
+    expect(FORCE_ACT_NUDGE).not.toMatch(/say so/i);
+    expect(FORCE_ACT_NUDGE).toMatch(/Do NOT explain/);
+  });
+
+  it('tells the model the user never saw the instruction', () => {
+    expect(FORCE_ACT_NUDGE).toMatch(/the user never saw this message/i);
   });
 });
 
