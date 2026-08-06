@@ -10,6 +10,18 @@ import { safeTokenEquals } from './auth.js';
 import { readFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { TurnQueue } from './turn-queue.js';
+
+/**
+ * One generation at a time, across every remote message.
+ *
+ * Module-scoped rather than per-request: the whole point is that two requests
+ * share it. The TUI still calls agent.run() directly and still gets
+ * AgentBusyError if it races a queued turn — the person at the keyboard can see
+ * that the agent is working, so waiting silently would be the wrong default
+ * there.
+ */
+const turnQueue = new TurnQueue();
 
 // ─── Built web UI ──────────────────────────────────────────────────────────
 
@@ -229,17 +241,20 @@ export function registerRcRoutes(
       // before the ack so the phone shows a real failure, not a silent drop.
       // Slash commands are exempt: they go to the command handler, not the
       // agent loop.
-      if (!data.message.trim().startsWith('/') && agent.isRunning()) {
-        sendJson(res, 409, {
-          error: 'agent busy — a run is already in progress',
-          code: 'AGENT_BUSY',
-          retry_after_ms: 1000,
-        });
-        return true;
-      }
+      // A turn already in flight no longer means "your message is rejected".
+      //
+      // 409 was correct about the constraint — one generation at a time, which
+      // is not negotiable on a single DGX — but wrong about whose problem it
+      // is. It made the person holding the phone watch the transcript and
+      // resend at the right moment. The message is queued instead, and the
+      // queue depth is broadcast so the UI can say where it sits.
+      //
+      // Slash commands are still exempt: they go to the command handler, not
+      // the agent loop, so they never contend for a generation.
+      const willQueue = !data.message.trim().startsWith('/') && agent.isRunning();
 
       // Acknowledge receipt immediately
-      sendJson(res, 200, { ok: true });
+      sendJson(res, 200, { ok: true, queued: willQueue });
 
       if (data.message.trim().startsWith('/')) {
         broadcast('user_message', { content: data.message });
@@ -257,13 +272,11 @@ export function registerRcRoutes(
       // (agent.run() adds the user message to context internally).
       // The isRunning() check above already answered on the wire, so a lost
       // race here can only be reported over SSE.
-      let eventStream: AsyncGenerator<AgentEvent>;
-      try {
-        eventStream = agent.run(data.message);
-      } catch (err) {
-        broadcast('error_event', { error: err instanceof Error ? err.message : String(err) });
-        return true;
-      }
+      // Queued, not run. agent.run() is not called until the slot is free —
+      // calling it early would throw AgentBusyError, and would also add the
+      // message to context for a turn that has not started.
+      if (willQueue) broadcast('queued', { ahead: turnQueue.state.waiting + 1 });
+      const eventStream: AsyncGenerator<AgentEvent> = turnQueue.stream(() => agent.run(data.message));
 
       // Broadcast user message to SSE clients immediately
       broadcast('user_message', { content: data.message });

@@ -14,7 +14,8 @@ export type ServerEvent =
   | { type: 'tool_result'; name: string; success: boolean; output: string }
   | { type: 'done'; evalCount?: number; tokensPerSecond?: number }
   | { type: 'error_event'; error: string }
-  | { type: 'permission_request'; callId: string; tool: string; args?: Record<string, unknown> };
+  | { type: 'permission_request'; callId: string; tool: string; args?: Record<string, unknown> }
+  | { type: 'queued'; ahead: number };
 
 /** Every SSE event name the server can send, mapped to its payload shape. */
 export const EVENT_NAMES = [
@@ -26,6 +27,7 @@ export const EVENT_NAMES = [
   'done',
   'error_event',
   'permission_request',
+  'queued',
 ] as const;
 
 export type EventName = (typeof EVENT_NAMES)[number];
@@ -38,6 +40,16 @@ export type Entry =
   | { kind: 'error'; text: string };
 
 export type ConnectionState = 'connecting' | 'live' | 'retrying' | 'unauthorized';
+
+/**
+ * How many turns are ahead of yours, or null when nothing is queued.
+ *
+ * There is exactly one generation in flight at a time — a single DGX Spark
+ * whose speed comes from speculative decoding that is fastest at batch size 1.
+ * So a queue is expected, not an error, and saying where you are in it is the
+ * difference between "waiting" and "broken".
+ */
+export type QueuedAhead = number | null;
 
 export interface PendingPermission {
   callId: string;

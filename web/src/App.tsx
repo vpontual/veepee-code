@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RcClient, storedToken, send, abort, respondToPermission } from './client';
-import type { ConnectionState, Entry, PendingPermission, ServerEvent } from './protocol';
+import type { ConnectionState, Entry, PendingPermission, QueuedAhead, ServerEvent } from './protocol';
 import { Transcript } from './Transcript';
 import { Composer } from './Composer';
 
@@ -17,12 +17,16 @@ export function App() {
   const [state, setState] = useState<ConnectionState>('connecting');
   const [permission, setPermission] = useState<PendingPermission | null>(null);
   const [busy, setBusy] = useState(false);
+  const [queued, setQueued] = useState<QueuedAhead>(null);
   const clientRef = useRef<RcClient | null>(null);
 
   const apply = useCallback((event: ServerEvent) => {
     setEntries((prev) => reduce(prev, event));
     if (event.type === 'user_message') setBusy(true);
-    if (event.type === 'done' || event.type === 'error_event') setBusy(false);
+    if (event.type === 'queued') setQueued(event.ahead);
+    // Any output means our turn actually started, so the queue notice goes.
+    if (event.type === 'text' || event.type === 'tool_call') setQueued(null);
+    if (event.type === 'done' || event.type === 'error_event') { setBusy(false); setQueued(null); }
     if (event.type === 'permission_request') {
       setPermission({ callId: event.callId, tool: event.tool, args: event.args });
     }
@@ -72,6 +76,11 @@ export function App() {
     <div className="app">
       {header}
       <Transcript entries={entries} />
+      {queued !== null && (
+        <div className="queued" role="status">
+          waiting — {queued === 1 ? 'one turn' : `${queued} turns`} ahead of yours
+        </div>
+      )}
       {permission && (
         <div className="permission" role="alertdialog" aria-label="Permission request">
           <div className="permission__what">

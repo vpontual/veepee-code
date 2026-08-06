@@ -18,6 +18,36 @@ import { pathToFileUri } from '../lsp/uri.js';
  *  that inherited the pipe and may never release it. */
 const OUTPUT_FLUSH_GRACE_MS = 250;
 
+/**
+ * Accept a structured argument that arrived as a JSON string.
+ *
+ * Models serialise array and object arguments fairly often — some more than
+ * others, and the same model inconsistently within one session. Zod then
+ * rejects the call before `execute` ever runs, and the model gets
+ * "Expected array, received string", which it usually answers by sending the
+ * same thing again. Observed in the harness eval on multi_edit:
+ *
+ *   Invalid arguments for multi_edit: 'edits': Expected array, received string
+ *   (got string "[{\"old_string\": \"im…
+ *
+ * The intent there is unambiguous and the content is valid JSON, so parsing it
+ * costs nothing and saves a turn. A string that is NOT valid JSON is passed
+ * through untouched, so zod still produces its normal error rather than a
+ * confusing one about parsing.
+ */
+export function jsonish<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((value) => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return value;
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return value;
+    }
+  }, schema);
+}
+
 export function registerCodingTools(ignoreManager?: IgnoreManager, fileTracker?: FileTracker, lspManager?: LspManager): ToolDef[] {
   return [
     createReadFileTool(ignoreManager, fileTracker, lspManager),
@@ -580,11 +610,11 @@ function createMultiEditTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
     description: 'Apply multiple edits to a single file, atomically. You must read_file it first in this session. Every edit is checked against the running content and ALL failures are reported together; if any would fail, nothing is written. Use for multi-step refactors on one file to avoid partial writes.',
     schema: z.object({
       path: z.string().describe('File path to edit'),
-      edits: z.array(z.object({
+      edits: jsonish(z.array(z.object({
         old_string: z.string().describe('Exact string to find and replace'),
         new_string: z.string().describe('Replacement string'),
         replace_all: z.boolean().optional().default(false).describe('Replace all occurrences instead of requiring uniqueness'),
-      })).min(1).describe('List of edits to apply in order against the running content'),
+      })).min(1)).describe('List of edits to apply in order against the running content'),
     }),
     execute: async (params) => {
       try {
