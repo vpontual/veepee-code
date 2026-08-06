@@ -358,6 +358,57 @@ describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', ()
   it('does NOT fire on empty content', () => {
     expect(shouldForceAct({ ...base, content: '' })).toBe(false);
   });
+
+  // Observed in real use: "what is pinky" earned a correct ~400-char answer
+  // needing no tools, tripped the length test, got nudged, and the model —
+  // having already answered — read three unrelated files out of the current
+  // directory and summarised them.
+  const PINKY_ANSWER =
+    "Pinky is VP's cross-machine, cross-LLM context system — a plain-markdown index that lets any AI " +
+    'assistant understand who VP is, his preferences, his machines, and his projects. It lives at ' +
+    '~/Nextcloud/pinky/ and includes an identity layer, device mirrors, a memory index and sync ' +
+    'infrastructure. The goal: portable, LLM-agnostic context so any agent can read it.';
+
+  it('does NOT fire when a lookup question got an answer with no stated intent', () => {
+    expect(shouldForceAct({ ...base, content: PINKY_ANSWER, userMessage: 'what is pinky' })).toBe(false);
+  });
+
+  for (const q of ['who owns this repo', 'explain the auth flow', 'describe the fleet', 'tell me about veetv', 'is the DGX up']) {
+    it(`does NOT fire for the lookup request ${JSON.stringify(q)}`, () => {
+      expect(shouldForceAct({ ...base, content: PINKY_ANSWER, userMessage: q })).toBe(false);
+    });
+  }
+
+  it('STILL fires when a lookup question is answered with intent but no action', () => {
+    // "why is this test failing" is a question in form and a task in substance.
+    // Announcing a plan and calling nothing is the exact stall this nudge is for.
+    expect(shouldForceAct({
+      ...base,
+      content: 'Let me check the test output first. ' + 'x'.repeat(FORCE_ACT_MIN_CHARS),
+      userMessage: 'why is the cart test failing',
+    })).toBe(true);
+  });
+
+  it('STILL fires on an imperative task that only got narration', () => {
+    expect(shouldForceAct({
+      ...base,
+      content: "I'll start by reading the migration runner. " + 'x'.repeat(FORCE_ACT_MIN_CHARS),
+      userMessage: 'add a rename operation to the migration runner',
+    })).toBe(true);
+  });
+
+  it('STILL fires on an imperative task with no intent markers either', () => {
+    // Not a lookup request, so the suppression never applies.
+    expect(shouldForceAct({ ...base, userMessage: 'fix the failing test' })).toBe(true);
+  });
+
+  it('keeps the old behaviour when no userMessage is supplied', () => {
+    expect(shouldForceAct(base)).toBe(true);
+  });
+
+  it('is not fooled by a bare trailing question mark on a task', () => {
+    expect(shouldForceAct({ ...base, userMessage: 'can you fix the failing test?' })).toBe(true);
+  });
 });
 
 // --- Daily-driver #1: self-repair force-verify guard (shouldForceVerify) ---

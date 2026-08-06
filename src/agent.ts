@@ -101,13 +101,64 @@ export const FORCE_ACT_NUDGE =
  *  calls, byte-identical files. This catches that: fire only in act mode, only when nothing
  *  was done yet this message, only once, and only for a substantive narration (not a terse
  *  reply). The nudge's escape hatch caps a false positive at one extra turn. */
+/**
+ * A user message that asks for information rather than for work.
+ *
+ * Interrogatives, or an explicit request to explain. Deliberately NOT matching
+ * a bare trailing "?" — "can you fix the failing test?" is a question in form
+ * and a task in substance.
+ */
+const LOOKUP_REQUEST =
+  /^\s*(what|who|when|where|which|why\s+is|why\s+are|why\s+does|how\s+does|how\s+do|is|are|does|do|did|can\s+you\s+(tell|explain)|tell\s+me|explain|describe|remind\s+me)\b/i;
+
+/**
+ * The model announcing work it has not done — the thing this nudge exists for.
+ *
+ * "I'll start by reading …", "Let me check …", "First I need to …". A narration
+ * that states intent and then calls no tool is a turn where nothing happened.
+ * An ANSWER has no such marker: it describes what is, not what it is about to do.
+ */
+// The apostrophes are REQUIRED on "I'll" and "let's". Without them the pattern
+// matches the ordinary words "ill" and "lets" — and the answer that exposed
+// this bug contains "a plain-markdown index that LETS any AI assistant…", which
+// made every suppression test fail on its first run.
+const STATED_INTENT =
+  /\b(i['’]ll\b|i\s+will\b|let\s+me\b|i['’]m\s+going\s+to\b|i\s+need\s+to\b|i\s+should\b|we\s+should\b|let['’]s\b|first,?\s+i\b|next,?\s+i\b|start\s+by\b|going\s+to\s+(check|look|read|run|search))/i;
+
+/** Pure decision: should the loop force one more ACT turn instead of accepting a no-tool-call
+ *  completion? The DGX (and Qwen3.6 on vLLM) reason WITHOUT <think> tags, so on open-ended
+ *  tasks the model narrates to the token cap and stops having changed nothing — zero tool
+ *  calls, byte-identical files. This catches that: fire only in act mode, only when nothing
+ *  was done yet this message, only once, and only for a substantive narration (not a terse
+ *  reply). The nudge's escape hatch caps a false positive at one extra turn.
+ *
+ *  Length alone was not enough. "what is pinky" earned a correct 400-character
+ *  answer needing no tools, tripped the length test, got nudged, and the model
+ *  — having already answered — invented work: it read three unrelated files out
+ *  of the current directory and summarised them. A good answer to a question is
+ *  long, so length is a proxy for "substantive", not for "a task went undone".
+ *
+ *  So a lookup request that produced no stated intent to act is now left alone.
+ *  Both conditions are required to suppress: "why is this test failing" is a
+ *  lookup in form, but if the model answers it with "let me check the logs" and
+ *  no tool call, that is exactly the stall worth nudging.
+ */
 export function shouldForceAct(opts: {
   mode: AgentMode; hasActedThisMessage: boolean; alreadyForced: boolean; content: string;
+  /** The user's message. Optional so existing callers keep compiling; when absent
+   *  the old length-only behaviour applies. */
+  userMessage?: string;
 }): boolean {
   if (opts.mode !== 'act') return false;
   if (opts.hasActedThisMessage) return false;
   if (opts.alreadyForced) return false;
-  return opts.content.trim().length >= FORCE_ACT_MIN_CHARS;
+  if (opts.content.trim().length < FORCE_ACT_MIN_CHARS) return false;
+
+  const askedForInfo = LOOKUP_REQUEST.test(opts.userMessage ?? '');
+  const promisedAction = STATED_INTENT.test(opts.content);
+  if (askedForInfo && !promisedAction) return false;
+
+  return true;
 }
 
 /** Tools that change code (leave the workspace in a state that ought to be verified). */
@@ -1123,7 +1174,7 @@ export class Agent {
         // Tier 3 #1: in ACT mode, if the model narrated without ever calling a tool, it
         // analyzed instead of acting (the no-<think> budget leak). Force one more turn to
         // act — once — rather than "completing" with nothing done.
-        if (shouldForceAct({ mode: this.mode, hasActedThisMessage, alreadyForced: forcedActOnce, content: fullContent })) {
+        if (shouldForceAct({ mode: this.mode, hasActedThisMessage, alreadyForced: forcedActOnce, content: fullContent, userMessage })) {
           forcedActOnce = true;
           this.context.addUser(FORCE_ACT_NUDGE);
           yield { type: 'info', content: 'Nudged: act instead of narrate' };
