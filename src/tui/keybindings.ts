@@ -115,6 +115,26 @@ function loadUserBindings(): void {
   } catch { /* ignore bad config */ }
 }
 
+/**
+ * Actions resolved through this map by the TUI.
+ *
+ * The rest of KeyAction is CONTEXTUAL: arrows mean history at the prompt,
+ * navigation inside a menu, and scroll when they arrive in a burst from a
+ * trackpad; deletion and cursor movement only apply while the input is
+ * focused. Those are decided in handleKey against live state, and rebinding
+ * them from a config file would not be meaningful.
+ *
+ * This set is what the TUI actually calls resolveKey for, so it is the honest
+ * boundary of what ~/.veepee-code/keybindings.json can change. Until this
+ * existed, NOTHING imported this module — the override file had never done
+ * anything, while the map, resolveKey and describeKey all read as though it did.
+ */
+export const REBINDABLE_ACTIONS: ReadonlySet<KeyAction> = new Set<KeyAction>([
+  'scrollUp', 'scrollDown', 'scrollPageUp', 'scrollPageDown',
+  'scrollTop', 'scrollBottom',
+  'clearScreen', 'copyResponse', 'cyclePosture',
+]);
+
 /** Resolve a raw keystroke to a named action */
 export function resolveKey(rawKey: string): KeyAction | null {
   loadUserBindings();

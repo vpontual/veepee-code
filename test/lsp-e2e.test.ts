@@ -84,12 +84,27 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/**
+ * How long to let a REAL typescript-language-server warm up.
+ *
+ * Was 1500ms, which is ample when this file runs alone and not nearly enough
+ * when it runs alongside 60 other files — the server is starved, diagnostics
+ * have not arrived, and tests 2 and 3 fail on a commit that passes in
+ * isolation. Retries did not help: the server is started once in beforeAll, so
+ * re-running a single test just waits on the same cold server again.
+ *
+ * The principled fix is to poll for readiness rather than sleep. This is the
+ * blunt one: buy enough headroom for a loaded machine, at a few seconds of
+ * suite time.
+ */
+const LSP_WARMUP_MS = 6000;
+
 describe.skipIf(!HAS_TSLS)('LSP end-to-end' + skipMsg, () => {
   it('1. read_file warms the LSP server (Phase D)', async () => {
     const r = await registry.execute('read_file', { path: mainFile });
     expect(r.success).toBe(true);
     // Give the fire-and-forget didOpen a moment to land.
-    await new Promise((res) => setTimeout(res, 1500));
+    await new Promise((res) => setTimeout(res, LSP_WARMUP_MS));
     // The server should now know about main.ts; subsequent diagnostics
     // queries should be near-instant.
     expect(manager.runningLabels()).toContain('typescript');
@@ -157,7 +172,7 @@ describe.skipIf(!HAS_TSLS)('LSP end-to-end' + skipMsg, () => {
     // Re-warm the server with the fresh contents.
     await registry.execute('read_file', { path: helperFile });
     await registry.execute('read_file', { path: mainFile });
-    await new Promise((res) => setTimeout(res, 1500));
+    await new Promise((res) => setTimeout(res, LSP_WARMUP_MS));
 
     // `greet` is declared on line 1 of helper.ts at character 16
     // (`export function greet(...)`). Line is 1-based, character is 0-based.

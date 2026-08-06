@@ -2,6 +2,7 @@ import React from 'react';
 import { render, type Instance } from 'ink';
 import { execSync } from 'child_process';
 import { App, type AppHandle } from './App.js';
+import { resolveKey, REBINDABLE_ACTIONS } from './keybindings.js';
 import { theme, icons } from './theme.js';
 import { enterAltScreen, exitAltScreen } from './screen.js';
 import { loadUserCommands } from '../user-commands.js';
@@ -696,13 +697,38 @@ export class TUI {
     const state = this.getState();
     if (!state) return;
 
-    // Shift+Tab — cycle the permission posture. Handled before every
-    // view-specific branch so it works no matter what is on screen, and never
-    // reaches the input buffer as text. Terminals send CSI Z for back-tab; the
-    // modified form is bound too because a few emit that instead.
-    if (key === '\x1b[Z' || key === '\x1b[27;2;9~') {
-      this.cyclePostureCb?.();
-      return;
+    // Global actions, resolved through keybindings.ts.
+    //
+    // This is the ONLY place the binding map is consulted, and it is why the
+    // map exists at all: until this call, nothing in the codebase imported
+    // that module, so ~/.veepee-code/keybindings.json — documented, parsed,
+    // merged over the defaults — had never changed a single keystroke.
+    //
+    // Only REBINDABLE_ACTIONS come through here. Everything else is contextual
+    // (an arrow is history at the prompt, navigation in a menu, and scroll in a
+    // trackpad burst) and stays below, decided against live state.
+    //
+    // Handled before every view-specific branch, so these work whatever is on
+    // screen and never land in the input buffer as text.
+    const action = resolveKey(key);
+    if (action && REBINDABLE_ACTIONS.has(action)) {
+      switch (action) {
+        case 'cyclePosture': this.cyclePostureCb?.(); return;
+        case 'clearScreen':
+          this.dispatch({ type: 'CLEAR_MESSAGES' });
+          // The raw handler also did this — Ctrl+L clears the agent's
+          // context, not just the screen. Dropping it would have made the
+          // key look like it worked while leaving the conversation intact.
+          this.clearHandler?.();
+          return;
+        case 'copyResponse': this.copyLastResponse(); return;
+        case 'scrollUp': this.dispatch({ type: 'SCROLL_UP', amount: 3 }); return;
+        case 'scrollDown': this.dispatch({ type: 'SCROLL_DOWN', amount: 3 }); return;
+        case 'scrollPageUp': this.dispatch({ type: 'SCROLL_UP', amount: 10 }); return;
+        case 'scrollPageDown': this.dispatch({ type: 'SCROLL_DOWN', amount: 10 }); return;
+        case 'scrollTop': this.dispatch({ type: 'SCROLL_TOP' }); return;
+        case 'scrollBottom': this.dispatch({ type: 'SCROLL_BOTTOM' }); return;
+      }
     }
 
     // Tree-view picker takes precedence over everything except global Ctrl+C.
@@ -921,11 +947,6 @@ export class TUI {
       return;
     }
 
-    // Ctrl+Y — copy last response to clipboard
-    if (key === '\x19') {
-      this.copyLastResponse();
-      return;
-    }
 
     // Ctrl+C
     if (key === '\x03') {
@@ -1184,35 +1205,10 @@ export class TUI {
     }
 
     // Ctrl+L — clear
-    if (key === '\x0c') {
-      this.dispatch({ type: 'CLEAR_MESSAGES' });
-      this.clearHandler?.();
-      return;
-    }
 
-    // Scroll: Shift+Up/Down, Ctrl+Up/Down, Page Up/Down, Home/End.
-    // Ctrl variants kept in sync with keybindings.ts DEFAULT_BINDINGS so
-    // user-customization (when wired in Phase 1) won't surprise users.
-    if (key === '\x1b[1;2A' || key === '\x1b[1;5A' || key === '\x1b[5~') {
-      const amount = key === '\x1b[5~' ? 10 : 3;
-      this.dispatch({ type: 'SCROLL_UP', amount });
-      return;
-    }
-    if (key === '\x1b[1;2B' || key === '\x1b[1;5B' || key === '\x1b[6~') {
-      const amount = key === '\x1b[6~' ? 10 : 3;
-      this.dispatch({ type: 'SCROLL_DOWN', amount });
-      return;
-    }
-    // Ctrl+Home / Ctrl+End — jump to top / bottom of chat. Plain Home/End
-    // remain for input cursor movement (handled later in this method).
-    if (key === '\x1b[1;5H') {
-      this.dispatch({ type: 'SCROLL_TOP' });
-      return;
-    }
-    if (key === '\x1b[1;5F') {
-      this.dispatch({ type: 'SCROLL_BOTTOM' });
-      return;
-    }
+    // Scroll and the other globals are resolved at the top of this method
+    // through keybindings.ts. Plain Home/End stay below for input cursor
+    // movement — they are contextual, not rebindable.
 
     // Arrow Up — model-completion menu navigates immediately; otherwise
     // buffer for burst-disambiguation (single = history, burst = wheel scroll).
