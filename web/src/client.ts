@@ -53,6 +53,19 @@ export class RcClient {
     this.source = null;
   }
 
+  /**
+   * Drop the stream and open a fresh one.
+   *
+   * Used after resuming a session: the server swaps the agent's context, but an
+   * already-open SSE connection replays nothing, so without this the phone
+   * would sit looking at the previous session's transcript.
+   */
+  reconnect(): void {
+    this.attempt = 0;
+    if (this.timer) clearTimeout(this.timer);
+    this.open();
+  }
+
   private open(): void {
     this.source?.close();
     this.handlers.onState(this.attempt === 0 ? 'connecting' : 'retrying');
@@ -97,6 +110,24 @@ async function post(path: string, token: string, body: unknown): Promise<Respons
     body: JSON.stringify(body),
   });
 }
+
+export interface SessionSummary {
+  id: string;
+  name: string;
+  messageCount: number;
+  updatedAt: string;
+  model: string;
+}
+
+export async function listSessions(token: string): Promise<SessionSummary[]> {
+  const res = await fetch('/rc/sessions', { headers: { authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`sessions: ${res.status}`);
+  const body = (await res.json()) as { sessions?: SessionSummary[] };
+  return body.sessions ?? [];
+}
+
+export const resumeSession = (token: string, sessionId: string) =>
+  post('rc/resume', token, { sessionId });
 
 export const send = (token: string, message: string) => post('rc/send', token, { message });
 export const abort = (token: string) => post('rc/abort', token, {});

@@ -138,6 +138,67 @@ body {
   overflow: auto;
 }
 
+/* ── sessions sheet ────────────────────────────────────────────────────── */
+.ghost {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.sheet {
+  border-bottom: 1px solid var(--line);
+  background: var(--raised);
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+.sheet__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  color: var(--dim);
+  font-size: 12px;
+  position: sticky;
+  top: 0;
+  background: var(--raised);
+}
+
+.sheet__bar button {
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  font: inherit;
+  font-size: 14px;
+}
+
+.sheet__note, .sheet__error { padding: 0 14px 12px; font-size: 13px; color: var(--dim); margin: 0; }
+.sheet__error { color: var(--bad); }
+
+.sheet__list { list-style: none; margin: 0; padding: 0 8px 8px; }
+
+.sheet__list button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  padding: 10px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sheet__list button:disabled { opacity: 0.5; }
+.sheet__name { color: var(--accent); }
+.sheet__meta { font-size: 11px; color: var(--dim); }
+
 /* ── queue notice ──────────────────────────────────────────────────────── */
 .queued {
   padding: 8px 14px;

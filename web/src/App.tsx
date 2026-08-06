@@ -3,6 +3,7 @@ import { RcClient, storedToken, send, abort, respondToPermission } from './clien
 import type { ConnectionState, Entry, PendingPermission, QueuedAhead, ServerEvent } from './protocol';
 import { Transcript } from './Transcript';
 import { Composer } from './Composer';
+import { Sessions } from './Sessions';
 
 const STATE_LABEL: Record<ConnectionState, string> = {
   connecting: 'connecting',
@@ -18,6 +19,7 @@ export function App() {
   const [permission, setPermission] = useState<PendingPermission | null>(null);
   const [busy, setBusy] = useState(false);
   const [queued, setQueued] = useState<QueuedAhead>(null);
+  const [showSessions, setShowSessions] = useState(false);
   const clientRef = useRef<RcClient | null>(null);
 
   const apply = useCallback((event: ServerEvent) => {
@@ -62,9 +64,20 @@ export function App() {
     setPermission(null);
   }, [permission, token]);
 
+  const onResumed = useCallback(() => {
+    // The server swapped the agent's context. Drop what is on screen and pull a
+    // fresh stream, which replays the resumed session's recent history.
+    setEntries([]);
+    setShowSessions(false);
+    setBusy(false);
+    setQueued(null);
+    clientRef.current?.reconnect();
+  }, []);
+
   const header = useMemo(() => (
     <header className="bar">
       <span className="logo">veepee<b>code</b></span>
+      <button className="ghost" onClick={() => setShowSessions((v) => !v)}>sessions</button>
       <span className={`state state--${state}`}>{STATE_LABEL[state]}</span>
       {busy && <button className="stop" onClick={onAbort}>stop</button>}
     </header>
@@ -75,6 +88,9 @@ export function App() {
   return (
     <div className="app">
       {header}
+      {showSessions && (
+        <Sessions token={token} onResumed={onResumed} onClose={() => setShowSessions(false)} />
+      )}
       <Transcript entries={entries} />
       {queued !== null && (
         <div className="queued" role="status">
