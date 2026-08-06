@@ -7,6 +7,33 @@ import { listSessions, findSession } from './sessions.js';
 import { KnowledgeState } from './knowledge.js';
 import { randomBytes } from 'crypto';
 import { safeTokenEquals } from './auth.js';
+import { readFileSync, existsSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+
+// ─── Built web UI ──────────────────────────────────────────────────────────
+
+/**
+ * Where vite put the bundle: dist/web, beside this compiled module.
+ *
+ * Resolved from import.meta.url rather than process.cwd(), because the agent
+ * chdirs into whatever project it is working on — a cwd-relative path here
+ * would find the UI only when vcode happened to be started from its own repo.
+ */
+const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), 'web');
+
+/** The only names servable from WEB_DIR. An allow-list, so no path can traverse. */
+const WEB_ASSETS = new Set(['app.js', 'app.css']);
+
+function readWebAsset(name: string): string | null {
+  const file = join(WEB_DIR, name);
+  if (!existsSync(file)) return null;
+  try {
+    return readFileSync(file, 'utf-8');
+  } catch {
+    return null;
+  }
+}
 
 // ─── SSE Client Management ─────────────────────────────────────────────────
 
@@ -110,11 +137,35 @@ export function registerRcRoutes(
   async function handleRequest(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
     const path = url.pathname;
 
-    // Serve web UI HTML
-    if (path === '/rc' && req.method === 'GET') {
+    // Serve the web UI.
+    //
+    // The built bundle when there is one, the legacy inline page otherwise —
+    // `npm install` in web/ is not something a plain `install.sh` does, and an
+    // RC that 404s because a build step was skipped is worse than an old UI.
+    if ((path === '/rc' || path === '/rc/') && req.method === 'GET') {
+      const bundled = readWebAsset('index.html');
       res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(getRcHtml(apiPort, !!apiToken));
+      res.end(bundled ?? getRcHtml(apiPort, !!apiToken));
       return true;
+    }
+
+    // Static assets for that bundle.
+    //
+    // Deliberately BEFORE the auth check: these are the empty app shell, which
+    // gives away nothing. Gating them would mean the browser cannot load the
+    // very screen a user needs in order to enter their token. Every route that
+    // returns or changes data stays behind auth below.
+    if (req.method === 'GET' && WEB_ASSETS.has(path.slice('/rc/'.length))) {
+      const name = path.slice('/rc/'.length);
+      const body = readWebAsset(name);
+      if (body) {
+        res.writeHead(200, {
+          'Content-Type': name.endsWith('.js') ? 'text/javascript' : 'text/css',
+          'Cache-Control': 'no-cache',
+        });
+        res.end(body);
+        return true;
+      }
     }
 
     // All other RC routes require auth

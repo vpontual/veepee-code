@@ -1,0 +1,244 @@
+/* Colours are the TUI's, so the phone and the terminal read as one tool. */
+:root {
+  --brand: #e8a87c;
+  --accent: #85c7f2;
+  --ok: #7ec8a0;
+  --bad: #e57373;
+  --warn: #ffd93d;
+  --bg: #14141c;
+  --raised: #1d1d29;
+  --user-bg: #2a2a4a;
+  --line: #2c2c3a;
+  --text: #e6e6ee;
+  --dim: #8b8b9c;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  -webkit-text-size-adjust: 100%;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  /* Keeps the composer clear of the home indicator on a phone. */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ── header ────────────────────────────────────────────────────────────── */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--raised);
+  padding-top: calc(10px + env(safe-area-inset-top));
+}
+
+.logo { color: var(--brand); letter-spacing: 0.02em; }
+.logo b { color: var(--accent); font-weight: 600; }
+
+.state { margin-left: auto; font-size: 12px; color: var(--dim); }
+.state--live { color: var(--ok); }
+.state--retrying { color: var(--warn); }
+.state--unauthorized { color: var(--bad); }
+
+.stop {
+  background: transparent;
+  border: 1px solid var(--bad);
+  color: var(--bad);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+}
+
+/* ── transcript ────────────────────────────────────────────────────────── */
+.transcript {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.empty { color: var(--dim); font-size: 13px; }
+
+.entry { white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+
+.entry--user {
+  background: var(--user-bg);
+  border-radius: 10px 10px 2px 10px;
+  padding: 8px 12px;
+  align-self: flex-end;
+  max-width: 85%;
+}
+
+.entry--assistant { padding: 0 2px; }
+
+.entry--assistant.is-streaming::after {
+  content: '▍';
+  color: var(--brand);
+  animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink { to { visibility: hidden; } }
+
+.entry--error {
+  color: var(--bad);
+  border-left: 2px solid var(--bad);
+  padding-left: 10px;
+  font-size: 13px;
+}
+
+/* ── tools ─────────────────────────────────────────────────────────────── */
+.tool {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--raised);
+  font-size: 13px;
+}
+
+.tool summary {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 7px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tool summary::-webkit-details-marker { display: none; }
+
+.tool__name { color: var(--accent); flex: none; }
+.tool__hint { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tool.ok  .tool__name { color: var(--ok); }
+.tool.bad .tool__name { color: var(--bad); }
+.tool.pending { opacity: 0.75; }
+
+.tool__output {
+  margin: 0;
+  padding: 0 10px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--dim);
+  max-height: 40vh;
+  overflow: auto;
+}
+
+/* ── permission ────────────────────────────────────────────────────────── */
+.permission {
+  border-top: 1px solid var(--warn);
+  background: var(--raised);
+  padding: 12px 14px;
+}
+
+.permission__what strong { color: var(--warn); }
+.permission__what pre {
+  margin: 6px 0 10px;
+  font-size: 12px;
+  color: var(--dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 28vh;
+  overflow: auto;
+}
+
+.permission__actions { display: flex; gap: 10px; }
+.permission__actions button {
+  flex: 1;
+  padding: 11px;
+  border-radius: 8px;
+  font: inherit;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+}
+.permission__actions .allow { border-color: var(--ok); color: var(--ok); }
+.permission__actions .deny  { border-color: var(--bad); color: var(--bad); }
+
+/* ── composer ──────────────────────────────────────────────────────────── */
+.composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--raised);
+}
+
+.composer textarea {
+  flex: 1;
+  resize: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+  /* 16px stops iOS Safari zooming the whole page on focus. */
+  font-size: 16px;
+  line-height: 1.4;
+  max-height: 160px;
+}
+
+.composer textarea:focus { outline: 1px solid var(--accent); }
+
+.composer button {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: none;
+  background: var(--brand);
+  color: #14141c;
+  font-size: 18px;
+}
+
+.composer button:disabled { opacity: 0.35; }
+
+/* ── token gate ────────────────────────────────────────────────────────── */
+.gate {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.gate p { color: var(--dim); font-size: 13px; margin: 0; }
+.gate code { color: var(--accent); }
+
+.gate input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--text);
+  padding: 12px;
+  font: inherit;
+  font-size: 16px;
+}
+
+.gate button {
+  padding: 12px;
+  border-radius: 8px;
+  border: none;
+  background: var(--brand);
+  color: #14141c;
+  font: inherit;
+}

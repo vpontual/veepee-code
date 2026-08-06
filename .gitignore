@@ -32,3 +32,6 @@ benchmarks/gates/
 benchmarks/corpus/
 .eval-grade-*/
 .veepee-worktrees/
+
+# Built web UI (produced by `cd web && npm run build`, lands in dist/)
+web/node_modules/

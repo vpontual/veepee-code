@@ -60,9 +60,16 @@ export function startApiServer(config: ApiConfig): { port: number; connectionCou
     }
 
     // Auth check — if token is configured, require Bearer token
-    // Skip auth for GET /rc (serves login page) and GET /rc/stream (has its own token check via query param)
+    //
+    // Exempt: GET /rc (the login page), GET /rc/stream (carries its own token as
+    // a query param, since EventSource cannot set headers), and the login
+    // page's own static assets. The assets are the empty app shell and hold no
+    // data — but without them the browser cannot render the screen on which the
+    // token is entered, so gating them makes the UI unreachable by design.
+    // Everything that reads or changes state stays behind the check.
     const reqPath = req.url?.split('?')[0] || '';
-    const skipAuth = (reqPath === '/rc' && req.method === 'GET') || (reqPath === '/rc/stream' && req.method === 'GET');
+    const RC_PUBLIC = new Set(['/rc', '/rc/', '/rc/app.js', '/rc/app.css', '/rc/stream']);
+    const skipAuth = req.method === 'GET' && RC_PUBLIC.has(reqPath);
     if (apiToken && !skipAuth) {
       const authHeader = req.headers.authorization || '';
       const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
