@@ -298,6 +298,77 @@ describe('multi_edit reports every failure at once', () => {
   });
 });
 
+describe('an OVER-indented needle is absorbed too', () => {
+  // read_file prints "   21      case \"add_column\":". Stripping the line number
+  // by eye can leave spaces behind, producing a needle indented MORE than the
+  // file. That direction used to bail out of the fuzzy path entirely and land in
+  // describeMiss — which located the match and handed it back for the model to
+  // retry, costing a whole turn. It was the most frequent tool error in the
+  // 15-task baseline, hitting five of eight tasks.
+
+  it('applies a needle indented deeper than the file', () => {
+    const r = apply(FILE,
+      '        case "add_column":\n          return `ALTER TABLE ${op.table} ADD COLUMN ${op.column}`;',
+      '        case "renamed":\n          return `RENAMED`;');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      // The file's own 4/6 indentation wins, not the needle's 8/10.
+      expect(r.updated).toContain('    case "renamed":');
+      expect(r.updated).toContain('      return `RENAMED`;');
+      expect(r.updated).not.toContain('        case "renamed":');
+    }
+  });
+
+  it('keeps the rest of the file byte-identical', () => {
+    const r = apply(FILE, '      default:', '      default: // fell through');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.updated).toBe(FILE.replace('    default:', '    default: // fell through'));
+    }
+  });
+
+  it('writes verbatim rather than mangling a replacement it cannot dedent', () => {
+    // The needle is the real region, over-indented by 4. But new_string's second
+    // line sits at column 0, so stripping 4 spaces from it would eat real
+    // characters. The shift is abandoned and new_string goes in as written —
+    // cosmetically wrong, which is what this path always did, and strictly
+    // better than corrupting the line.
+    const r = apply(FILE,
+      '        case "add_column":\n          return `ALTER TABLE ${op.table} ADD COLUMN ${op.column}`;',
+      '        case "renamed":\nreturn 2;');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.updated).toContain('\nreturn 2;');
+      expect(r.updated).toContain('  switch (op.type) {');   // rest of the file intact
+      expect(r.updated).toContain('      throw new Error("unknown");');
+    }
+  });
+
+  it('does not try to shift tabs-versus-spaces', () => {
+    // Whitespace normalization still matches these, so the edit applies — but
+    // neither indent is a prefix of the other, so no shift is invented. The
+    // replacement goes in as written rather than being guessed into tabs.
+    const src = '\tif (a) {\n\t\treturn 1;\n\t}\n';
+    const r = apply(src, '  if (a) {\n    return 1;\n  }', '  if (b) {\n    return 2;\n  }');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.updated).toBe('  if (b) {\n    return 2;\n  }\n');
+  });
+
+  it('still refuses an ambiguous over-indented match', () => {
+    const src = [
+      'function a() {',
+      '  return 1;',
+      '}',
+      'function b() {',
+      '  return 1;',
+      '}',
+      '',
+    ].join('\n');
+    const r = apply(src, '      return 1;', '      return 2;');
+    expect(r.ok).toBe(false);
+  });
+});
+
 describe('the file keeps its own indentation', () => {
   it('re-indents the replacement to the file, not to the model\'s guess', () => {
     // Whitespace-insensitive matching lets the needle be indented differently
@@ -331,10 +402,21 @@ describe('the file keeps its own indentation', () => {
 
   it('refuses to re-indent when the needle flattened the block', () => {
     const delta = uniformIndentDelta('  a\n    b', 'a\nb');
-    expect(delta).toBe(''); // 2 vs 4 — not uniform, so no reformat
+    expect(delta).toEqual({ indent: '', dedent: false }); // 2 vs 4 — not uniform, so no reformat
   });
 
   it('reports a uniform shift', () => {
-    expect(uniformIndentDelta('    a\n      b', '  a\n    b')).toBe('  ');
+    expect(uniformIndentDelta('    a\n      b', '  a\n    b')).toEqual({ indent: '  ', dedent: false });
+  });
+
+  it('reports a uniform shift in the other direction', () => {
+    // The needle is deeper than the file: the shift must be REMOVED from the
+    // replacement, not added. This used to return '' and leave new_string at
+    // the model's indentation.
+    expect(uniformIndentDelta('  a\n    b', '    a\n      b')).toEqual({ indent: '  ', dedent: true });
+  });
+
+  it('refuses to pick a side between tabs and spaces', () => {
+    expect(uniformIndentDelta('\ta', '  a')).toEqual({ indent: '', dedent: false });
   });
 });

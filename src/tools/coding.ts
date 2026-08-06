@@ -196,8 +196,16 @@ const indentOf = (line: string) => /^[ \t]*/.exec(line)?.[0] ?? '';
 export interface DeindentedMatch {
   startLine: number;
   endLine: number;
-  /** Add this to the needle's indentation to get the file's. */
+  /**
+   * The indentation difference between the needle and the file, as a string.
+   *
+   * With `dedent: false` it is ADDED to each replacement line (the file is more
+   * indented than the needle). With `dedent: true` it is REMOVED from each
+   * (the needle is more indented than the file).
+   */
   indentDelta: string;
+  /** True when indentDelta must be stripped rather than prepended. */
+  dedent: boolean;
 }
 
 /**
@@ -232,21 +240,45 @@ export function findDeindentedMatches(content: string, oldStr: string): Deindent
     // it uniformly would rewrite the block's structure, which in Python is a
     // behaviour change and everywhere else is an ugly diff nobody asked for.
     // Those fall through to describeMiss, which quotes the exact text instead.
+    // Both directions are handled. read_file prints numbered lines
+    // ("   31      case 'x':"), so a model rebuilding the original strips a
+    // prefix by eye: strip too much and the needle is UNDER-indented, strip too
+    // little and it is OVER-indented. Only the first used to be absorbed, and
+    // the second — the likelier slip, since leaving spaces behind is easier than
+    // eating real ones — fell through to describeMiss, which located the match
+    // and then handed it back for the model to retry. That round-trip was the
+    // largest avoidable cost in the harness eval.
     let delta: string | null = null;
+    let dedent = false;
     let uniform = true;
     for (let j = 0; j < needle.length; j++) {
       if (needle[j].trim() === '') continue;
       const fileIndent = indentOf(lines[i + j]);
       const needleIndent = indentOf(needle[j]);
-      // Only ADDING indentation is safe; if the file is less indented than the
-      // needle, re-indenting could dedent past column 0.
-      if (!fileIndent.startsWith(needleIndent)) { uniform = false; break; }
-      const d = fileIndent.slice(needleIndent.length);
-      if (delta === null) delta = d;
-      else if (d !== delta) { uniform = false; break; }
+
+      let d: string;
+      let thisDedent: boolean;
+      if (fileIndent.startsWith(needleIndent)) {
+        d = fileIndent.slice(needleIndent.length);
+        thisDedent = false;
+      } else if (needleIndent.startsWith(fileIndent)) {
+        d = needleIndent.slice(fileIndent.length);
+        thisDedent = true;
+      } else {
+        // Neither is a prefix of the other — tabs vs spaces, say. Re-indenting
+        // would be a guess about which the file wants.
+        uniform = false;
+        break;
+      }
+
+      // An empty delta is direction-agnostic, so it must not pin the direction
+      // for the lines that follow.
+      if (d === '') continue;
+      if (delta === null) { delta = d; dedent = thisDedent; continue; }
+      if (d !== delta || thisDedent !== dedent) { uniform = false; break; }
     }
-    if (!uniform || delta === null) continue;
-    out.push({ startLine: i, endLine: i + needle.length - 1, indentDelta: delta });
+    if (!uniform) continue;
+    out.push({ startLine: i, endLine: i + needle.length - 1, indentDelta: delta ?? '', dedent });
   }
   return out;
 }
@@ -259,28 +291,73 @@ export function findDeindentedMatches(content: string, oldStr: string): Deindent
  * block's structure, and re-indenting it uniformly would rewrite that structure
  * rather than restore it.
  */
-export function uniformIndentDelta(matched: string, needle: string): string {
+export function uniformIndentDelta(matched: string, needle: string): IndentOp {
   const a = matched.split('\n');
   const b = needle.split('\n');
   while (b.length > 1 && b[b.length - 1].trim() === '') b.pop();
-  if (a.length !== b.length) return '';
+  if (a.length !== b.length) return NO_INDENT_SHIFT;
   let delta: string | null = null;
+  let dedent = false;
   for (let i = 0; i < a.length; i++) {
     if (a[i].trim() === '' || b[i].trim() === '') continue;
     const ai = indentOf(a[i]);
     const bi = indentOf(b[i]);
-    if (!ai.startsWith(bi)) return '';
-    const d = ai.slice(bi.length);
-    if (delta === null) delta = d;
-    else if (d !== delta) return '';
+
+    // Both directions. The needle can be indented LESS than the file (the model
+    // stripped read_file's line numbers and took real spaces with them) or MORE
+    // (it left some behind). Only the first used to be corrected; the second
+    // returned '' and wrote new_string verbatim, silently pushing the region to
+    // the model's deeper indentation.
+    let d: string;
+    let thisDedent: boolean;
+    if (ai.startsWith(bi)) { d = ai.slice(bi.length); thisDedent = false; }
+    else if (bi.startsWith(ai)) { d = bi.slice(ai.length); thisDedent = true; }
+    else return NO_INDENT_SHIFT;   // tabs vs spaces — picking one would be a guess
+
+    if (d === '') continue;        // no shift on this line, so it pins no direction
+    if (delta === null) { delta = d; dedent = thisDedent; continue; }
+    if (d !== delta || thisDedent !== dedent) return NO_INDENT_SHIFT;
   }
-  return delta ?? '';
+  return delta === null ? NO_INDENT_SHIFT : { indent: delta, dedent };
 }
+
+/**
+ * An indentation shift between a needle and the region it matched.
+ *
+ * `dedent` says which way: false means add `indent` to the replacement, true
+ * means strip it. An empty `indent` means no shift at all.
+ */
+export interface IndentOp {
+  indent: string;
+  dedent: boolean;
+}
+
+export const NO_INDENT_SHIFT: IndentOp = { indent: '', dedent: false };
 
 /** Re-indent every non-blank line of a replacement by `delta`. */
 export function reindent(text: string, delta: string): string {
   if (!delta) return text;
   return text.split('\n').map((l) => (l.trim() === '' ? l : delta + l)).join('\n');
+}
+
+/**
+ * Strip `delta` from the front of every non-blank line, or refuse.
+ *
+ * Used when the needle was MORE indented than the file, so the replacement is
+ * too. Returns null unless every non-blank line genuinely starts with `delta` —
+ * if even one does not, stripping would eat real characters or dedent past
+ * column 0, and in Python that is a behaviour change rather than a cosmetic
+ * one. Refusing falls through to describeMiss, which is the old behaviour: a
+ * wasted turn, but never a corrupted file.
+ */
+export function dedentBy(text: string, delta: string): string | null {
+  if (!delta) return text;
+  const lines = text.split('\n');
+  for (const l of lines) {
+    if (l.trim() === '') continue;
+    if (!l.startsWith(delta)) return null;
+  }
+  return lines.map((l) => (l.trim() === '' ? l : l.slice(delta.length))).join('\n');
 }
 
 /**
@@ -395,11 +472,16 @@ export function applySingleEdit(
     // absorbs a formatting slip, it does not guess at intent.
     const indentMatches = findDeindentedMatches(content, oldStr);
     if (indentMatches.length === 1) {
-      const { startLine, endLine, indentDelta } = indentMatches[0];
-      const lines = content.split('\n');
-      const replacement = reindent(newStr, indentDelta);
-      const updated = [...lines.slice(0, startLine), ...replacement.split('\n'), ...lines.slice(endLine + 1)].join('\n');
-      return { ok: true, updated, matchCount: 1 };
+      const { startLine, endLine, indentDelta, dedent } = indentMatches[0];
+      const replacement = dedent ? dedentBy(newStr, indentDelta) : reindent(newStr, indentDelta);
+      // dedentBy refuses when the replacement does not uniformly carry the
+      // indentation being removed. Refusing means falling through to
+      // describeMiss rather than writing a file we had to guess at.
+      if (replacement !== null) {
+        const lines = content.split('\n');
+        const updated = [...lines.slice(0, startLine), ...replacement.split('\n'), ...lines.slice(endLine + 1)].join('\n');
+        return { ok: true, updated, matchCount: 1 };
+      }
     }
     return { ok: false, error: describeMiss(content, oldStr, relPathForErrors) };
   }
@@ -429,10 +511,17 @@ export function applySingleEdit(
     const lineStart = content.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
     const prefix = content.slice(lineStart, start);
     const atLineStart = /^[ \t]*$/.test(prefix);
-    const delta = atLineStart
+    const op = atLineStart
       ? uniformIndentDelta(prefix + content.slice(start, end), oldStr)
-      : '';
-    updated = updated.slice(0, start) + (delta ? reindent(newStr, delta) : newStr) + updated.slice(end);
+      : NO_INDENT_SHIFT;
+    // When a dedent cannot be applied cleanly — some replacement line does not
+    // carry the indentation being stripped — write new_string verbatim, which is
+    // what this path did for every dedent before. Cosmetically wrong beats
+    // turning an edit that used to succeed into a failure.
+    const shifted = op.indent
+      ? (op.dedent ? dedentBy(newStr, op.indent) : reindent(newStr, op.indent))
+      : null;
+    updated = updated.slice(0, start) + (shifted ?? newStr) + updated.slice(end);
   }
   return { ok: true, updated, matchCount: targets.length };
 }
