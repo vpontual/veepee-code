@@ -494,6 +494,9 @@ describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', ()
       ['walk me through the auth flow', 'veeauth issues an Ed25519 token; apps verify it locally.'],
       ['any idea what pinky is', "VP's portable context system."],
       ['explain the gravity engine', 'It scores clustered articles by embedding similarity.'],
+      // "make sense" is not a request to make anything.
+      ['does that make sense?', 'Yes — the gate runs before the commit.'],
+      ['make sense?', 'It does.'],
     ] as const) {
       it(`stays quiet for ${JSON.stringify(msg)}`, () => {
         expect(reply.length).toBeLessThan(FORCE_ACT_MIN_CHARS);
@@ -503,6 +506,11 @@ describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', ()
 
     it('stays quiet on a long answer to a question with no promise to act', () => {
       expect(shouldForceAct({ ...base, content: PINKY_ANSWER, userMessage: 'what is pinky' })).toBe(false);
+    });
+
+    // The carve-out is only for the phrase, not the verb.
+    it('still fires for a real "make" request', () => {
+      expect(shouldForceAct({ ...base, content: 'Sure.', userMessage: 'make the header sticky' })).toBe(true);
     });
   });
 });

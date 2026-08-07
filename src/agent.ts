@@ -139,9 +139,14 @@ const YES_NO_QUESTION = /^\s*(is|are|was|were|does|do|did|has|have|can|could|sho
  * Checked alongside the above because the two co-occur: "explain why the test
  * fails and fix it" both asks and instructs, and the nudge should still fire.
  * An imperative anywhere wins.
+ *
+ * "make sense" is carved out. It is not a request to make anything — "does that
+ * make sense?" is the most ordinary thing a user says mid-conversation, and once
+ * a work request fires the nudge at any length (see `shouldForceAct`), letting
+ * that phrase count as an imperative nudges a plain "Yes, exactly."
  */
 const ASKS_FOR_WORK =
-  /\b(fix|add|implement|create|write|refactor|update|remove|delete|rename|migrate|build|install|run|debug|change|make|set\s+up|clean\s+up|commit|deploy|test\s+the|check\s+(if|whether|that))\b/i;
+  /\b(fix|add|implement|create|write|refactor|update|remove|delete|rename|migrate|build|install|run|debug|change|make(?!\s+sense\b)|set\s+up|clean\s+up|commit|deploy|test\s+the|check\s+(if|whether|that))\b/i;
 
 /**
  * The model announcing work it has not done — the thing this nudge exists for.
