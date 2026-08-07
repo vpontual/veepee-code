@@ -347,16 +347,16 @@ describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', ()
   it('does NOT fire in chat mode', () => {
     expect(shouldForceAct({ ...base, mode: 'chat' })).toBe(false);
   });
-  it('does NOT fire on a terse reply (below the char threshold)', () => {
+  it('does NOT fire on a terse reply when neither side mentioned work', () => {
     expect(shouldForceAct({ ...base, content: 'x'.repeat(FORCE_ACT_MIN_CHARS - 1) })).toBe(false);
   });
-  it('fires exactly at the threshold boundary', () => {
+  it('fires exactly at the length-fallback boundary', () => {
     expect(shouldForceAct({ ...base, content: 'x'.repeat(FORCE_ACT_MIN_CHARS) })).toBe(true);
   });
   it('does NOT fire on whitespace-padded short content (trims first)', () => {
     expect(shouldForceAct({ ...base, content: '   hi   ' + ' '.repeat(FORCE_ACT_MIN_CHARS) })).toBe(false);
   });
-  it('does NOT fire on empty content', () => {
+  it('does NOT fire on empty content when nothing was asked of it', () => {
     expect(shouldForceAct({ ...base, content: '' })).toBe(false);
   });
 
@@ -439,6 +439,72 @@ describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', ()
       expect(shouldForceAct({ ...base, content: PINKY_ANSWER, userMessage: q })).toBe(true);
     });
   }
+
+  // The Nightly Engineer produced nothing on five consecutive nights
+  // (2026-08-03..07). These are the VERBATIM job results from
+  // /srv/vcode-home/dispatch.db on archman: a promise to act, no tool call, a ~2s
+  // run, a byte-identical workspace. Every one was under the 200-char floor, so
+  // the floor — which ran before the intent test — threw them away.
+  describe('terse narration is a stall, not a completion (barren nights)', () => {
+    const NIGHTLY_RETRY =
+      'You previously produced NO file change. Do it NOW: pick ONE concrete critical bug ' +
+      'fix or a small user-facing improvement, EDIT at least one source file to implement ' +
+      'it, and write NIGHTLY_REPORT.md (sections: Purpose, Change, Why it\'s valuable, How ' +
+      'to test, Risk, Subject). Be surgical, act every step, and make real edits before ' +
+      'ending your turn.';
+
+    for (const stall of [
+      'Let me explore the project first.',                              // 33 chars
+      'Let me explore the project first to find a real issue to fix.',  // 61 chars
+      'Let me explore the repository to understand what we\'re working with.',
+      "I'll start by reading the README.",
+    ]) {
+      it(`fires on ${JSON.stringify(stall)} (${stall.length} chars)`, () => {
+        expect(stall.length).toBeLessThan(FORCE_ACT_MIN_CHARS); // the floor would have blocked it
+        expect(shouldForceAct({ ...base, content: stall, userMessage: NIGHTLY_RETRY })).toBe(true);
+      });
+    }
+
+    it('fires on a stated intent even with no userMessage at all', () => {
+      expect(shouldForceAct({ ...base, content: 'Let me explore the project first.' })).toBe(true);
+    });
+
+    // Observed too: the model returns an EMPTY completion with zero tool calls and
+    // the loop books it as a finished turn. Nothing is more obviously undone.
+    it('fires on an empty completion when the user asked for work', () => {
+      expect(shouldForceAct({ ...base, content: '', userMessage: 'fix the failing test' })).toBe(true);
+    });
+    it('fires on an empty completion for the nightly prompt', () => {
+      expect(shouldForceAct({ ...base, content: '', userMessage: NIGHTLY_RETRY })).toBe(true);
+    });
+  });
+
+  // The nudge firing on ordinary conversation is the regression a88545a/744569a
+  // fixed. Dropping the length floor must not bring it back: these all have SHORT
+  // replies, which the floor used to suppress for the wrong reason.
+  describe('does not fire on ordinary short exchanges', () => {
+    for (const [msg, reply] of [
+      ['thanks!', "You're welcome."],
+      ['hi', 'Hello — what are we working on?'],
+      ['what is pinky', 'A cross-machine context system.'],
+      ['is the DGX up', 'Yes, it is serving Qwen3.6-35B.'],
+      ['who owns this repo', 'VP does.'],
+      ["what's the DGX serving", 'Qwen/Qwen3.6-35B-A3B-FP8.'],
+      ['do you know what veetv runs on', 'A Raspberry Pi 5.'],
+      ['walk me through the auth flow', 'veeauth issues an Ed25519 token; apps verify it locally.'],
+      ['any idea what pinky is', "VP's portable context system."],
+      ['explain the gravity engine', 'It scores clustered articles by embedding similarity.'],
+    ] as const) {
+      it(`stays quiet for ${JSON.stringify(msg)}`, () => {
+        expect(reply.length).toBeLessThan(FORCE_ACT_MIN_CHARS);
+        expect(shouldForceAct({ ...base, content: reply, userMessage: msg })).toBe(false);
+      });
+    }
+
+    it('stays quiet on a long answer to a question with no promise to act', () => {
+      expect(shouldForceAct({ ...base, content: PINKY_ANSWER, userMessage: 'what is pinky' })).toBe(false);
+    });
+  });
 });
 
 describe('FORCE_ACT_NUDGE wording', () => {

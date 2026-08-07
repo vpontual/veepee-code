@@ -86,7 +86,15 @@ export type AgentMode = 'act' | 'plan' | 'chat';
 export type EffortLevel = 'low' | 'medium' | 'high';
 export type PermissionMode = 'interactive' | 'auto_allow';
 
-/** Minimum narration length (chars) that counts as "analyzed instead of acting". */
+/**
+ * Fallback narration length (chars) that counts as "analyzed instead of acting".
+ *
+ * This is no longer the primary test — intent is (see `shouldForceAct`). It only
+ * decides the leftover case where neither the user's message nor the model's reply
+ * says anything about work: no request to act, no promise to act. There, length is
+ * the only remaining hint that a turn was substantive rather than conversational,
+ * so a short "You're welcome." is still left alone.
+ */
 export const FORCE_ACT_MIN_CHARS = 200;
 
 /** Injected when the model narrates in ACT mode without calling any tool (Tier 3 #1). */
@@ -166,24 +174,50 @@ const STATED_INTENT =
  *  Both conditions are required to suppress: "why is this test failing" is a
  *  lookup in form, but if the model answers it with "let me check the logs" and
  *  no tool call, that is exactly the stall worth nudging.
+ *
+ *  The length floor USED to run first, and that made it the real gate: nothing
+ *  shorter than 200 characters could ever be nudged, whatever it said. The 35B's
+ *  failure mode moved — it stopped narrating to the token cap and started stalling
+ *  in one line. The Nightly Engineer's five barren nights (2026-08-03..07) are
+ *  literally these stored job results: "Let me explore the project first." (33 B)
+ *  and "Let me explore the project first to find a real issue to fix." (61 B), each
+ *  a ~2s run with zero tool calls and a byte-identical workspace. Both are pure
+ *  STATED_INTENT — the exact signal this function already computes — and both were
+ *  thrown away by a length test applied before anyone looked at them.
+ *
+ *  So intent leads and length is the fallback. A promise to act, or a user who
+ *  plainly asked for work, is a stall at ANY length (including an empty reply,
+ *  which is a stall by definition). Length only decides the residual case where
+ *  neither side mentioned work at all — a plain conversational exchange — which is
+ *  what the floor was actually protecting.
  */
 export function shouldForceAct(opts: {
   mode: AgentMode; hasActedThisMessage: boolean; alreadyForced: boolean; content: string;
   /** The user's message. Optional so existing callers keep compiling; when absent
-   *  the old length-only behaviour applies. */
+   *  only the model's own stated intent (and the length fallback) apply. */
   userMessage?: string;
 }): boolean {
   if (opts.mode !== 'act') return false;
   if (opts.hasActedThisMessage) return false;
   if (opts.alreadyForced) return false;
-  if (opts.content.trim().length < FORCE_ACT_MIN_CHARS) return false;
 
   const msg = opts.userMessage ?? '';
-  const askedForInfo = (ASKS_FOR_INFO.test(msg) || YES_NO_QUESTION.test(msg)) && !ASKS_FOR_WORK.test(msg);
+  const askedForWork = ASKS_FOR_WORK.test(msg);
+  const askedForInfo = (ASKS_FOR_INFO.test(msg) || YES_NO_QUESTION.test(msg)) && !askedForWork;
   const promisedAction = STATED_INTENT.test(opts.content);
+
+  // A question answered without any promise to act is an ANSWER, not a stall.
+  // This is the a88545a/744569a fix and it stays first — it must win over the
+  // work/length tests below, or "what is pinky" starts inventing work again.
   if (askedForInfo && !promisedAction) return false;
 
-  return true;
+  // Either side referring to work makes this a task turn that produced nothing.
+  // Terseness is not evidence of completion here — it is how the stall looks.
+  if (promisedAction || askedForWork) return true;
+
+  // Nobody mentioned work. Only a substantive narration is worth a nudge; a short
+  // conversational reply is left alone.
+  return opts.content.trim().length >= FORCE_ACT_MIN_CHARS;
 }
 
 /** Tools that change code (leave the workspace in a state that ought to be verified). */
