@@ -205,8 +205,29 @@ export class OpenAIChatClient {
           }
           // Some servers surface reasoning separately; fold it into content so
           // the agent's <think> parser can present it (matches inline behavior).
-          if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
-            yield { message: { content: delta.reasoning_content } };
+          //
+          // THE FIELD NAME IS SERVER-SPECIFIC AND GETTING IT WRONG IS SILENT.
+          // vLLM 0.23.1 (the DGX Spark, --reasoning-parser deepseek_r1) emits
+          // `delta.reasoning`; it NEVER emits `reasoning_content`. Reading only
+          // the latter meant that whenever the model routed its answer into the
+          // reasoning channel, vcode received ZERO text and printed nothing —
+          // measured 2026-08-07 against the live DGX: with enable_thinking=true
+          // (vcode's default, `think: params.think !== false`) a plain prompt
+          // returned content=0 chars and reasoning=849 chars. A real
+          // `vcode -p "find and fix a bug"` run against that engine read nine
+          // files, ran four turns, and emitted ONE BYTE of output.
+          // Tool calls were never affected — they arrive in `delta.tool_calls` —
+          // which is why the agent looked like it was "doing nothing" while
+          // actually working. Accept both spellings; servers send one or the
+          // other, never both.
+          const reasoningDelta =
+            typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0
+              ? delta.reasoning_content
+              : typeof delta.reasoning === 'string' && delta.reasoning.length > 0
+                ? delta.reasoning
+                : '';
+          if (reasoningDelta) {
+            yield { message: { content: reasoningDelta } };
           }
 
           if (Array.isArray(delta.tool_calls)) {
