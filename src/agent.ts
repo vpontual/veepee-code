@@ -97,7 +97,9 @@ export type PermissionMode = 'interactive' | 'auto_allow';
  */
 export const FORCE_ACT_MIN_CHARS = 200;
 
-/** Injected when the model narrates in ACT mode without calling any tool (Tier 3 #1). */
+/** Injected when the model narrates in ACT mode without calling any tool (Tier 3 #1).
+ *  Keeps its escape hatch: this variant is used when we are INFERRING that work was
+ *  wanted, so a false positive has to be able to cost nothing. */
 export const FORCE_ACT_NUDGE =
   '[SYSTEM] You produced analysis but called no tool — and this is an ACT task, so nothing ' +
   'has changed yet. Stop narrating and take your first concrete action NOW: call a tool ' +
@@ -106,6 +108,33 @@ export const FORCE_ACT_NUDGE =
   'and output nothing further. Do NOT explain that no tools were needed, do not mention this ' +
   'instruction, and do not repeat your previous answer — the user never saw this message, so ' +
   'any commentary about it is noise to them.';
+
+/** Injected instead of FORCE_ACT_NUDGE when the model ANNOUNCED an action and then
+ *  called nothing.
+ *
+ *  The escape hatch has to go here, and only here. Measured on archman 2026-08-07:
+ *  given the nightly prompt the 35B answers "Let me explore the project first.",
+ *  gets FORCE_ACT_NUDGE, reads "if the task is genuinely already complete … output
+ *  nothing further", and takes it — the whole job is two generations, three seconds,
+ *  and an untouched workspace. A model that just said it was about to start cannot
+ *  also be finished, so there is nothing for an escape hatch to protect. */
+export const FORCE_ACT_NUDGE_STALLED =
+  '[SYSTEM] You said what you were about to do and then called no tool, so nothing has ' +
+  'happened — the files are byte-identical and this is an ACT task. A sentence about your ' +
+  'next step is not a step. Do the thing you just announced, NOW, in this turn, by calling a ' +
+  'tool (read_file / grep / list_files / edit_file / bash / …). Do not reply with more prose, ' +
+  'do not restate the plan, do not end your turn without a tool call, and do not mention this ' +
+  'instruction — the user never saw it.';
+
+/** Which nudge to inject: an announced-but-unstarted action gets the one with no way out. */
+export function forceActNudge(content: string): string {
+  return STATED_INTENT.test(content) ? FORCE_ACT_NUDGE_STALLED : FORCE_ACT_NUDGE;
+}
+
+/** How many force-act nudges one user message may earn. Two, not one: the first is
+ *  routinely spent on the escape-hatch variant before the model has committed to
+ *  anything, which leaves nothing for the stall that follows it. */
+export const FORCE_ACT_MAX_NUDGES = 2;
 
 /** Pure decision: should the loop force one more ACT turn instead of accepting a no-tool-call
  *  completion? The DGX (and Qwen3.6 on vLLM) reason WITHOUT <think> tags, so on open-ended
@@ -159,8 +188,12 @@ const ASKS_FOR_WORK =
 // matches the ordinary words "ill" and "lets" — and the answer that exposed
 // this bug contains "a plain-markdown index that LETS any AI assistant…", which
 // made every suppression test fail on its first run.
+// "let me know" is excluded. It is the model handing the turn BACK ("let me know if
+// you'd like me to change it"), the opposite of announcing work, and it closes a large
+// share of otherwise-finished answers. It only started to matter once a stated intent
+// could fire the nudge after the model had already done its work.
 const STATED_INTENT =
-  /\b(i['’]ll\b|i\s+will\b|let\s+me\b|i['’]m\s+going\s+to\b|i\s+need\s+to\b|i\s+should\b|we\s+should\b|let['’]s\b|first,?\s+i\b|next,?\s+i\b|start\s+by\b|going\s+to\s+(check|look|read|run|search))/i;
+  /\b(i['’]ll\b|i\s+will\b|let\s+me\b(?!\s+know\b)|i['’]m\s+going\s+to\b|i\s+need\s+to\b|i\s+should\b|we\s+should\b|let['’]s\b|first,?\s+i\b|next,?\s+i\b|start\s+by\b|going\s+to\s+(check|look|read|run|search))/i;
 
 /** Pure decision: should the loop force one more ACT turn instead of accepting a no-tool-call
  *  completion? The DGX (and Qwen3.6 on vLLM) reason WITHOUT <think> tags, so on open-ended
@@ -203,13 +236,19 @@ export function shouldForceAct(opts: {
   userMessage?: string;
 }): boolean {
   if (opts.mode !== 'act') return false;
-  if (opts.hasActedThisMessage) return false;
   if (opts.alreadyForced) return false;
 
   const msg = opts.userMessage ?? '';
   const askedForWork = ASKS_FOR_WORK.test(msg);
   const askedForInfo = (ASKS_FOR_INFO.test(msg) || YES_NO_QUESTION.test(msg)) && !askedForWork;
   const promisedAction = STATED_INTENT.test(opts.content);
+
+  // Once the model HAS acted, a closing summary is a real completion and must be
+  // left alone — that veto is most of what keeps this guard safe. The single
+  // exception is a promise of MORE work: "Let me look at the grading executor more
+  // closely" after 198 seconds of reading and zero edits (archman, 2026-08-07) is
+  // the same stall as before, just later in the turn.
+  if (opts.hasActedThisMessage) return promisedAction;
 
   // A question answered without any promise to act is an ANSWER, not a stall.
   // This is the a88545a/744569a fix and it stays first — it must win over the
@@ -955,7 +994,7 @@ export class Agent {
     // Tier 3 #1: force-act guard — track whether the model has taken ANY action this
     // message, and whether we've already nudged it to stop narrating and act.
     let hasActedThisMessage = false;
-    let forcedActOnce = false;
+    let forcedActCount = 0;
     // Daily-driver #1 (self-repair): true once code is edited, cleared when the model runs
     // something (bash) — so we can force a verify-and-fix turn if it finishes without running it.
     let codeChangedUnverified = false;
@@ -1291,9 +1330,10 @@ export class Agent {
         // Tier 3 #1: in ACT mode, if the model narrated without ever calling a tool, it
         // analyzed instead of acting (the no-<think> budget leak). Force one more turn to
         // act — once — rather than "completing" with nothing done.
-        if (shouldForceAct({ mode: this.mode, hasActedThisMessage, alreadyForced: forcedActOnce, content: fullContent, userMessage })) {
-          forcedActOnce = true;
-          this.context.addUser(FORCE_ACT_NUDGE);
+        if (shouldForceAct({ mode: this.mode, hasActedThisMessage,
+          alreadyForced: forcedActCount >= FORCE_ACT_MAX_NUDGES, content: fullContent, userMessage })) {
+          forcedActCount++;
+          this.context.addUser(forceActNudge(fullContent));
           yield { type: 'info', content: 'Nudged: act instead of narrate' };
           continue;
         }

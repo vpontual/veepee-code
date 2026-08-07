@@ -326,7 +326,7 @@ describe('Agent <think>-tag stream processing', () => {
 });
 
 // --- Tier 3 #1: force-act guard (shouldForceAct) ---
-import { shouldForceAct, FORCE_ACT_MIN_CHARS, FORCE_ACT_NUDGE, shouldForceVerify, CODE_MUTATION_TOOLS } from '../src/agent.js';
+import { shouldForceAct, FORCE_ACT_MIN_CHARS, FORCE_ACT_NUDGE, FORCE_ACT_NUDGE_STALLED, forceActNudge, FORCE_ACT_MAX_NUDGES, shouldForceVerify, CODE_MUTATION_TOOLS } from '../src/agent.js';
 
 describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', () => {
   const long = 'x'.repeat(FORCE_ACT_MIN_CHARS);
@@ -511,6 +511,69 @@ describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', ()
     // The carve-out is only for the phrase, not the verb.
     it('still fires for a real "make" request', () => {
       expect(shouldForceAct({ ...base, content: 'Sure.', userMessage: 'make the header sticky' })).toBe(true);
+    });
+
+    // "let me know" hands the turn back; it is the opposite of announcing work,
+    // and it closes a large share of otherwise-finished answers.
+    it('does not read "let me know" as a promise to act', () => {
+      const closing = 'Done — the gate now runs before the commit. Let me know if you want the ' +
+        'timeout raised too.';
+      expect(shouldForceAct({ ...base, hasActedThisMessage: true, content: closing,
+        userMessage: 'fix the gate ordering' })).toBe(false);
+    });
+  });
+
+  // The 198-second agentlens job (archman, 2026-08-07) read the repo, edited nothing,
+  // and signed off with "Let me explore the project to find a concrete improvement to
+  // make." hasActedThisMessage was true, so the guard stayed silent and the night was
+  // lost. Acting once does not make the next promise any less empty.
+  describe('a promise of MORE work after acting is still a stall', () => {
+    const acted = { ...base, hasActedThisMessage: true };
+
+    it('fires when the model promises more work after acting', () => {
+      expect(shouldForceAct({ ...acted,
+        content: 'Let me explore the project to find a concrete improvement to make.',
+        userMessage: 'fix one concrete bug' })).toBe(true);
+    });
+
+    it('stays silent on a plain summary after acting', () => {
+      expect(shouldForceAct({ ...acted,
+        content: 'Fixed the off-by-one in requeueFailed and the test passes.',
+        userMessage: 'fix the requeue bug' })).toBe(false);
+    });
+
+    it('stays silent on a long summary after acting', () => {
+      expect(shouldForceAct({ ...acted, content: PINKY_ANSWER, userMessage: 'fix the bug' })).toBe(false);
+    });
+  });
+
+  describe('nudge selection', () => {
+    it('uses the no-escape-hatch nudge when the model announced an action', () => {
+      expect(forceActNudge('Let me explore the project first.')).toBe(FORCE_ACT_NUDGE_STALLED);
+      expect(forceActNudge("I'll start by reading the README.")).toBe(FORCE_ACT_NUDGE_STALLED);
+    });
+
+    it('keeps the escape-hatch nudge when the stall is only inferred', () => {
+      expect(forceActNudge('x'.repeat(FORCE_ACT_MIN_CHARS))).toBe(FORCE_ACT_NUDGE);
+      expect(forceActNudge('')).toBe(FORCE_ACT_NUDGE);
+    });
+
+    // The escape hatch is what the model actually took: given the nightly prompt it
+    // answered "Let me explore the project first.", was nudged, read "if the task is
+    // genuinely already complete … output nothing further", and stopped. Three
+    // seconds, two generations, an untouched workspace.
+    it('the stalled nudge offers no way to end the turn without a tool call', () => {
+      expect(FORCE_ACT_NUDGE_STALLED).not.toMatch(/already complete/i);
+      expect(FORCE_ACT_NUDGE_STALLED).not.toMatch(/END YOUR TURN/);
+      expect(FORCE_ACT_NUDGE_STALLED).toMatch(/do not end your turn without a tool call/i);
+    });
+
+    it('the stalled nudge still hides itself from the user', () => {
+      expect(FORCE_ACT_NUDGE_STALLED).toMatch(/do not mention this instruction/i);
+    });
+
+    it('allows more than one nudge per message', () => {
+      expect(FORCE_ACT_MAX_NUDGES).toBeGreaterThan(1);
     });
   });
 });
