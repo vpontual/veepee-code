@@ -43,6 +43,8 @@ VEEPEE Code (v0.3.0) is an AI coding assistant that runs entirely on your own ha
 
 - **Compressed Knowledge State** -- A sliding window of the last 6 messages plus an AI-readable context dump replaces full conversation history, reducing token usage from 8000+ to ~2800 tokens per API call while preserving context quality.
 
+- **Skills** -- Markdown guidance loaded on demand from `~/.veepee-code/skills/` (global) and `<cwd>/.veepee/skills/` (project). Only a compact index rides in the prompt; the body arrives when the model calls `skill_invoke`. Reads both the flat `<name>.md` file and the `<name>/SKILL.md` bundle the wider ecosystem ships, so an Omarchy or Claude Code skill can be symlinked straight in. See [Skills](skills.md).
+
 - **Sub-Agents** -- Spawn lighter models from the roster for specialized tasks like search, code review, and summarization, keeping the primary model focused on the main task.
 
 - **Sandbox & Preview** -- A per-session sandbox directory (`~/.veepee-code/sandbox/{sessionId}/`) gives the AI a scratch space for experiments. Auto-cleaned on session end, with `/sandbox keep` to move files to the real workspace. `/preview` and `/run` execute scripts inline or serve HTML in the browser.

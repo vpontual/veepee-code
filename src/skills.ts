@@ -5,6 +5,13 @@
  * tags?, model?, allowed-tools?). Loaded from `~/.veepee-code/skills/`
  * (global) and `<cwd>/.veepee/skills/` (project, shadows global by name).
  *
+ * Two layouts are accepted: a flat `<name>.md`, and a `<name>/SKILL.md`
+ * bundle whose directory may hold companion markdown the body links to. The
+ * bundle is the ecosystem convention — Claude Code, Codex, Pi and Omarchy all
+ * use it, and Omarchy symlinks each `default/agents/skills` bundle into every agent's
+ * skills directory — so supporting it is what lets vcode consume skills it
+ * did not write.
+ *
  * The crucial design decision: skills are NOT in the system prompt. Only a
  * compact INDEX (just names + descriptions, ~50 tokens per skill) is in
  * the description of the `skill_invoke` meta-tool. When the model decides
@@ -25,6 +32,9 @@ import { getConfigDir, getProjectSettingsDir } from './config.js';
 import type { ToolDef, ToolResult } from './tools/types.js';
 import { parseFrontmatter } from './frontmatter.js';
 
+/** The ecosystem's filename for the entry point of a skill bundle. */
+const SKILL_FILE = 'SKILL.md';
+
 export interface Skill {
   name: string;
   description: string;
@@ -41,6 +51,14 @@ export interface Skill {
   content: string;
   source: 'global' | 'project';
   path: string;
+  /** Directory holding the skill, for the bundle layout (`<name>/SKILL.md`).
+   *  Undefined for a bare `<name>.md`. */
+  bundleDir?: string;
+  /** Absolute paths of the other markdown files sitting beside SKILL.md.
+   *  Bundled skills reference these by bare relative name ("see hyprland.md"),
+   *  which the model cannot resolve from the body alone — so skill_invoke
+   *  lists them. */
+  companions?: string[];
   /** Toolset-conditional gating (frontmatter `requires-tools` /
    *  `fallback-for-tools`). `requiresTools`: hide from the index unless ALL of
    *  these tools are registered on this node. `fallbackForTools`: hide when ANY
@@ -79,6 +97,18 @@ function getProjectSkillsDir(cwd: string = process.cwd()): string {
   return resolve(getProjectSettingsDir(cwd), 'skills');
 }
 
+/** The other `.md` files beside a bundle's SKILL.md, as absolute paths. */
+function companionsOf(bundleDir: string): string[] {
+  try {
+    return readdirSync(bundleDir)
+      .filter((f) => f.endsWith('.md') && f !== SKILL_FILE)
+      .sort()
+      .map((f) => resolve(bundleDir, f));
+  } catch {
+    return [];
+  }
+}
+
 function loadFromDir(dir: string, source: 'global' | 'project'): Skill[] {
   if (!existsSync(dir)) return [];
   let entries: string[];
@@ -87,10 +117,22 @@ function loadFromDir(dir: string, source: 'global' | 'project'): Skill[] {
   } catch {
     return [];
   }
+  // Bare files first, bundles second, each alphabetically: readdir order is
+  // filesystem-dependent, and a bundle is the richer of two same-named skills,
+  // so it should be the one that wins.
+  const bare = entries.filter((e) => e.endsWith('.md')).sort();
+  const bundles = entries.filter((e) => !e.endsWith('.md')).sort();
   const out: Skill[] = [];
-  for (const file of entries) {
-    if (!file.endsWith('.md')) continue;
-    const path = resolve(dir, file);
+  for (const entry of [...bare, ...bundles]) {
+    // Two layouts. `<name>.md` is vcode's original flat skill. `<name>/SKILL.md`
+    // is what the rest of the ecosystem ships — Claude Code, Codex, Pi and
+    // Omarchy's `default/agents/skills/` all use it, and Omarchy symlinks its
+    // skills into each agent's directory. Reading only flat files meant those
+    // bundles were skipped in silence: a directory entry simply isn't a `.md`.
+    const bundleDir = entry.endsWith('.md') ? undefined : resolve(dir, entry);
+    const path = bundleDir ? resolve(bundleDir, SKILL_FILE) : resolve(dir, entry);
+    // Covers both "not a directory" and "a directory with no SKILL.md".
+    if (bundleDir && !existsSync(path)) continue;
     let raw: string;
     try {
       raw = readFileSync(path, 'utf-8');
@@ -98,11 +140,12 @@ function loadFromDir(dir: string, source: 'global' | 'project'): Skill[] {
       continue;
     }
     const { meta, body } = parseFrontmatter(raw);
-    const name = (meta.name || file.replace(/\.md$/, '')).trim();
+    const fallbackName = bundleDir ? entry : entry.replace(/\.md$/, '');
+    const name = (meta.name || fallbackName).trim();
     if (!name) continue;
     out.push({
       name,
-      description: meta.description || `(no description in ${file})`,
+      description: meta.description || `(no description in ${entry})`,
       tags: parseList(meta.tags),
       model: meta.model,
       allowedTools: parseList(meta['allowed-tools']),
@@ -111,6 +154,8 @@ function loadFromDir(dir: string, source: 'global' | 'project'): Skill[] {
       content: body.trim(),
       source,
       path,
+      bundleDir,
+      companions: bundleDir ? companionsOf(bundleDir) : undefined,
     });
   }
   return out;
@@ -196,6 +241,14 @@ export function buildSkillInvokeTool(cwd: string = process.cwd(), activeTools: s
       }
       if (match.model) {
         lines.push(`(Skill author recommends model: ${match.model})`);
+        lines.push('');
+      }
+      // A bundled skill's body links to its companions by bare relative name
+      // ("see hyprland.md"). The model has no idea where that resolves to, so
+      // hand it absolute paths rather than let it guess or give up.
+      if (match.companions && match.companions.length > 0) {
+        lines.push('Companion files for this skill (read them when the body refers to them):');
+        for (const file of match.companions) lines.push(`  ${file}`);
         lines.push('');
       }
       lines.push(match.content);
