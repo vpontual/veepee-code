@@ -36,6 +36,56 @@ describe('shared frontmatter parser', () => {
     expect(body).toBe('no frontmatter here');
   });
 
+  it('reads a folded block scalar as one paragraph, not the literal ">"', () => {
+    // How Omarchy (and Claude Code) write skill descriptions. The line-based
+    // parser recorded ">" as the description and turned every indented line
+    // holding a colon — "Triggers: crash, segfault" — into its own bogus key,
+    // so the skill reached the index with no usable description at all.
+    const { meta } = parseFrontmatter([
+      '---',
+      'name: diagnose-crash',
+      'description: >',
+      '  Diagnose why a program crashed.',
+      '  Triggers: crash, segfault, SIGSEGV.',
+      'model: opus',
+      '---',
+      'Body.',
+    ].join('\n'));
+    expect(meta.description).toBe('Diagnose why a program crashed. Triggers: crash, segfault, SIGSEGV.');
+    expect(meta.name).toBe('diagnose-crash');
+    expect(meta.model).toBe('opus');
+    expect(meta).not.toHaveProperty('Triggers');
+  });
+
+  it('keeps blank lines in a folded scalar as paragraph breaks', () => {
+    const { meta } = parseFrontmatter('---\ndescription: >\n  one\n  two\n\n  three\n---\nBody.');
+    expect(meta.description).toBe('one two\nthree');
+  });
+
+  it('keeps every line of a literal block scalar', () => {
+    const { meta } = parseFrontmatter('---\nusage: |\n  vcode --eval\n  vcode --repeat 3\n---\nBody.');
+    expect(meta.usage).toBe('vcode --eval\nvcode --repeat 3');
+  });
+
+  it('accepts chomping and indentation indicators', () => {
+    expect(parseFrontmatter('---\na: |-\n  x\n---\n').meta.a).toBe('x');
+    expect(parseFrontmatter('---\na: >2\n  x\n---\n').meta.a).toBe('x');
+  });
+
+  it('treats text after the indicator as a plain value, as YAML does', () => {
+    // `a: > b` is a string in YAML, not a block header. Reading it as a block
+    // would swallow the following key.
+    const { meta } = parseFrontmatter('---\na: > b\nb: kept\n---\n');
+    expect(meta.a).toBe('> b');
+    expect(meta.b).toBe('kept');
+  });
+
+  it('ends a block scalar at the next key, not at the end of the frontmatter', () => {
+    const { meta } = parseFrontmatter('---\ndescription: >\n  folded text\nname: after\n---\nBody.');
+    expect(meta.description).toBe('folded text');
+    expect(meta.name).toBe('after');
+  });
+
   it('is the only copy — skills, user-commands and output-styles share it', () => {
     for (const f of ['../src/skills.ts', '../src/user-commands.ts', '../src/output-styles.ts']) {
       const src = read(f);
