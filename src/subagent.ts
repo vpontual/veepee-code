@@ -1,5 +1,6 @@
 import { Ollama } from 'ollama';
 import { nonStreamingAnswer } from './llm-answer.js';
+import type { PermissionManager } from './permissions.js';
 import type { Message, ToolCall } from 'ollama';
 import type { Config } from './config.js';
 import type { ToolRegistry } from './tools/registry.js';
@@ -74,6 +75,13 @@ export class SubAgent {
   private model: string;
   private role: LegacyRole;
   private maxTurns: number;
+  /** Same dangerous-command gate the parent loop uses; null in callers that
+   *  predate it, which keeps this class's old constructor signature working. */
+  private permissions: PermissionManager | null = null;
+
+  setPermissions(permissions: PermissionManager): void {
+    this.permissions = permissions;
+  }
 
   constructor(config: Config, registry: ToolRegistry, roster: ModelRoster | null, role: LegacyRole) {
     this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
@@ -189,6 +197,21 @@ export class SubAgent {
         for (const call of toolCalls) {
           const toolName = call.function.name;
           const toolArgs = (call.function.arguments || {}) as Record<string, unknown>;
+          // Subagents used to call `registry.execute` directly — no permission
+          // check of any kind, with the model-supplied `tools` array as the only
+          // gate. Since `task` was also absent from PLAN_REFUSED_TOOLS, "spawn a
+          // subagent with bash" was a complete bypass of both the dangerous-
+          // command list and plan mode. The allowlist above stays (it is the
+          // parent's intent); this is the safety layer underneath it.
+          if (this.permissions) {
+            const verdict = await this.permissions.check(toolName, toolArgs);
+            if (verdict === 'deny') {
+              const errMsg = `Permission denied for '${toolName}' in subagent.`;
+              messages.push({ role: 'tool', content: errMsg });
+              toolCallResults.push({ name: toolName, args: toolArgs, result: errMsg });
+              continue;
+            }
+          }
           const result = await this.registry.execute(toolName, toolArgs);
           const resultContent = result.success ? result.output : `Error: ${result.error}`;
 
@@ -232,6 +255,7 @@ class GenericSubAgent {
   private allowedTools: Set<string> | null;
   private maxTurns: number;
   private aborted = false;
+  private permissions: PermissionManager | null;
 
   constructor(
     config: Config,
@@ -239,12 +263,14 @@ class GenericSubAgent {
     model: string,
     allowedTools: string[] | null,
     maxTurns: number,
+    permissions: PermissionManager | null = null,
   ) {
     this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
     this.registry = registry;
     this.model = model;
     this.allowedTools = allowedTools ? new Set(allowedTools) : null;
     this.maxTurns = maxTurns;
+    this.permissions = permissions;
   }
 
   abort(): void { this.aborted = true; }
@@ -316,6 +342,21 @@ class GenericSubAgent {
             toolCallResults.push({ name: toolName, args: toolArgs, result: errMsg });
             continue;
           }
+          // Subagents used to call `registry.execute` directly — no permission
+          // check of any kind, with the model-supplied `tools` array as the only
+          // gate. Since `task` was also absent from PLAN_REFUSED_TOOLS, "spawn a
+          // subagent with bash" was a complete bypass of both the dangerous-
+          // command list and plan mode. The allowlist stays (it is the parent's
+          // intent); this is the safety layer underneath it.
+          if (this.permissions) {
+            const verdict = await this.permissions.check(toolName, toolArgs);
+            if (verdict === 'deny') {
+              const errMsg = `Permission denied for '${toolName}' in subagent.`;
+              messages.push({ role: 'tool', content: errMsg });
+              toolCallResults.push({ name: toolName, args: toolArgs, result: errMsg });
+              continue;
+            }
+          }
           const result = await this.registry.execute(toolName, toolArgs);
           const resultContent = result.success ? result.output : `Error: ${result.error}`;
           messages.push({ role: 'tool', content: resultContent });
@@ -366,6 +407,28 @@ export class SubAgentManager {
    *  the parent already sees the inline result, but Notification hooks
    *  may want every transition. TUI registers this; default is no-op. */
   private onTransition: ((agent: TrackedAgent) => void) | null = null;
+
+  private permissions: PermissionManager | null = null;
+
+  /** Give subagents the same dangerous-command gate the parent loop has. */
+  setPermissions(permissions: PermissionManager): void {
+    this.permissions = permissions;
+  }
+
+  /**
+   * Adopt a roster without becoming a different object.
+   *
+   * The agent used to REPLACE this manager once the benchmark roster loaded,
+   * directly under a comment promising that "the SAME instance persists, so
+   * registered tools holding a reference continue to work". They did not: the
+   * `task` tool and the transition callback captured the pre-swap instance
+   * synchronously at startup, while `/agents` read the post-swap one — so the
+   * listing was always empty, `/agents output <id>` could never find a
+   * background subagent, and completion notifications never fired.
+   */
+  setRoster(roster: ModelRoster | null): void {
+    this.roster = roster;
+  }
 
   constructor(config: Config, registry: ToolRegistry, roster: ModelRoster | null) {
     this.config = config;
@@ -485,6 +548,7 @@ export class SubAgentManager {
       requestedModel,
       opts.tools ?? null,
       opts.maxTurns ?? 8,
+      this.permissions,
     );
 
     this.running.set(id, agent);

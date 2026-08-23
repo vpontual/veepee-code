@@ -275,6 +275,21 @@ export function shouldForceAct(opts: {
   return answer.length >= FORCE_ACT_MIN_CHARS;
 }
 
+/**
+ * Commands that cannot verify anything, however successfully they run.
+ *
+ * The guard cannot tell `npm test` from `ls`, and it never will from a string.
+ * But it can refuse to accept the obviously-inert ones, which is what a model
+ * reaches for when it is narrating progress rather than checking it.
+ */
+const NON_VERIFYING_BASH = /^\s*(ls|pwd|echo|cat|head|tail|which|whoami|date|find|wc|sleep|true|clear|cd|export|env|printenv|git\s+(status|log|diff|show|branch|remote))\b/;
+
+/** Did this bash command plausibly verify the change that preceded it? */
+export function bashVerifies(command: string): boolean {
+  const segments = String(command).split(/[;&|]+|\n/).map(s => s.trim()).filter(Boolean);
+  return segments.some(seg => !NON_VERIFYING_BASH.test(seg));
+}
+
 /** Tools that change code (leave the workspace in a state that ought to be verified). */
 export const CODE_MUTATION_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit']);
 
@@ -368,6 +383,8 @@ export class Agent {
     // SAME instance persists, so registered tools holding a reference
     // continue to work after roster swap.
     this.subAgents = new SubAgentManager(this.config, this.registry, null);
+    // Subagents get the same dangerous-command gate as the parent loop.
+    this.subAgents.setPermissions(permissions);
 
     this.loadBenchmarkContextSizes();
     this.loadRoster();
@@ -380,11 +397,11 @@ export class Agent {
     try {
       const data = await readFile(rosterPath, 'utf-8');
       this.roster = JSON.parse(data) as ModelRoster;
-      // Re-instantiate subAgents with the freshly loaded roster. Anything
-      // already holding a reference to the old instance will keep working
-      // (it's still functional with null roster), but new spawns get
-      // benchmark-informed model picks.
-      this.subAgents = new SubAgentManager(this.config, this.registry, this.roster);
+      // Update IN PLACE. This used to re-instantiate, one line under a comment
+      // promising the instance persists — so `createTaskTool` and
+      // `setOnTransition`, both of which capture the manager synchronously at
+      // startup, kept the old object while `/agents` queried the new one.
+      this.subAgents.setRoster(this.roster);
     } catch { /* ignore */ }
   }
 
@@ -1457,11 +1474,12 @@ export class Agent {
       // Self-repair tracking: a code edit leaves work unverified; a bash run (tests/build/
       // execute) clears it. Walk this turn's calls in order so edit→bash = verified,
       // bash→edit = still unverified.
-      for (const call of toolCalls) {
-        const n = call.function.name;
-        if (CODE_MUTATION_TOOLS.has(n)) codeChangedUnverified = true;
-        else if (n === 'bash') codeChangedUnverified = false;
-      }
+      // NOTE: the definitive update happens AFTER execution (see
+      // `updateVerifyTracking`). This pre-pass is intentionally gone: it walked
+      // the REQUESTED calls, so a DENIED edit set "unverified" and earned a
+      // spurious nudge, while a denied or FAILING bash cleared it — suppressing
+      // the nudge and completing the turn on unverified code, which is the
+      // dangerous direction of the two.
 
       // Snapshot the working tree before anything runs this turn. Placed here
       // rather than at turn start so read-only turns cost nothing.
@@ -1621,6 +1639,18 @@ export class Agent {
           if (result.success && CODE_MUTATION_TOOLS.has(toolName)) {
             const ep = (toolArgs as { path?: string }).path;
             if (typeof ep === 'string' && ep) editedPaths.add(resolve(ep));
+          }
+
+          // Self-repair tracking, from what ACTUALLY happened. A successful code
+          // change leaves work unverified; a bash run that could plausibly check
+          // it clears that. Both halves require success — a failing test run does
+          // not verify anything, and it is the one most likely to be mistaken for
+          // verification.
+          if (result.success && CODE_MUTATION_TOOLS.has(toolName)) {
+            codeChangedUnverified = true;
+          } else if (result.success && toolName === 'bash'
+                     && bashVerifies(String((toolArgs as { command?: unknown }).command ?? ''))) {
+            codeChangedUnverified = false;
           }
 
           const resultContent = result.success ? result.output : `Error: ${result.error}`;

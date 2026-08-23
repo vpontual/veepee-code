@@ -484,7 +484,7 @@ async function main() {
       console.error(chalk.dim(`baseline: ${baseline.score}%`));
     }
 
-    permissions.setPromptHandler(async () => 'y');
+    permissions.setPromptHandler(PermissionManager.unattendedHandler());
     const run = await si.proposeImprovement(target, {
       repoRoot: process.cwd(),
       baseline,
@@ -550,7 +550,7 @@ async function main() {
     }
 
     await checkpoints.init().catch(() => false);
-    permissions.setPromptHandler(async () => 'y');
+    permissions.setPromptHandler(PermissionManager.unattendedHandler());
     const engine = new GoalEngine(agent, checkpoints, process.cwd());
 
     const budget = {
@@ -646,7 +646,7 @@ async function main() {
     profiler.flush();
 
     // Auto-allow all permissions in print mode
-    permissions.setPromptHandler(async () => 'y');
+    permissions.setPromptHandler(PermissionManager.unattendedHandler());
     let output = '';
     for await (const event of agent.run(printQuery)) {
       if (event.type === 'text' && event.content) {
@@ -3254,7 +3254,7 @@ ${gathered.join('\n\n')}`;
       // attempt N+1 — the opposite of what pressing it means.
       tui.setAbortHandler(() => engine.pause());
       const savedPromptHandler = permissions.getPromptHandler();
-      permissions.setPromptHandler(async () => 'y');
+      permissions.setPromptHandler(PermissionManager.unattendedHandler());
 
       tui.showInfo([
         `${theme.accent('Goal mode')} — ${args.goal || `resuming ${args.resume}`}`,

@@ -341,7 +341,7 @@ export async function runHarnessTask(
     lspForTask = lspManager;
 
     const permissions = new PermissionManager();
-    permissions.setPromptHandler(async () => 'y');
+    permissions.setPromptHandler(PermissionManager.unattendedHandler());
     const agent = new Agent(config, registry, modelManager, permissions);
 
     for (const tool of registerCodingTools(ignoreManager, fileTracker, lspManager)) registry.register(tool);

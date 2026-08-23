@@ -2,6 +2,17 @@ import { readFile, writeFile, stat, readdir } from 'fs/promises';
 import { resolve, relative, join } from 'path';
 import { existsSync } from 'fs';
 import { execSync, execFileSync, spawn } from 'child_process';
+
+/**
+ * Ceiling for the SYNCHRONOUS tools here (`grep`, `git`).
+ *
+ * They block the event loop, so the registry's 10-minute race cannot fire for
+ * them — the timer it schedules never gets a chance to run. A slow `git push`
+ * over a flaky link, or a `grep` over a huge tree, therefore froze the TUI, the
+ * API server and every background task at once, with no visible symptom beyond
+ * "vcode stopped".
+ */
+const SYNC_CMD_TIMEOUT_MS = 60_000;
 import { glob as globFn } from 'glob';
 import { z } from 'zod';
 import type { ToolDef, ToolResult } from './types.js';
@@ -111,12 +122,32 @@ function createReadFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTra
         const lines = content.split('\n');
 
         const offset = ((params.offset as number) || 1) - 1;
-        const limit = (params.limit as number) || lines.length;
+        // A read with no `limit` used to mean "the entire file, whatever its
+        // size" — one call could put a 2 MB minified bundle or a lockfile into
+        // the window and end the session's usable context, and the model had no
+        // way to know before making the call. A default ceiling turns that into
+        // a paged read the model can continue deliberately with `offset`.
+        const READ_DEFAULT_MAX_LINES = 2_000;
+        const READ_MAX_CHARS = 120_000;
+        const requested = params.limit as number | undefined;
+        const limit = requested && requested > 0 ? requested : Math.min(lines.length, READ_DEFAULT_MAX_LINES);
         const slice = lines.slice(offset, offset + limit);
 
-        const numbered = slice
+        let numbered = slice
           .map((line, i) => `${String(offset + i + 1).padStart(5)}  ${line}`)
           .join('\n');
+
+        const notes: string[] = [];
+        if (numbered.length > READ_MAX_CHARS) {
+          // Long LINES (minified code, embedded data) blow the budget even
+          // inside the line cap, so bound the characters too.
+          numbered = numbered.slice(0, READ_MAX_CHARS);
+          const shownLines = numbered.split('\n').length;
+          notes.push(`[truncated at ${READ_MAX_CHARS} chars — ${shownLines} of ${lines.length} lines shown; continue with offset=${offset + shownLines + 1}]`);
+        } else if (offset + slice.length < lines.length) {
+          notes.push(`[showing lines ${offset + 1}-${offset + slice.length} of ${lines.length} — continue with offset=${offset + slice.length + 1}${requested ? '' : `, or pass an explicit limit`}]`);
+        }
+        if (notes.length) numbered += `\n${notes.join('\n')}`;
 
         fileTracker?.recordRead(filePath);
 
@@ -920,6 +951,7 @@ function createGrepTool(ignoreManager?: IgnoreManager): ToolDef {
           encoding: 'utf-8',
           maxBuffer: 10 * 1024 * 1024,
           stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: SYNC_CMD_TIMEOUT_MS,
         }).trim();
 
         if (!output) return ok('No matches found.');
@@ -1109,6 +1141,7 @@ function createGitTool(): ToolDef {
           encoding: 'utf-8',
           maxBuffer: 10 * 1024 * 1024,
           stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: SYNC_CMD_TIMEOUT_MS,
         });
         return ok(output.trim() || '(no output)');
       } catch (err) {

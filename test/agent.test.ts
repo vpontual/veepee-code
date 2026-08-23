@@ -326,7 +326,7 @@ describe('Agent <think>-tag stream processing', () => {
 });
 
 // --- Tier 3 #1: force-act guard (shouldForceAct) ---
-import { shouldForceAct, answerText, FORCE_ACT_MIN_CHARS, FORCE_ACT_NUDGE, FORCE_ACT_NUDGE_STALLED, forceActNudge, FORCE_ACT_MAX_NUDGES, shouldForceVerify, CODE_MUTATION_TOOLS } from '../src/agent.js';
+import { bashVerifies, shouldForceAct, answerText, FORCE_ACT_MIN_CHARS, FORCE_ACT_NUDGE, FORCE_ACT_NUDGE_STALLED, forceActNudge, FORCE_ACT_MAX_NUDGES, shouldForceVerify, CODE_MUTATION_TOOLS } from '../src/agent.js';
 
 describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', () => {
   const long = 'x'.repeat(FORCE_ACT_MIN_CHARS);
@@ -659,6 +659,30 @@ describe('FORCE_ACT_NUDGE wording', () => {
 });
 
 // --- Daily-driver #1: self-repair force-verify guard (shouldForceVerify) ---
+/**
+ * The flag used to be updated from the REQUESTED tool calls, before permission
+ * and execution. A denied `edit_file` therefore set "unverified" and earned a
+ * spurious nudge, and — the dangerous direction — a denied or FAILING `bash`
+ * cleared it, so the turn completed on code that had never run. It also could
+ * not tell `npm test` from `ls`.
+ */
+describe('bashVerifies — what can count as checking your work', () => {
+  it('accepts commands that actually exercise the change', () => {
+    for (const cmd of ['npm test', 'npx vitest run', 'pytest -q', 'make build', 'go test ./...',
+                       'node dist/index.js --help', 'cargo check', 'tsc --noEmit',
+                       'echo start; npm test']) {
+      expect(bashVerifies(cmd), cmd).toBe(true);
+    }
+  });
+
+  it('rejects the inert commands a model reaches for when narrating progress', () => {
+    for (const cmd of ['ls -la', 'pwd', 'echo done', 'cat src/x.ts', 'git status',
+                       'git log --oneline -5', 'which node', 'find . -name "*.ts"']) {
+      expect(bashVerifies(cmd), cmd).toBe(false);
+    }
+  });
+});
+
 describe('shouldForceVerify — force verify-and-fix after an unverified code change', () => {
   const base = { mode: 'act' as const, codeChangedUnverified: true, alreadyForced: false };
 

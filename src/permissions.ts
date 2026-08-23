@@ -52,7 +52,11 @@ export function nextPosture(current: PermissionPosture): PermissionPosture {
 export const EDIT_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'notebook_edit']);
 
 /** Tools plan mode refuses outright — edits plus anything that can run. */
-export const PLAN_REFUSED_TOOLS = new Set([...EDIT_TOOLS, 'bash', 'shell']);
+/** Tools plan mode refuses outright — edits plus anything that can run.
+ *  `task` is here because a subagent is a general-purpose executor: spawning one
+ *  with `tools: ['bash']` reproduced everything plan mode exists to prevent, and
+ *  did it out of sight of the user. */
+export const PLAN_REFUSED_TOOLS = new Set([...EDIT_TOOLS, 'bash', 'shell', 'task']);
 
 /** Split on shell separators so `ls; rm -rf /` is inspected segment by segment. */
 function segments(command: string): string[] {
@@ -333,6 +337,33 @@ export class PermissionManager {
   }
 
   /** Set a custom prompt handler (used by TUI) */
+  /**
+   * The approver for a run with no human attached — print mode, goal mode,
+   * `--improve`, the eval harness.
+   *
+   * These all installed `async () => 'y'`, which approves EVERYTHING. That made
+   * `DANGEROUS_PATTERNS` — rm -rf, force push, `git reset --hard`, mkfs, `dd
+   * of=`, and the git config-mutation guard — decorative in precisely the modes
+   * where nobody is watching, since the dangerous check's only action is to ask
+   * a question no one is there to answer.
+   *
+   * So: approve ordinary work, refuse the handful of things that are not
+   * undoable, and say so in a way the model can read and route around. The
+   * refusal text matters — an unexplained denial is what makes a model retry the
+   * same command five times.
+   *
+   * `VCODE_UNATTENDED_ALLOW_DANGEROUS=1` restores the old behaviour for a caller
+   * that genuinely needs it (a sandboxed batch job that must `rm -rf` its own
+   * workspace). Opt-in, one env var, greppable — not the default.
+   */
+  static unattendedHandler(): PromptHandler {
+    const allowDangerous = process.env.VCODE_UNATTENDED_ALLOW_DANGEROUS === '1';
+    return async (_toolName, _args, reason) => {
+      if (!reason || allowDangerous) return 'y';
+      return 'deny';
+    };
+  }
+
   setPromptHandler(handler: PromptHandler): void {
     this.promptHandler = handler;
   }
