@@ -3,6 +3,7 @@ import type { Message, ToolCall } from 'ollama';
 import type { Config } from './config.js';
 import { OpenAIChatClient } from './openai-adapter.js';
 import { answerText } from './llm-answer.js';
+import { retryDecision } from './retry.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { PermissionManager } from './permissions.js';
 import type { BenchmarkResult } from './benchmark.js';
@@ -1151,21 +1152,27 @@ export class Agent {
           },
         });
 
-        // Retry wrapper: one retry with 3s backoff on connection errors
+        // Retry wrapper. Was: ONE attempt, fixed 3s, four connection-error
+        // strings — which covers a server that is down and nothing else. It did
+        // not cover what this fleet actually produces: the DGX engine wedging
+        // and the watchdog taking ~63s to restore it, a 429 from a busy gateway,
+        // or a 503 while a model loads. A turn dying inside that window loses
+        // the whole run. See `retry.ts` for why context-overflow is excluded and
+        // why `Retry-After` wins over any backoff we would compute.
         const chatWithRetry = async () => {
-          try {
-            return await chatClient.chat(chatRequest() as never);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            // Retry on connection errors (not on model errors)
-            if (msg.includes('ECONNREFUSED') || msg.includes('ECONNRESET') || msg.includes('ETIMEDOUT') || msg.includes('fetch failed')) {
-              await new Promise(r => setTimeout(r, 3000));
-              // Keep the abort signal on the retry too — a retried stream that
-              // can't be aborted is exactly the orphaned stream that wedges
-              // vLLM, which is what the signal was added for.
-              return chatClient.chat(chatRequest() as never);
+          for (let attempt = 1; ; attempt++) {
+            try {
+              return await chatClient.chat(chatRequest() as never);
+            } catch (err) {
+              // A user interrupt is not a transport fault; never retry it.
+              if (this.abortController?.signal.aborted) throw err;
+              const decision = retryDecision(err, attempt);
+              if (!decision.retry) throw err;
+              await new Promise(r => setTimeout(r, decision.delayMs));
+              // The abort signal is rebuilt into every attempt by chatRequest():
+              // a retried stream that cannot be aborted is the orphaned stream
+              // that wedges vLLM, which is what the signal was added for.
             }
-            throw err;
           }
         };
 

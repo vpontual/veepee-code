@@ -103,12 +103,18 @@ describe('direct-endpoint model set', () => {
 });
 
 describe('chat request construction', () => {
-  it('builds one request shape shared by the first attempt and the retry', () => {
+  it('builds one request shape shared by every attempt', () => {
     const source = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
-    // Both calls go through chatRequest() on the routed client, so the retry
-    // can no longer drop the abort signal and orphan a stream on vLLM.
+    // Originally there were two call sites — first attempt and the one retry —
+    // and this asserted both went through chatRequest() so the retry could not
+    // drop the abort signal and orphan a stream on vLLM. The retry is now a
+    // loop over `retryDecision`, so there is exactly ONE call site and the
+    // property holds by construction: every attempt is the same expression.
     const calls = source.match(/chatClient\.chat\(chatRequest\(\) as never\)/g) || [];
-    expect(calls.length).toBe(2);
+    expect(calls.length).toBe(1);
+    expect(source).toContain('retryDecision(err, attempt)');
     expect(source).toContain('isAdapter && this.abortController');
+    // An interrupt is not a transport fault and must never be retried.
+    expect(source).toContain('if (this.abortController?.signal.aborted) throw err;');
   });
 });

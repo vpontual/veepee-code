@@ -440,6 +440,114 @@ export function describeMiss(content: string, oldStr: string, relPath: string): 
   return `${base} Read the file first to get the exact content.${hint}`;
 }
 
+/**
+ * Levenshtein distance, bounded.
+ *
+ * Only ever called on single lines, and only to score how close two lines are —
+ * so long lines are clipped rather than paid for in full. Two rows, not a full
+ * matrix: the distance is all we need, never the alignment.
+ */
+export function levenshtein(a: string, b: string, cap = 400): number {
+  const s1 = a.length > cap ? a.slice(0, cap) : a;
+  const s2 = b.length > cap ? b.slice(0, cap) : b;
+  if (s1 === s2) return 0;
+  if (!s1.length) return s2.length;
+  if (!s2.length) return s1.length;
+  let prev = new Array<number>(s2.length + 1);
+  let curr = new Array<number>(s2.length + 1);
+  for (let j = 0; j <= s2.length; j++) prev[j] = j;
+  for (let i = 1; i <= s1.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= s2.length; j++) {
+      const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[s2.length];
+}
+
+/** Minimum middle-line similarity for a block-anchor match to be accepted. */
+const BLOCK_ANCHOR_THRESHOLD = 0.7;
+/** Two candidates closer together than this are ambiguous, and we refuse. */
+const BLOCK_ANCHOR_TIE = 0.05;
+
+export interface BlockAnchorMatch {
+  startLine: number;
+  endLine: number;
+  similarity: number;
+}
+
+/**
+ * Find a block by its FIRST and LAST line, tolerating a wrong middle.
+ *
+ * This is the failure every other strategy here misses. Exact, whitespace-
+ * normalized and de-indented matching all require the model to reproduce the
+ * region character-for-character modulo whitespace; they recover a formatting
+ * slip and nothing else. But a 3B-active model routinely gets the SHAPE right
+ * and one line wrong — a paraphrased comment, a renamed local, a blank line
+ * dropped — and every one of those costs a full round trip to discover.
+ *
+ * So: anchor on the first and last line (which models reproduce reliably,
+ * because that is where they were told to cut), allow the block length to differ
+ * by ±25%, and score the middle by line-wise Levenshtein similarity.
+ *
+ * Two deliberate departures from the design this is modelled on:
+ *  - a tie between two candidate blocks is REFUSED, not resolved by taking the
+ *    max. Editing the wrong block of code is far worse than one more round trip,
+ *    and "the two best candidates are equally good" is exactly the case where a
+ *    similarity score carries no information about which one was meant;
+ *  - anchors must be non-empty after trimming, so a needle padded with blank
+ *    lines cannot anchor on nothing and match anywhere.
+ */
+export function findBlockAnchorMatch(content: string, oldStr: string): BlockAnchorMatch | null {
+  const needle = oldStr.split('\n');
+  if (needle.length > 1 && needle[needle.length - 1] === '') needle.pop();
+  if (needle.length < 3) return null; // no middle to be wrong about
+
+  const first = needle[0].trim();
+  const last = needle[needle.length - 1].trim();
+  if (!first || !last) return null;
+
+  const lines = content.split('\n');
+  const size = needle.length;
+  const maxDelta = Math.max(1, Math.floor(size * 0.25));
+  const middle = needle.slice(1, -1);
+
+  const candidates: BlockAnchorMatch[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() !== first) continue;
+    for (let j = i + size - 1 - maxDelta; j <= i + size - 1 + maxDelta; j++) {
+      if (j <= i || j >= lines.length) continue;
+      if (lines[j].trim() !== last) continue;
+
+      const found = lines.slice(i + 1, j);
+      const linesToCheck = Math.max(middle.length, found.length);
+      let similarity = 1;
+      if (linesToCheck > 0) {
+        similarity = 0;
+        for (let k = 0; k < linesToCheck; k++) {
+          const a = (middle[k] ?? '').trim();
+          const b = (found[k] ?? '').trim();
+          const maxLen = Math.max(a.length, b.length);
+          const lineScore = maxLen === 0 ? 1 : 1 - levenshtein(a, b) / maxLen;
+          similarity += lineScore / linesToCheck;
+        }
+      }
+      if (similarity >= BLOCK_ANCHOR_THRESHOLD) {
+        candidates.push({ startLine: i, endLine: j, similarity });
+      }
+    }
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.similarity - a.similarity);
+  if (candidates.length > 1 && candidates[0].similarity - candidates[1].similarity < BLOCK_ANCHOR_TIE) {
+    return null; // ambiguous — refuse rather than edit the wrong block
+  }
+  return candidates[0];
+}
+
 export function applySingleEdit(
   content: string,
   oldStr: string,
@@ -513,6 +621,37 @@ export function applySingleEdit(
         return { ok: true, updated, matchCount: 1 };
       }
     }
+
+    // ── Final resort: anchor on the first and last line, tolerate the middle ──
+    //
+    // Everything above requires the model to have reproduced the region
+    // faithfully modulo whitespace. This is the one strategy that survives a
+    // WRONG middle line, which is the characteristic mistake of a small model
+    // working from a file it read several turns ago. Single edits only:
+    // a fuzzy replace_all would apply an approximate match repeatedly, and one
+    // wrong site is a bug the model cannot see.
+    if (!replaceAll) {
+      const block = findBlockAnchorMatch(content, oldStr);
+      if (block) {
+        const lines = content.split('\n');
+        // The file's indentation wins over the model's, same as the path above.
+        const delta = uniformIndentDelta(
+          lines.slice(block.startLine, block.endLine + 1).join('\n'),
+          oldStr,
+        );
+        const shifted = delta.indent
+          ? (delta.dedent ? dedentBy(newStr, delta.indent) : reindent(newStr, delta.indent))
+          : null;
+        const replacement = (shifted ?? newStr).split('\n');
+        const updated = [
+          ...lines.slice(0, block.startLine),
+          ...replacement,
+          ...lines.slice(block.endLine + 1),
+        ].join('\n');
+        return { ok: true, updated, matchCount: 1 };
+      }
+    }
+
     return { ok: false, error: describeMiss(content, oldStr, relPathForErrors) };
   }
 
