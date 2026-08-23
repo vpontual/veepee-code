@@ -64,6 +64,10 @@ export function retryDecision(
   attempt: number,
   opts?: { maxAttempts?: number; jitter?: number },
 ): RetryDecision {
+  // Kill switch — same-build A/B, see `findBlockAnchorMatch` in tools/coding.ts.
+  if (process.env.VCODE_NO_RETRY === '1') {
+    return { retry: false, delayMs: 0, reason: 'retry disabled by VCODE_NO_RETRY' };
+  }
   const maxAttempts = opts?.maxAttempts ?? RETRY_MAX_ATTEMPTS;
   const message = err instanceof Error ? `${err.message} ${String((err as { body?: unknown }).body ?? '')}` : String(err);
 

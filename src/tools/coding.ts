@@ -550,6 +550,11 @@ export interface BlockAnchorMatch {
  *    lines cannot anchor on nothing and match anywhere.
  */
 export function findBlockAnchorMatch(content: string, oldStr: string): BlockAnchorMatch | null {
+  // Kill switch, so this strategy can be A/B'd against itself IN THE SAME BUILD.
+  // Comparing eval scores across commits is not a measurement — the harness
+  // changes underneath — so every new mechanism here gets a switch and is
+  // measured by running the same binary twice.
+  if (process.env.VCODE_NO_BLOCK_ANCHOR === '1') return null;
   const needle = oldStr.split('\n');
   if (needle.length > 1 && needle[needle.length - 1] === '') needle.pop();
   if (needle.length < 3) return null; // no middle to be wrong about

@@ -1005,6 +1005,8 @@ Modified: ${renderList(writes)}
    * Returns the tokens reclaimed (0 when it declined to act).
    */
   pruneToolOutputs(): number {
+    // Kill switch — same-build A/B, see `findBlockAnchorMatch`.
+    if (process.env.VCODE_NO_PRUNE === '1') return 0;
     const PROTECT_TOKENS = Math.min(40_000, Math.floor(this.contextLimit * 0.3));
     const MIN_RECLAIM_TOKENS = 4_000;
     const TRUNCATE_TO_CHARS = 2_000;
