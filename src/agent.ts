@@ -2,6 +2,7 @@ import { Ollama } from 'ollama';
 import type { Message, ToolCall } from 'ollama';
 import type { Config } from './config.js';
 import { OpenAIChatClient } from './openai-adapter.js';
+import { answerText } from './llm-answer.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { PermissionManager } from './permissions.js';
 import type { BenchmarkResult } from './benchmark.js';
@@ -126,38 +127,7 @@ export const FORCE_ACT_NUDGE_STALLED =
   'do not restate the plan, do not end your turn without a tool call, and do not mention this ' +
   'instruction — the user never saw it.';
 
-/**
- * The part of a model turn that is an ANSWER, with any reasoning stripped.
- *
- * Every heuristic here reads the assistant's own words, and reasoning is not
- * words the assistant said — it is words it thought. The two read completely
- * differently: a chain of thought says "Let me check…", "I need to…", "I should
- * just confirm" almost by definition, which is precisely `STATED_INTENT`. Judge
- * a turn on its reasoning and a greeting answered "Ready. What are we working
- * on?" looks like a stall (measured 2026-08-23: 1050 chars of reasoning against
- * 97 of answer), earns a force-act nudge, and the model then burns turns running
- * `pwd` and narrating the hidden [SYSTEM] nudge back to the user.
- *
- * Servers that split the channels are handled upstream (the reasoning never
- * enters `fullContent` at all). This covers the models that DON'T: an inline
- * `<think>…</think>` block, or the orphan-`</think>` shape where the trace is
- * emitted first and closed with a bare tag.
- */
-export function answerText(content: string): string {
-  const withoutBlocks = content.replace(/<think>[\s\S]*?<\/think>/g, '');
-  const close = withoutBlocks.lastIndexOf('</think>');
-  let answer: string;
-  if (close >= 0) {
-    // Orphan close: everything up to it was the trace.
-    answer = withoutBlocks.slice(close + '</think>'.length);
-  } else {
-    // Unterminated open (the model hit its cap mid-thought): everything after
-    // it is trace, and there is no answer beyond what came before.
-    const open = withoutBlocks.indexOf('<think>');
-    answer = open >= 0 ? withoutBlocks.slice(0, open) : withoutBlocks;
-  }
-  return answer.replace(/<\/?think>/g, '').trim();
-}
+export { answerText, nonStreamingAnswer } from './llm-answer.js';
 
 /** Which nudge to inject: an announced-but-unstarted action gets the one with no way out. */
 export function forceActNudge(content: string): string {

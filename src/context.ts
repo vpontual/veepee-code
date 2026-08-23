@@ -1,4 +1,5 @@
 import type { Message } from 'ollama';
+import { nonStreamingAnswer } from './llm-answer.js';
 import type { ConversationSignals } from './models.js';
 import type { AgentMode } from './agent.js';
 import { KnowledgeState } from './knowledge.js';
@@ -1017,10 +1018,13 @@ SUMMARY:
       model,
       messages: [{ role: 'user', content: prompt }],
       keep_alive: '30m',
-      options: { num_predict: 768 },
-    } as never)) as unknown as { message: { content: string } };
+      // 3072, not 768: with a reasoning model the old budget was spent thinking
+      // and the reply came back `done_reason: "length"` with an EMPTY content —
+      // so compaction produced nothing while reporting success.
+      options: { num_predict: 3072 },
+    } as never));
 
-    const content = resp.message?.content?.trim();
+    const content = nonStreamingAnswer(resp);
     if (!content) return null;
 
     // Apply KS updates if the KS: section is present.
@@ -1072,11 +1076,12 @@ SUMMARY:
         { role: 'user', content: `Update this knowledge state with any new facts, decisions, files, or context from these messages. Only output the updated state, same format.\n\nCurrent state:\n${currentState}\n\nMessages being compacted:\n${msgSummary}` },
       ],
       keep_alive: '30m',
-      options: { num_predict: 512 },
-    } as never)) as unknown as { message: { content: string } };
+      options: { num_predict: 2048 },
+    } as never));
 
-    if (resp.message?.content) {
-      this.applyKsBlock(resp.message.content);
+    const answer = nonStreamingAnswer(resp);
+    if (answer) {
+      this.applyKsBlock(answer);
       await this.knowledgeState.save();
     }
   }

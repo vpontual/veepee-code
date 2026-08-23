@@ -1,4 +1,5 @@
 import { Ollama } from 'ollama';
+import { nonStreamingAnswer } from './llm-answer.js';
 import type { Message, ToolCall } from 'ollama';
 import type { Config } from './config.js';
 import type { ToolRegistry } from './tools/registry.js';
@@ -166,10 +167,10 @@ export class SubAgent {
           ...(tools.length > 0 ? { tools } : {}),
           stream: false,
           keep_alive: '30m',
-          options: { num_predict: 1024 },
+          options: { num_predict: 3072 },
         } as never)) as unknown as { message: { content: string; tool_calls?: ToolCall[] } };
 
-        const content = response.message.content || '';
+        const content = nonStreamingAnswer(response);
         const toolCalls = response.message.tool_calls || [];
 
         messages.push({
@@ -289,10 +290,10 @@ class GenericSubAgent {
           ...(tools.length > 0 ? { tools } : {}),
           stream: false,
           keep_alive: '30m',
-          options: { num_predict: 1024 },
+          options: { num_predict: 3072 },
         } as never)) as unknown as { message: { content: string; tool_calls?: ToolCall[] } };
 
-        const content = response.message.content || '';
+        const content = nonStreamingAnswer(response);
         const toolCalls = response.message.tool_calls || [];
         messages.push({
           role: 'assistant', content,

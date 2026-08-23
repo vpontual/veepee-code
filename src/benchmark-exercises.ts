@@ -18,6 +18,7 @@
  */
 
 import { Ollama } from 'ollama';
+import { nonStreamingAnswer } from './llm-answer.js';
 import { readdir, readFile, writeFile, mkdir, rm, stat, cp } from 'fs/promises';
 import { existsSync } from 'fs';
 import { resolve, dirname, join, normalize, relative } from 'path';
@@ -390,7 +391,7 @@ export async function runExercise(
       const msg = resp.message;
       messages.push({
         role: 'assistant',
-        content: msg.content || '',
+        content: nonStreamingAnswer(resp),
         tool_calls: msg.tool_calls,
       });
 
@@ -575,7 +576,7 @@ export async function runMultiturnExercise(
           options: { num_predict: 2048, temperature: 0.1, num_ctx: 32768 },
         });
         const msg = resp.message;
-        messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls });
+        messages.push({ role: 'assistant', content: nonStreamingAnswer(resp), tool_calls: msg.tool_calls });
 
         const calls = msg.tool_calls || [];
         if (calls.length === 0) break;

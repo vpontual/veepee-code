@@ -1,4 +1,5 @@
 import { Ollama } from 'ollama';
+import { nonStreamingAnswer } from './llm-answer.js';
 import chalk from 'chalk';
 import { rename, unlink, writeFile, readFile, mkdir } from 'fs/promises';
 
@@ -706,7 +707,7 @@ export class Benchmarker {
             keep_alive: '30m',
             options: { num_predict: rec.maxTokens ?? 512, temperature: 0.1, num_ctx: 16384 },
           });
-          const responseText = resp.message.content || '';
+          const responseText = nonStreamingAnswer(resp);
           const toolCalls = (resp.message.tool_calls || []).map(tc => ({
             name: tc.function.name,
             args: (tc.function.arguments || {}) as Record<string, unknown>,

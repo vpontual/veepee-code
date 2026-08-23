@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import dns from 'dns';
+import { nonStreamingAnswer } from './llm-answer.js';
 import os from 'os';
 // Prefer IPv4 — prevents failures on IPv4-only tunnels (WireGuard, VPN)
 dns.setDefaultResultOrder('ipv4first');
@@ -1863,12 +1864,13 @@ async function handleCommand(
             { role: 'user', content: `Here is the current knowledge state of our conversation:\n\n${currentState}\n\nAnd here are the full messages (${allMsgs.length} total). Review them and output an UPDATED knowledge state in the same format. Add any missing decisions, facts, files, or context. Only output the knowledge state, nothing else.\n\nMessages:\n${allMsgs.slice(0, -6).map(m => `[${m.role}] ${(m.content || '').slice(0, 200)}`).join('\n')}` },
           ],
           keep_alive: '30m',
-          options: { num_predict: 512 },
-        } as never) as unknown as { message: { content: string } };
+          options: { num_predict: 2048 },
+        } as never);
 
         // Parse the model's updated state
-        if (summaryResp.message.content) {
-          const updated = summaryResp.message.content;
+        const summaryAnswer = nonStreamingAnswer(summaryResp);
+        if (summaryAnswer) {
+          const updated = summaryAnswer;
           // Try to extract key-value pairs from the response
           for (const line of updated.split('\n')) {
             const colonIdx = line.indexOf(':');
