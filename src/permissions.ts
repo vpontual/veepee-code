@@ -109,6 +109,116 @@ export function isGitClean(command: string): boolean {
   return false;
 }
 
+/**
+ * Long-option matching that respects GIT'S PREFIX ABBREVIATION.
+ *
+ * Git accepts any UNAMBIGUOUS abbreviation of a long option, so `git branch --u`
+ * IS `git branch --unset-upstream` — silently, exit 0, no warning. That is not a
+ * hypothetical: on 2026-08-23 an agent asked only to REPORT sync state wrote
+ * `upstream=$(git branch --u 2>/dev/null | ...)`, meaning "show me the upstream",
+ * and wiped branch tracking in all 37 repos under ~/Dev. It then reported every
+ * repo as "synced, zero ahead, zero behind" — because with tracking gone its own
+ * `HEAD.."$upstream"` collapsed to `HEAD..HEAD` = 0, and `git status -sb` prints
+ * a bare `## main` instead of `## main...origin/main [ahead 1]`, which its
+ * verification step scored as clean. Matching the full spelling only would have
+ * caught none of it.
+ *
+ * Over-matching is the SAFE direction here: an abbreviation that is ambiguous
+ * makes git error out without doing anything, so the worst case of a loose match
+ * is one extra prompt.
+ */
+function hasLongOptionPrefixOf(longs: Set<string>, ...fullNames: string[]): boolean {
+  for (const flag of longs) {
+    for (const full of fullNames) if (full.startsWith(flag)) return true;
+  }
+  return false;
+}
+
+/**
+ * Commands that mutate repo CONFIGURATION rather than files.
+ *
+ * A distinct class from the destructive patterns above, and the reason it needs
+ * its own guard: none of these delete anything, so none of them look dangerous —
+ * they change what every LATER command means. Tracking, remotes and branch
+ * pointers are the frame the rest of git is read through, so corrupting them
+ * silently invalidates every subsequent measurement, including any check the
+ * agent runs on its own work. See `hasLongOptionPrefixOf` for the incident.
+ *
+ * Covers: upstream tracking (`branch --unset-upstream` / `--set-upstream-to`),
+ * config writes (`config --unset`, `config <key> <value>`, and git 2.46's
+ * `config set|unset|rename-section|remove-section`), remote surgery
+ * (`remote add|remove|rename|set-url|set-head|prune`), and force-repointing a
+ * branch (`checkout -B`, `switch -C`), which moves a ref out from under work in
+ * progress without touching a file.
+ */
+export function isGitConfigMutation(command: string): boolean {
+  for (const seg of segments(command)) {
+    const sub = gitSubcommand(seg);
+    if (!sub) continue;
+    const { shorts, longs } = flagSet(seg);
+
+    // Upstream tracking. `git push -u` is deliberately NOT here: it is routine,
+    // and it SETS tracking on a branch being published rather than removing it.
+    if (sub === 'branch' && hasLongOptionPrefixOf(longs, 'unset-upstream', 'set-upstream-to')) return true;
+
+    // Config writes. Read forms (--get*, --list, and git 2.46's `config get|list`)
+    // are left alone; a `git config` with neither is a WRITE, since the plain
+    // `git config user.email x` form takes no flag at all. So the test is the
+    // ABSENCE of a read form, not the presence of a write one.
+    if (sub === 'config') {
+      const rest = gitSubcommandArgs(seg);
+      const readFlag = hasLongOptionPrefixOf(longs, 'get', 'get-all', 'get-regexp', 'get-urlmatch', 'list')
+        || shorts.has('l');
+      const readSub = rest[0] === 'get' || rest[0] === 'list';
+      if (rest.length > 0 && !readFlag && !readSub) return true;
+    }
+
+    // Remote surgery.
+    if (sub === 'remote' && /^(add|remove|rm|rename|set-url|set-head|set-branches|prune)$/.test(gitSubcommandArgs(seg)[0] ?? '')) return true;
+
+    // Force-repointing a branch: `-B` / `-C` MOVE an existing ref, unlike -b/-c
+    // which refuse when the branch already exists.
+    if (sub === 'checkout' && shorts.has('B')) return true;
+    if (sub === 'switch' && shorts.has('C')) return true;
+  }
+  return false;
+}
+
+/** The git SUBCOMMAND in a segment — the first token that is neither a global
+ *  option nor an option's argument. Matching a bare `\bconfig\b` instead would
+ *  prompt on `git log src/config.ts`, which is how a guard earns its way into
+ *  being switched off. Reads from the `git` token so it still finds the command
+ *  inside `x=$(git branch --u)`. */
+function gitSubcommand(seg: string): string | null {
+  const toks = gitTokens(seg);
+  return toks.length > 0 ? toks[0] : null;
+}
+
+/** Tokens after the subcommand, options stripped. */
+function gitSubcommandArgs(seg: string): string[] {
+  return gitTokens(seg).slice(1).filter(t => !t.startsWith('-'));
+}
+
+/** Tokens of a git invocation with global options (and their arguments) removed. */
+function gitTokens(seg: string): string[] {
+  const m = /\bgit\b/.exec(seg);
+  if (!m) return [];
+  const toks = seg.slice(m.index + 'git'.length).trim().split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  let started = false;
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (!started) {
+      // Global options that consume the NEXT token: -C <path>, -c <name=value>.
+      if (t === '-C' || t === '-c') { i++; continue; }
+      if (t.startsWith('-')) continue;      // --git-dir=…, --no-pager, …
+      started = true;
+    }
+    out.push(t);
+  }
+  return out;
+}
+
 /** Git flags that turn an otherwise read-only subcommand into code execution
  *  or a file write — `-c core.pager=<cmd> log` runs <cmd>. Their presence
  *  disqualifies the auto-allow path. */
@@ -164,6 +274,7 @@ export class PermissionManager {
     { tool: 'bash', check: (a) => /\bdocker\s+(rm|rmi|system\s+prune)/.test(String(a.command || '')), reason: 'docker cleanup' },
     { tool: 'bash', check: (a) => /\b(mkfs\S*|shred)\b/.test(String(a.command || '')), reason: 'destroys data' },
     { tool: 'bash', check: (a) => /\bdd\b[^;&|]*\bof=/.test(String(a.command || '')), reason: 'raw disk write' },
+    { tool: 'bash', check: (a) => isGitConfigMutation(String(a.command || '')), reason: 'changes git config/tracking' },
 
     { tool: 'git', check: (a) => isForcePush('git ' + String(a.args || '')), reason: 'force push' },
     { tool: 'git', check: (a) => /(^|\s)reset\s+--hard\b/.test(String(a.args || '')), reason: 'hard reset' },
@@ -174,6 +285,7 @@ export class PermissionManager {
     { tool: 'git', check: (a) => /(^|\s)stash\s+(drop|clear)\b/.test(String(a.args || '')), reason: 'discard stashed work' },
     { tool: 'git', check: (a) => /(^|\s)(filter-branch|filter-repo)\b/.test(String(a.args || '')), reason: 'rewrites history' },
     { tool: 'git', check: (a) => /(^|\s)reflog\s+(delete|expire)\b/.test(String(a.args || '')), reason: 'destroys recovery log' },
+    { tool: 'git', check: (a) => isGitConfigMutation('git ' + String(a.args || '')), reason: 'changes git config/tracking' },
   ];
 
   /** True when the git args are an unambiguously read-only invocation.
