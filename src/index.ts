@@ -181,9 +181,11 @@ async function main() {
     const repeat = repeatIdx >= 0 ? Math.max(1, Number(process.argv[repeatIdx + 1]) || 1) : 1;
     if (repeat > 1) console.error(chalk.dim(`Repeating each task ${repeat}x — single runs vary too much to compare.\n`));
 
+    const resume = process.argv.includes('--resume');
     const result = await runHarnessSuite(config, modelManager, {
       only,
       repeat,
+      resume,
       onProgress: (msg) => console.error(chalk.dim(msg)),
     });
 

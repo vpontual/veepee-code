@@ -20,8 +20,9 @@
  * point. "Did this harness change help?" becomes a diff, not an opinion.
  */
 
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { existsSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -476,15 +477,45 @@ export function aggregateRuns(runs: HarnessTaskResult[]): HarnessTaskResult {
 export async function runHarnessSuite(
   config: Config,
   modelManager: ModelManager,
-  opts: { only?: string; repeat?: number; onProgress?: (msg: string) => void } = {},
+  opts: { only?: string; repeat?: number; resume?: boolean; checkpointDir?: string; onProgress?: (msg: string) => void } = {},
 ): Promise<HarnessEvalResult> {
   const all = await loadHarnessTasks();
   const only = opts.only;
   const tasks = only ? all.filter((t) => t.name === only || t.tags.includes(only)) : all;
 
   const repeat = Math.max(1, opts.repeat ?? 1);
+  const commit = await currentCommit();
+  const artifact = artifactHash();
+  const key = `${commit}-r${repeat}${only ? `-${only.replace(/[^\w.-]/g, '_')}` : ''}`;
+
+  // Resume: reuse only what was measured by THIS artifact. A checkpoint from a
+  // different build is discarded loudly — mixing two builds into one score is
+  // not a measurement of either.
   const results: HarnessTaskResult[] = [];
+  const existing = await loadCheckpoint(key, opts.checkpointDir);
+  if (existing) {
+    if (!opts.resume) {
+      opts.onProgress?.(`Found a partial run for ${key} (${existing.results.length} task(s) done) — pass --resume to continue it.`);
+    } else if (existing.artifact !== artifact) {
+      opts.onProgress?.(`Ignoring the partial run: it was measured on build ${existing.artifact}, this is ${artifact}.`);
+    } else {
+      results.push(...existing.results);
+      opts.onProgress?.(`Resuming ${key}: ${results.length} task(s) already measured on this build.`);
+    }
+  }
+
+  const checkpoint: EvalCheckpoint = {
+    key, artifact, model: modelManager.getCurrentModel(), commit, repeat,
+    ...(only ? { only } : {}),
+    startedAt: existing?.startedAt ?? new Date().toISOString(),
+    results,
+  };
+
   for (const [i, task] of tasks.entries()) {
+    if (results.some((r) => r.task === task.name)) {
+      opts.onProgress?.(`[${i + 1}/${tasks.length}] ${task.name}: reusing checkpointed result`);
+      continue;
+    }
     const attempts: HarnessTaskResult[] = [];
     for (let n = 1; n <= repeat; n++) {
       opts.onProgress?.(`[${i + 1}/${tasks.length}] ${task.name}${repeat > 1 ? ` (run ${n}/${repeat})` : ''} …`);
@@ -492,6 +523,10 @@ export async function runHarnessSuite(
     }
     const r = aggregateRuns(attempts);
     results.push(r);
+    // Checkpoint after EVERY task. A crash now costs the task in flight, not
+    // the whole suite.
+    checkpoint.results = results;
+    await writeCheckpoint(checkpoint, opts.checkpointDir).catch(() => {});
     opts.onProgress?.(
       `[${i + 1}/${tasks.length}] ${task.name}: ${r.passes}/${r.runs} passed ` +
       `(${Math.round(r.wallMs / 1000)}s avg, ${r.toolCalls} tool calls${r.selfVerified ? ', self-verified' : ''})`,
@@ -503,15 +538,78 @@ export async function runHarnessSuite(
   const totalRuns = results.reduce((a, r) => a + r.runs, 0);
   const totalPasses = results.reduce((a, r) => a + r.passes, 0);
   const passed = results.filter((r) => r.passed).length;
+  // The suite completed: the partial is now redundant, and leaving it behind
+  // would offer a resume of a finished run.
+  await rm(checkpointPath(key, opts.checkpointDir), { force: true }).catch(() => {});
   return {
     at: new Date().toISOString(),
     model: modelManager.getCurrentModel(),
-    commit: await currentCommit(),
+    commit,
     passed,
     total: results.length,
     score: totalRuns > 0 ? Math.round((totalPasses / totalRuns) * 100) : 0,
     results,
   };
+}
+
+/**
+ * Per-task checkpointing.
+ *
+ * The suite used to write nothing until all 15 tasks finished, so a process
+ * death at task 7 destroyed six completed tasks — thirty model runs and ~25
+ * minutes — with no trace. That happened (2026-08-23) and the results survived
+ * only because someone was tailing the log.
+ *
+ * The checkpoint is keyed by the ARTIFACT, not just the commit: a resumed run
+ * that mixes results from two builds is not a measurement, it is an average of
+ * two different programs. A build hash mismatch refuses the resume and says so,
+ * rather than quietly producing a number nobody can attribute.
+ */
+export interface EvalCheckpoint {
+  key: string;
+  artifact: string;
+  model: string;
+  commit: string;
+  repeat: number;
+  only?: string;
+  startedAt: string;
+  results: HarnessTaskResult[];
+}
+
+/** Identity of the built artifact under test — content, not timestamp. */
+export function artifactHash(): string {
+  const dist = resolve(process.cwd(), 'dist', 'index.js');
+  if (!existsSync(dist)) return 'no-dist';
+  try {
+    return createHash('sha256').update(readFileSync(dist)).digest('hex').slice(0, 12);
+  } catch {
+    return 'unreadable';
+  }
+}
+
+export function checkpointPath(key: string, dir?: string): string {
+  const outDir = dir ?? resolve(process.env.HOME || '~', '.veepee-code', 'harness-evals');
+  return join(outDir, `.partial-${key}.json`);
+}
+
+export async function loadCheckpoint(key: string, dir?: string): Promise<EvalCheckpoint | null> {
+  const path = checkpointPath(key, dir);
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(await readFile(path, 'utf-8')) as EvalCheckpoint;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCheckpoint(cp: EvalCheckpoint, dir?: string): Promise<void> {
+  const path = checkpointPath(cp.key, dir);
+  await mkdir(resolve(path, '..'), { recursive: true });
+  // Write-then-rename: a crash mid-write must not leave a half-parsed
+  // checkpoint that then refuses to resume.
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, JSON.stringify(cp, null, 2));
+  await rename(tmp, path);
 }
 
 /** Persist a run so successive runs can be compared. */
