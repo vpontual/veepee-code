@@ -37,46 +37,60 @@ function stubFetch(frames: unknown[]) {
   globalThis.fetch = (async () => sseResponse(frames)) as typeof fetch;
 }
 
-async function collectContent(client: OpenAIChatClient): Promise<string> {
+async function collect(client: OpenAIChatClient): Promise<{ content: string; thinking: string }> {
   const stream = await client.chat({ model: 'm', messages: [] });
-  let out = '';
-  for await (const chunk of stream) out += chunk.message?.content ?? '';
-  return out;
+  let content = '';
+  let thinking = '';
+  for await (const chunk of stream) {
+    content += chunk.message?.content ?? '';
+    thinking += (chunk.message as { thinking?: string })?.thinking ?? '';
+  }
+  return { content, thinking };
 }
 
 describe('OpenAIChatClient reasoning extraction', () => {
   const client = new OpenAIChatClient('http://example.invalid:8000');
 
-  it('folds vLLM 0.23.1 `delta.reasoning` into content', async () => {
+  it('reads vLLM 0.23.1 `delta.reasoning`', async () => {
     stubFetch([
       { choices: [{ delta: { role: 'assistant' } }] },
       { choices: [{ delta: { reasoning: 'the sky ' } }] },
       { choices: [{ delta: { reasoning: 'is blue' } }] },
     ]);
-    expect(await collectContent(client)).toBe('the sky is blue');
+    expect(await collect(client)).toEqual({ content: '', thinking: 'the sky is blue' });
   });
 
-  it('still folds `delta.reasoning_content` for servers that use that name', async () => {
+  it('still reads `delta.reasoning_content` for servers that use that name', async () => {
     stubFetch([
       { choices: [{ delta: { reasoning_content: 'alpha' } }] },
       { choices: [{ delta: { reasoning_content: 'beta' } }] },
     ]);
-    expect(await collectContent(client)).toBe('alphabeta');
+    expect((await collect(client)).thinking).toBe('alphabeta');
   });
 
   it('does not double-emit when a server sends both spellings', async () => {
     stubFetch([
       { choices: [{ delta: { reasoning: 'x', reasoning_content: 'x' } }] },
     ]);
-    expect(await collectContent(client)).toBe('x');
+    expect((await collect(client)).thinking).toBe('x');
   });
 
-  it('keeps normal content working alongside reasoning', async () => {
+  /**
+   * The channels must stay SEPARATE. Folding reasoning into content printed the
+   * whole chain of thought above every answer and — because the agent's
+   * act/verify heuristics read the assistant's own words — turned the "Let me…"
+   * of ordinary reasoning into a stall signal: a greeting earned two force-act
+   * nudges and two pointless bash calls (2026-08-23).
+   */
+  it('keeps reasoning out of content when the model answers', async () => {
     stubFetch([
-      { choices: [{ delta: { reasoning: 'think ' } }] },
-      { choices: [{ delta: { content: 'answer' } }] },
+      { choices: [{ delta: { reasoning: 'Let me check whether I should act. ' } }] },
+      { choices: [{ delta: { content: 'Ready. What are we working on?' } }] },
     ]);
-    expect(await collectContent(client)).toBe('think answer');
+    expect(await collect(client)).toEqual({
+      content: 'Ready. What are we working on?',
+      thinking: 'Let me check whether I should act. ',
+    });
   });
 
   it('emits tool calls regardless of which reasoning field is used', async () => {

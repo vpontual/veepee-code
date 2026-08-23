@@ -126,9 +126,42 @@ export const FORCE_ACT_NUDGE_STALLED =
   'do not restate the plan, do not end your turn without a tool call, and do not mention this ' +
   'instruction — the user never saw it.';
 
+/**
+ * The part of a model turn that is an ANSWER, with any reasoning stripped.
+ *
+ * Every heuristic here reads the assistant's own words, and reasoning is not
+ * words the assistant said — it is words it thought. The two read completely
+ * differently: a chain of thought says "Let me check…", "I need to…", "I should
+ * just confirm" almost by definition, which is precisely `STATED_INTENT`. Judge
+ * a turn on its reasoning and a greeting answered "Ready. What are we working
+ * on?" looks like a stall (measured 2026-08-23: 1050 chars of reasoning against
+ * 97 of answer), earns a force-act nudge, and the model then burns turns running
+ * `pwd` and narrating the hidden [SYSTEM] nudge back to the user.
+ *
+ * Servers that split the channels are handled upstream (the reasoning never
+ * enters `fullContent` at all). This covers the models that DON'T: an inline
+ * `<think>…</think>` block, or the orphan-`</think>` shape where the trace is
+ * emitted first and closed with a bare tag.
+ */
+export function answerText(content: string): string {
+  const withoutBlocks = content.replace(/<think>[\s\S]*?<\/think>/g, '');
+  const close = withoutBlocks.lastIndexOf('</think>');
+  let answer: string;
+  if (close >= 0) {
+    // Orphan close: everything up to it was the trace.
+    answer = withoutBlocks.slice(close + '</think>'.length);
+  } else {
+    // Unterminated open (the model hit its cap mid-thought): everything after
+    // it is trace, and there is no answer beyond what came before.
+    const open = withoutBlocks.indexOf('<think>');
+    answer = open >= 0 ? withoutBlocks.slice(0, open) : withoutBlocks;
+  }
+  return answer.replace(/<\/?think>/g, '').trim();
+}
+
 /** Which nudge to inject: an announced-but-unstarted action gets the one with no way out. */
 export function forceActNudge(content: string): string {
-  return STATED_INTENT.test(content) ? FORCE_ACT_NUDGE_STALLED : FORCE_ACT_NUDGE;
+  return STATED_INTENT.test(answerText(content)) ? FORCE_ACT_NUDGE_STALLED : FORCE_ACT_NUDGE;
 }
 
 /** How many force-act nudges one user message may earn. Two, not one: the first is
@@ -241,7 +274,9 @@ export function shouldForceAct(opts: {
   const msg = opts.userMessage ?? '';
   const askedForWork = ASKS_FOR_WORK.test(msg);
   const askedForInfo = (ASKS_FOR_INFO.test(msg) || YES_NO_QUESTION.test(msg)) && !askedForWork;
-  const promisedAction = STATED_INTENT.test(opts.content);
+  // The ANSWER, never the reasoning that preceded it — see `answerText`.
+  const answer = answerText(opts.content);
+  const promisedAction = STATED_INTENT.test(answer);
 
   // Once the model HAS acted, a closing summary is a real completion and must be
   // left alone — that veto is most of what keeps this guard safe. The single
@@ -261,7 +296,7 @@ export function shouldForceAct(opts: {
 
   // Nobody mentioned work. Only a substantive narration is worth a nudge; a short
   // conversational reply is left alone.
-  return opts.content.trim().length >= FORCE_ACT_MIN_CHARS;
+  return answer.length >= FORCE_ACT_MIN_CHARS;
 }
 
 /** Tools that change code (leave the workspace in a state that ought to be verified). */
@@ -1062,6 +1097,12 @@ export class Agent {
 
       // Stream LLM response with thinking detection
       let fullContent = '';
+      /** Reasoning delivered on its own channel (vLLM `reasoning` / gateway
+       *  `thinking`). Kept OUT of `fullContent` — it is not the assistant's
+       *  answer and must not reach the context or the act/verify heuristics —
+       *  but retained so a turn that spent its whole budget reasoning can still
+       *  surface something instead of ending silent. */
+      let fullThinking = '';
       let toolCalls: ToolCall[] = [];
       let inThinking = false;
       let thinkingBuffer = '';
@@ -1179,7 +1220,10 @@ export class Agent {
           // runs reasoning-parser OFF, so llm-gateway splits `[trace]</think>[answer]`
           // and emits the trace here. Render it collapsed instead of leaking inline.
           const think = (chunk.message as { thinking?: string }).thinking;
-          if (think) yield { type: 'thinking', content: think };
+          if (think) {
+            fullThinking += think;
+            yield { type: 'thinking', content: think };
+          }
 
           if (chunk.message.content) {
             const text = chunk.message.content;
@@ -1320,6 +1364,17 @@ export class Agent {
       // Record actual token usage for context-aware window sizing
       if (promptEvalCount > 0) {
         this.context.recordPromptTokens(promptEvalCount);
+      }
+
+      // A turn that produced reasoning, no content and no tool calls has an
+      // answer only on the reasoning channel — surface it rather than ending
+      // the turn silent. This is the `07727dc` failure (a whole run emitting
+      // ONE BYTE) and it is the reason reasoning was ever folded into content;
+      // the promotion happens HERE, at the one point where the turn is known to
+      // be otherwise empty, instead of for every token of every turn.
+      if (!fullContent.trim() && toolCalls.length === 0 && fullThinking.trim()) {
+        fullContent = fullThinking.trim();
+        yield { type: 'text', content: fullContent };
       }
 
       // Add assistant message to context

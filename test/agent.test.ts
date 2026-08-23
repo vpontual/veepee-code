@@ -326,7 +326,7 @@ describe('Agent <think>-tag stream processing', () => {
 });
 
 // --- Tier 3 #1: force-act guard (shouldForceAct) ---
-import { shouldForceAct, FORCE_ACT_MIN_CHARS, FORCE_ACT_NUDGE, FORCE_ACT_NUDGE_STALLED, forceActNudge, FORCE_ACT_MAX_NUDGES, shouldForceVerify, CODE_MUTATION_TOOLS } from '../src/agent.js';
+import { shouldForceAct, answerText, FORCE_ACT_MIN_CHARS, FORCE_ACT_NUDGE, FORCE_ACT_NUDGE_STALLED, forceActNudge, FORCE_ACT_MAX_NUDGES, shouldForceVerify, CODE_MUTATION_TOOLS } from '../src/agent.js';
 
 describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', () => {
   const long = 'x'.repeat(FORCE_ACT_MIN_CHARS);
@@ -575,6 +575,66 @@ describe('shouldForceAct — force one ACT turn instead of narrate-and-stop', ()
     it('allows more than one nudge per message', () => {
       expect(FORCE_ACT_MAX_NUDGES).toBeGreaterThan(1);
     });
+  });
+});
+
+/**
+ * Reasoning is not an answer, and judging a turn by it inverts every heuristic
+ * here. Live case (2026-08-23, DGX, `llmBackend: "openai"`): "hi, are you ready
+ * to code?" produced 1050 chars of reasoning and a 97-char answer. The adapter
+ * folded the trace into content, so the model's own "I should…" / "Let me…"
+ * read as STATED_INTENT, the greeting earned two force-act nudges, and vcode ran
+ * `ls`, `pwd` and `git log` for nothing while printing the chain of thought — and
+ * the hidden [SYSTEM] nudge — to the user.
+ */
+describe('answerText — heuristics read the answer, never the reasoning', () => {
+  it('drops a complete <think> block', () => {
+    expect(answerText('<think>Let me check the repo first.</think>Ready.')).toBe('Ready.');
+  });
+
+  it('drops an orphan-closed trace (vLLM without a reasoning parser)', () => {
+    expect(answerText('I need to look around.</think>Ready. What are we working on?'))
+      .toBe('Ready. What are we working on?');
+  });
+
+  it('drops an unterminated trace — there is no answer past the open tag', () => {
+    expect(answerText('Ready.<think>Now, should I also check')).toBe('Ready.');
+  });
+
+  it('leaves an ordinary answer untouched', () => {
+    expect(answerText('Ready. What are we working on?')).toBe('Ready. What are we working on?');
+  });
+
+  const greeting = 'hi, are you ready to code?';
+  const trace =
+    'The user is asking if I am ready to code. Let me check the current state of things. ' +
+    'I should be ready and ask what they want to work on. I need to make a tool call.';
+
+  it('does not nudge a greeting because the reasoning said "let me"', () => {
+    expect(shouldForceAct({ mode: 'act', hasActedThisMessage: false, alreadyForced: false,
+      content: `${trace}</think>Ready. What are we working on?`, userMessage: greeting })).toBe(false);
+  });
+
+  it('does not re-nudge after acting because the reasoning said "I should"', () => {
+    expect(shouldForceAct({ mode: 'act', hasActedThisMessage: true, alreadyForced: false,
+      content: `<think>${trace}</think>Ready. What are we working on?`, userMessage: greeting })).toBe(false);
+  });
+
+  it('still fires when the ANSWER itself promises work', () => {
+    expect(shouldForceAct({ mode: 'act', hasActedThisMessage: false, alreadyForced: false,
+      content: '<think>The user wants a fix.</think>Let me explore the project first.',
+      userMessage: 'fix one concrete bug' })).toBe(true);
+  });
+
+  it('picks the nudge from the answer, not the trace', () => {
+    expect(forceActNudge('<think>Let me read the file.</think>Done — the test passes.'))
+      .toBe(FORCE_ACT_NUDGE);
+  });
+
+  it('does not let a long trace clear the length floor on its own', () => {
+    const long = 'x'.repeat(FORCE_ACT_MIN_CHARS * 2);
+    expect(shouldForceAct({ mode: 'act', hasActedThisMessage: false, alreadyForced: false,
+      content: `<think>${long}</think>Sure.`, userMessage: 'hi there' })).toBe(false);
   });
 });
 

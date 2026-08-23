@@ -22,7 +22,7 @@
  */
 
 interface OllamaChunk {
-  message: { content?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
+  message: { content?: string; thinking?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
   eval_count?: number;
   prompt_eval_count?: number;
   eval_duration?: number;
@@ -203,8 +203,20 @@ export class OpenAIChatClient {
           if (typeof delta.content === 'string' && delta.content.length > 0) {
             yield { message: { content: delta.content } };
           }
-          // Some servers surface reasoning separately; fold it into content so
-          // the agent's <think> parser can present it (matches inline behavior).
+          // Some servers surface reasoning on its own channel. It is yielded as
+          // `thinking`, NOT folded into `content` — the agent renders that
+          // collapsed and keeps it out of the assistant message.
+          //
+          // FOLDING IT INTO CONTENT WAS WORSE THAN DROPPING IT. Measured on the
+          // DGX 2026-08-23 for the prompt "hi, are you ready to code?":
+          // reasoning = 1050 chars, content = 97 chars. Folded, the user saw the
+          // entire chain of thought printed above the answer — and, worse, every
+          // heuristic in the agent that reads the assistant's own words saw it
+          // too. Reasoning says "Let me check…" / "I need to…" almost by
+          // definition, which is exactly the STATED_INTENT pattern
+          // `shouldForceAct` fires on, so a plain greeting earned two
+          // force-act nudges and two pointless bash calls, and the model then
+          // narrated the hidden [SYSTEM] nudge back to the user.
           //
           // THE FIELD NAME IS SERVER-SPECIFIC AND GETTING IT WRONG IS SILENT.
           // vLLM 0.23.1 (the DGX Spark, --reasoning-parser deepseek_r1) emits
@@ -227,7 +239,7 @@ export class OpenAIChatClient {
                 ? delta.reasoning
                 : '';
           if (reasoningDelta) {
-            yield { message: { content: reasoningDelta } };
+            yield { message: { thinking: reasoningDelta } };
           }
 
           if (Array.isArray(delta.tool_calls)) {
