@@ -184,27 +184,68 @@ function loadLlamaMd(cwd: string): string {
 // captures profile, hard rules, and voice. Synced every 15min by
 // pinky-sync.timer; this loader just makes the files visible to the model.
 
+/** Total characters of operator context allowed into EVERY request. */
+const PINKY_BUDGET_CHARS = 16_000;
+
+/**
+ * Operator context, on a budget.
+ *
+ * This was unbounded, and it had quietly become the largest single component of
+ * the system prompt: 30,026 chars of a 48,073-char total — ~8.6k tokens on every
+ * single request, more than vcode's own instructions, the project tree and the
+ * project instructions combined. That is prefill on every turn, and window that
+ * long sessions do not get to spend on code.
+ *
+ * The same mistake was already fixed once beside this, for `~/CLAUDE.md` ("a 22KB
+ * homelab document, ~7.5k tokens attached to every single turn"), and then a
+ * bigger one was added next to it.
+ *
+ * Priority is by per-turn value, not file order. `identity/rules.md` is BEHAVIOUR
+ * — it changes what the model does, so it is never the first thing cut.
+ * `PINKY.md` is an INDEX: 14.7 KB describing where things live, exactly the kind
+ * of thing to look up on demand. It becomes a pointer; the model has `read_file`.
+ */
 function loadPinky(): string {
   const root = join(process.env.HOME || '~', 'Nextcloud', 'pinky');
   if (!existsSync(root)) return '';
 
   const files: Array<{ label: string; path: string }> = [
-    { label: 'PINKY.md (cross-machine index)', path: join(root, 'PINKY.md') },
-    { label: 'identity/profile.md', path: join(root, 'identity', 'profile.md') },
     { label: 'identity/rules.md', path: join(root, 'identity', 'rules.md') },
+    { label: 'identity/profile.md', path: join(root, 'identity', 'profile.md') },
     { label: 'identity/voice.md', path: join(root, 'identity', 'voice.md') },
+    { label: 'PINKY.md (cross-machine index)', path: join(root, 'PINKY.md') },
   ];
 
   const sections: string[] = [];
+  const deferred: string[] = [];
+  let used = 0;
+
   for (const { label, path } of files) {
     if (!existsSync(path)) continue;
+    let content = '';
     try {
-      const content = readFileSync(path, 'utf-8').trim();
-      if (content) sections.push(`### ${label}\n\n${content}`);
-    } catch { /* ignore */ }
+      content = readFileSync(path, 'utf-8').trim();
+    } catch { continue; }
+    if (!content) continue;
+
+    const remaining = PINKY_BUDGET_CHARS - used;
+    if (content.length <= remaining) {
+      sections.push(`### ${label}\n\n${content}`);
+      used += content.length;
+      continue;
+    }
+    // Does not fit. Take a useful head only if there is real room left —
+    // half a sentence of a rule is worse than a path to the whole file.
+    if (remaining > 1_500) {
+      const head = content.slice(0, remaining).replace(/\n[^\n]*$/, '');
+      sections.push(`### ${label}\n\n${head}\n\n[truncated — read ${path} for the rest]`);
+      used += head.length;
+    } else {
+      deferred.push(`${label} -> ${path}`);
+    }
   }
 
-  if (sections.length === 0) return '';
+  if (sections.length === 0 && deferred.length === 0) return '';
 
   return [
     '\n## Operator Context (Pinky)',
@@ -213,10 +254,14 @@ function loadPinky(): string {
     'consult before assuming what "the VM", "the Pi", "the fleet" mean, or how the user',
     'wants to be addressed and written to. Project instructions below may override.',
     '',
-    sections.join('\n\n'),
+    ...sections,
+    ...(deferred.length
+      ? ['', 'Not loaded here — read these files when you need them:', ...deferred.map(d => `- ${d}`)]
+      : []),
     '',
   ].join('\n');
 }
+
 
 // ─── System Prompt ───────────────────────────────────────────────────────────
 // Synthesized from: Claude Code, OpenCode, Codex, Gemini CLI, RooCode, Llama Rider
@@ -359,6 +404,9 @@ export class ContextManager {
   // optimalContextSize still override this via setContextLimit().
   private contextLimit = 131072; // daily-driver window; DGX serves up to 262144
   private lastPromptTokens = 0; // actual prompt tokens from last Ollama response
+  private lastPromptChars = 0;  // chars we sent for that same request — the calibration pair
+  /** Set when the sliding window dropped messages. Cleared by compaction. */
+  private windowTruncated = false;
   private filesRead = new Set<string>();
   private filesWritten = new Set<string>();
   private errorCount = 0;
@@ -647,6 +695,14 @@ Modified: ${renderList(writes)}
   /** Record actual prompt token count from Ollama response */
   recordPromptTokens(count: number): void {
     this.lastPromptTokens = count;
+    // Pair it with the chars we sent, so charsPerToken() is measured, not guessed.
+    let chars = this.getSystemPrompt().length;
+    for (const msg of this.getMessages()) {
+      chars += (msg.content?.length ?? 0);
+      const calls = (msg as unknown as { tool_calls?: unknown }).tool_calls;
+      if (calls) { try { chars += JSON.stringify(calls).length; } catch { /* ignore */ } }
+    }
+    this.lastPromptChars = chars;
   }
 
   /** Get the last recorded prompt token count */
@@ -670,25 +726,35 @@ Modified: ${renderList(writes)}
   getMessages(): Message[] {
     if (this.messages.length === 0) return [];
 
-    // Reserve 20% of context for model output, system prompt gets ~30%
-    // Remaining ~50% is the message budget
-    const messageBudget = Math.floor(this.contextLimit * 0.5);
+    const messageBudget = this.messageBudget();
 
-    // Build window from newest to oldest, estimating ~3 chars per token
-    // (code and JSON have more tokens per character than prose — 3 is more conservative than 4)
     const window: Message[] = [];
     let estimatedTokens = 0;
+    let firstKept = this.messages.length;
 
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const msg = this.messages[i];
-      const msgTokens = Math.ceil((msg.content?.length || 0) / 3) + 10; // +10 for role/framing overhead
+      const msgTokens = this.messageTokens(msg);
 
       if (estimatedTokens + msgTokens > messageBudget && window.length >= 2) {
         break; // always include at least the last 2 messages (user + assistant)
       }
 
       window.unshift(msg);
+      firstKept = i;
       estimatedTokens += msgTokens;
+    }
+
+    // THE WINDOW DROPPING MESSAGES IS NOT A NEUTRAL ACT — it is context loss
+    // with none of compaction's mitigations: no summary, no knowledge-state
+    // update, and (before this) no file-ledger merge, so `compactedFilesBlock()`
+    // stayed empty precisely when the model had lost the messages that named
+    // those files. Fold what falls out of the window into the ledger, and record
+    // that it happened so `needsCompaction()` can see it.
+    if (firstKept > 0) {
+      const dropped = this.messages.slice(0, firstKept);
+      this.mergeIntoFileLedger(dropped);
+      this.windowTruncated = true;
     }
 
     // Repair invariant #2: drop leading tool messages that have no preceding
@@ -834,27 +900,96 @@ Modified: ${renderList(writes)}
     };
   }
 
-  estimateTokens(): number {
-    // Use actual prompt tokens if available (most accurate)
-    if (this.lastPromptTokens > 0) return this.lastPromptTokens;
-
-    // Fallback: estimate from chars (~3 chars per token for code-heavy content)
-    let chars = this.getSystemPrompt().length;
-    for (const msg of this.getMessages()) {
-      chars += (msg.content?.length || 0) + 20;
+  /**
+   * Characters per token, CALIBRATED against what the server actually charged.
+   *
+   * The old fixed 3.0 was a guess applied to `content` only, and both halves of
+   * that were wrong in the same direction: an assistant message carrying a 50 KB
+   * `write_file` in `tool_calls.arguments` scored TEN tokens. Once a real
+   * `prompt_eval_count` has come back we know the true ratio for this model on
+   * this content, so use it; clamp it so one weird turn cannot unbound the window.
+   */
+  private charsPerToken(): number {
+    if (this.lastPromptTokens > 0 && this.lastPromptChars > 0) {
+      const observed = this.lastPromptChars / this.lastPromptTokens;
+      return Math.min(5, Math.max(2.5, observed));
     }
-    return Math.ceil(chars / 3);
+    return 3.5;
   }
 
-  /** Check if context is approaching the limit and needs compaction */
+  /** Every byte a message will actually put on the wire — content AND the
+   *  tool-call arguments, which is where code lives. */
+  private messageTokens(msg: Message): number {
+    const calls = (msg as unknown as { tool_calls?: unknown }).tool_calls;
+    let chars = msg.content?.length ?? 0;
+    if (calls) {
+      try { chars += JSON.stringify(calls).length; } catch { /* circular: ignore */ }
+    }
+    return Math.ceil(chars / this.charsPerToken()) + 10; // +10 role/framing overhead
+  }
+
+  /** Tokens the system prompt costs, measured rather than assumed at 30%. */
+  private systemPromptTokens(): number {
+    return Math.ceil(this.getSystemPrompt().length / this.charsPerToken());
+  }
+
+  /**
+   * How many tokens the message window may use.
+   *
+   * Was a flat 50% of the limit, which is what made the window the REAL ceiling:
+   * it truncated silently at ~65k estimated tokens while `needsCompaction()`
+   * waited for 98k real ones, so on this fleet compaction was structurally
+   * unreachable and history just fell off the back with no summary. Deriving it
+   * from the measured system prompt and a real output reserve puts the two on
+   * the same scale, so the trigger fires BEFORE the window starts dropping.
+   */
+  private messageBudget(): number {
+    const reserve = Math.min(16384, Math.floor(this.contextLimit * 0.15));
+    const budget = this.contextLimit - this.systemPromptTokens() - reserve;
+    return Math.max(Math.floor(this.contextLimit * 0.25), budget);
+  }
+
+  /** What the NEXT request will cost, computed from current content — never the
+   *  stale recorded figure. `compactWithRetry` must use this: `estimateTokens()`
+   *  returns `lastPromptTokens` whenever it is set, and nothing in compaction
+   *  updates that, so the retry loop used to compare the same pre-compaction
+   *  number against the limit three times and call `dropAggressive()` on every
+   *  pass — reducing history to the summary plus four messages while reporting
+   *  the identical "projected N" each time. */
+  projectedTokens(): number {
+    let tokens = this.systemPromptTokens();
+    for (const msg of this.getMessages()) tokens += this.messageTokens(msg);
+    return tokens;
+  }
+
+  estimateTokens(): number {
+    // What the last request actually cost, when we know it.
+    if (this.lastPromptTokens > 0) return this.lastPromptTokens;
+    return this.projectedTokens();
+  }
+
+  /** Check if context is approaching the limit and needs compaction.
+   *
+   *  Two triggers, because there are two ways to be full. The measured one is
+   *  authoritative when it exists; the projected one catches the case the
+   *  measurement cannot see — a window already large enough that the next
+   *  `getMessages()` will start dropping messages. Silent truncation must never
+   *  be how a long session ends up smaller. */
   needsCompaction(): boolean {
-    const used = this.lastPromptTokens > 0 ? this.lastPromptTokens : this.estimateTokens();
-    return used > this.contextLimit * 0.75;
+    const used = this.lastPromptTokens > 0 ? this.lastPromptTokens : this.projectedTokens();
+    if (used > this.contextLimit * 0.75) return true;
+    if (this.windowTruncated) return true;
+    return this.projectedTokens() > this.messageBudget() * 0.9;
+  }
+
+  /** Did the sliding window silently drop messages since the last compaction? */
+  wasWindowTruncated(): boolean {
+    return this.windowTruncated;
   }
 
   /** Check if context is critically full (pre-compaction snapshot trigger) */
   isContextCritical(): boolean {
-    const used = this.lastPromptTokens > 0 ? this.lastPromptTokens : this.estimateTokens();
+    const used = this.lastPromptTokens > 0 ? this.lastPromptTokens : this.projectedTokens();
     return used > this.contextLimit * 0.90;
   }
 
@@ -873,6 +1008,7 @@ Modified: ${renderList(writes)}
     // Cumulative file ledger — accumulate file reads/writes from messages
     // about to fall out of context.
     this.mergeIntoFileLedger(droppedMessages);
+    this.windowTruncated = false;
 
     if (ollamaHost && model && droppedMessages.length > 2) {
       // Fire-and-forget KS-only update (no synthetic summary message inserted).
@@ -909,6 +1045,7 @@ Modified: ${renderList(writes)}
     const droppedMessages = this.messages.slice(0, this.messages.length - windowMessages.length);
     // Cumulative file ledger — record file reads/writes from dropped messages.
     this.mergeIntoFileLedger(droppedMessages);
+    this.windowTruncated = false;
     const model = summarizerModel || mainModel;
 
     if (droppedMessages.length > 2) {
@@ -961,7 +1098,7 @@ Modified: ${renderList(writes)}
     if (!ok) return false;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const projected = this.estimateTokens();
+      const projected = this.projectedTokens();
       if (projected <= this.contextLimit * 0.85) return true;
 
       options?.onRetry?.(attempt, projected, this.contextLimit);
@@ -1101,6 +1238,7 @@ SUMMARY:
     this.errorCount = 0;
     this.lastTurnToolCalls = 0;
     this.summaryMessage = null;
+    this.windowTruncated = false;
     this.knowledgeState = new KnowledgeState(Date.now().toString(36));
   }
 

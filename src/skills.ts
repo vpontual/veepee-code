@@ -190,12 +190,40 @@ export function buildSkillInvokeTool(cwd: string = process.cwd(), activeTools: s
   });
   if (skills.length === 0) return null;
 
-  // Index fits in the tool description. Each line is short (~50-80 chars).
-  // For ~50 skills that's ~3k chars / ~750 tokens — well within budget.
-  const indexLines = skills.map((s) => {
+  // The index rides in this tool description on EVERY request, so it is a
+  // per-turn tax, not a one-off. The old comment budgeted "~50-80 chars" per
+  // line; measured against the ecosystem `SKILL.md` bundles this repo now reads,
+  // the real figure is ~531 — descriptions there carry whole trigger lists.
+  // Nothing pruned, and `teacher-escalation` WRITES new skills into the same
+  // directory automatically, so the tax grew monotonically and silently.
+  //
+  // Two caps, both deliberate. Per line: enough to route to the right skill,
+  // which is all the index has to do — the body arrives when it is invoked.
+  // Overall: a hard ceiling, with the remainder named but not described, because
+  // a name is still routable and an unbounded index is not.
+  const SKILL_LINE_MAX = 180;
+  const SKILL_INDEX_MAX = 8_000;
+
+  const line = (s: Skill): string => {
     const tagsHint = s.tags && s.tags.length > 0 ? ` [${s.tags.join(',')}]` : '';
-    return `  • ${s.name}${tagsHint} — ${s.description}`;
-  });
+    const head = `  • ${s.name}${tagsHint} — `;
+    const room = Math.max(40, SKILL_LINE_MAX - head.length);
+    const desc = s.description.replace(/\s+/g, ' ').trim();
+    return head + (desc.length > room ? desc.slice(0, room - 1).trimEnd() + '…' : desc);
+  };
+
+  const indexLines: string[] = [];
+  const overflow: string[] = [];
+  let used = 0;
+  for (const s of skills) {
+    const l = line(s);
+    if (used + l.length > SKILL_INDEX_MAX) { overflow.push(s.name); continue; }
+    indexLines.push(l);
+    used += l.length;
+  }
+  if (overflow.length > 0) {
+    indexLines.push(`  • (also available, by name only: ${overflow.join(', ')})`);
+  }
 
   const description = [
     'Load a skill on demand. Skills are pre-written guidance for specific tasks (e.g., "create-pull-request", "write-test", "refactor-component").',
