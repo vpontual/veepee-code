@@ -267,13 +267,18 @@ function execHook(hook: HookEntry, layer: SettingsLayer, payload: EventPayload):
 
     // See the bash tool: 'close' waits for stdio EOF, which a backgrounded
     // grandchild can hold forever. Bound the wait once the hook itself exits.
-    proc.on('exit', () => {
+    // Same defect the bash tool had: this discarded `code` and hardcoded 0, so a
+    // hook that exits non-zero to VETO a tool call was silently ignored whenever
+    // its stdio EOF arrived more than the grace period late. A blocking hook
+    // that cannot block is worse than no hook — the user believes the guard is
+    // in place.
+    proc.on('exit', (code, signal) => {
       if (settled || graceTimer) return;
       graceTimer = setTimeout(() => {
         finish({
           stdout: stdout.trim(),
-          stderr: stderr.trim(),
-          exitCode: 0,
+          stderr: signal ? (stderr + `\n[hook killed by ${signal}]`).trim() : stderr.trim(),
+          exitCode: signal ? 1 : (code ?? 0),
           timedOut,
           hook,
           layer,

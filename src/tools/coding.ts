@@ -876,20 +876,41 @@ function createBashTool(fileTracker?: FileTracker): ToolDef {
         // indefinitely (`npm run dev &`, a spawned server). Prefer 'close' so
         // output is complete, but never wait on it for more than a grace
         // period after the command is already gone.
-        child.on('exit', () => {
+        //
+        // THE EXIT CODE IS THE POINT OF THIS HANDLER, AND IT USED TO BE THROWN
+        // AWAY. `child.on('exit', () => ...)` discarded its `code` argument and
+        // the grace path called `ok(...)` unconditionally, so any command that
+        // left a background process — a test run that starts a watcher, a build
+        // that spawns a dev server, anything with a trailing `&` — reported
+        // SUCCESS no matter how it exited. Downstream that is worse than a
+        // wrong answer: `addToolResult(..., success=true)` keeps the error
+        // count flat, the self-repair guard treats the turn as verified, and
+        // the model reads a passing build. Verified with a lingering child and
+        // `exit 3`: success=true before, success=false after.
+        child.on('exit', (code, signal) => {
           if (settled || graceTimer) return;
           graceTimer = setTimeout(() => {
             const out = compose().trim();
-            finish(ok(
-              (out ? out + '\n' : '') +
+            const note =
               '(note: the command exited but left a background process holding its output stream; ' +
-              'it is still running and detached from this tool call)',
-            ));
+              'it is still running and detached from this tool call)';
+            // A signal death is a failure too — SIGKILL from an OOM killer is
+            // not a passing test run.
+            if (code === 0 && !signal) {
+              finish(ok((out ? out + '\n' : '') + note));
+            } else {
+              const how = signal ? `killed by ${signal}` : `Exit code ${code}`;
+              finish(fail(`${how}\n${out}\n${note}`.trim()));
+            }
           }, OUTPUT_FLUSH_GRACE_MS);
         });
 
-        child.on('close', (code) => {
+        child.on('close', (code, signal) => {
           const output = compose();
+          if (signal) {
+            finish(fail(`Killed by ${signal}\n${output.trim()}`));
+            return;
+          }
           if (code === 0) {
             finish(ok(output.trim() || '(no output)'));
           } else {

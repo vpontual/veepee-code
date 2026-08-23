@@ -1,5 +1,6 @@
 import type { Message } from 'ollama';
 import { nonStreamingAnswer } from './llm-answer.js';
+import { activeSystemPromptSections } from './extras/manager.js';
 import type { ConversationSignals } from './models.js';
 import type { AgentMode } from './agent.js';
 import { KnowledgeState } from './knowledge.js';
@@ -512,15 +513,22 @@ export class ContextManager {
       }
     }
 
-    // Inject system-prompt sections from active extras whose project markers
-    // are present in cwd. Lazy-required to avoid an import cycle on startup.
+    // Inject system-prompt sections from active extras whose project markers are
+    // present in cwd.
+    //
+    // This was a `require()` — in a package whose `type` is `module`. `tsc`
+    // preserves it verbatim into `dist/context.js`, so every shipped build threw
+    // `ReferenceError: require is not defined` straight into the bare `catch`
+    // below, and the extras block has NEVER been injected in production. The
+    // test suite passed throughout because it imports `activeSystemPromptSections`
+    // directly as ESM; only the one production call site was dead. `extras/`
+    // does not import `context`, so there is no cycle to avoid and a plain
+    // static import is correct.
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { activeSystemPromptSections } = require('./extras/manager.js') as typeof import('./extras/manager.js');
       const extrasBlock = activeSystemPromptSections(process.cwd());
       if (extrasBlock) this.systemPrompt += extrasBlock;
     } catch {
-      // extras not loadable in this build (tests etc.) — skip silently
+      // A malformed extras config must not take the system prompt down with it.
     }
 
     if (this.mode === 'chat') {

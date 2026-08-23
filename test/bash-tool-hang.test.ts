@@ -31,6 +31,31 @@ describe('bash tool — background processes must not stall the result', () => {
     expect(result.output).toContain('background process');
   }, 40_000);
 
+  /**
+   * The grace path used to call `ok(...)` unconditionally — `child.on('exit', ...)`
+   * discarded the exit code — so ANY command that left a background process
+   * reported success however it exited. That is a failing test run, a failing
+   * build, or a failing deploy read by the model as a pass, with the self-repair
+   * guard treating the turn as verified.
+   */
+  it('reports failure when a command exits non-zero AND leaves a background process', async () => {
+    const result = await bashTool().execute({
+      command: 'sleep 30 & echo working; exit 3',
+      timeout: 60_000,
+    });
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toContain('Exit code 3');
+    expect(String(result.error)).toContain('working');
+    // The user still needs to know something was left running.
+    expect(String(result.error)).toContain('background process');
+  }, 40_000);
+
+  it('reports failure when a command is killed by a signal', async () => {
+    const result = await bashTool().execute({ command: 'kill -TERM $$', timeout: 20_000 });
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toMatch(/SIGTERM|Exit code/);
+  }, 30_000);
+
   it('still returns complete output for ordinary commands', async () => {
     const result = await bashTool().execute({ command: 'echo one; echo two; echo three' });
     expect(result.success).toBe(true);
