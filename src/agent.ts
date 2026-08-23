@@ -17,7 +17,7 @@ import { report as reportAgentState } from './agentstate.js';
 import { previewEdit, previewWrite } from './diff.js';
 
 import type { CheckpointManager } from './checkpoint.js';
-import { signatureOf, detectStuckSignature, LOOP_WINDOW, LOOP_MAX_REPEATS, type SignedStep } from './loop-detection.js';
+import { signatureOf, callSignatureOf, detectStuckSignature, detectRepeatedFailure, LOOP_WINDOW, LOOP_MAX_REPEATS, REPEATED_FAILURE_LIMIT, type SignedStep2 } from './loop-detection.js';
 import { generationLimiter } from './generation-limit.js';
 import type { PermissionPosture } from './permissions.js';
 import { readFile, readFile as readFileAsync, writeFile, mkdir } from 'node:fs/promises';
@@ -1033,7 +1033,7 @@ export class Agent {
 
     // Stuck loop detection: hash-signature window (input + output).
     // Catches ABAB oscillation, not just N consecutive identical calls.
-    const recentSteps: SignedStep[] = [];
+    const recentSteps: SignedStep2[] = [];
     const MAX_TURNS_WITHOUT_OUTPUT = 15;
     let turnsWithoutUserContent = 0;
     // Tier 3 #1: force-act guard — track whether the model has taken ANY action this
@@ -1495,6 +1495,7 @@ export class Agent {
 
       // Per-call result strings for loop signature, in toolCalls order.
       const stepResults: string[] = new Array(toolCalls.length).fill('');
+      const stepSuccess: boolean[] = new Array(toolCalls.length).fill(false);
 
       if (allReadOnly) {
         // Parallel execution for independent read-only calls
@@ -1656,6 +1657,7 @@ export class Agent {
           const resultContent = result.success ? result.output : `Error: ${result.error}`;
           const filePath = (toolArgs.path as string) || undefined;
           stepResults[i] = resultContent;
+          stepSuccess[i] = result.success;
           this.context.addToolResult(toolName, resultContent, filePath, result.success);
         }
       }
@@ -1669,11 +1671,22 @@ export class Agent {
       if (toolCalls.length > 0) {
         const sig = signatureOf(toolCalls, stepResults);
         if (sig) {
-          recentSteps.push({ signature: sig });
+          recentSteps.push({
+            signature: sig,
+            callSignature: callSignatureOf(toolCalls),
+            allFailed: stepSuccess.every(ok => !ok),
+          });
           if (recentSteps.length > LOOP_WINDOW) recentSteps.shift();
+          const names = toolCalls.map(c => c.function.name).join(', ');
           if (detectStuckSignature(recentSteps)) {
-            const names = toolCalls.map(c => c.function.name).join(', ');
             yield { type: 'error', error: `Stopped: same tool call+result repeated >${LOOP_MAX_REPEATS} times in last ${LOOP_WINDOW} steps (${names}). Likely stuck.` };
+            this.abortController = null;
+            return;
+          }
+          // The loop the byte-identical check cannot see: the same call failing
+          // over and over with slightly different error text each time.
+          if (detectRepeatedFailure(recentSteps)) {
+            yield { type: 'error', error: `Stopped: ${names} failed ${REPEATED_FAILURE_LIMIT} times with identical arguments. Change the approach rather than repeating the call.` };
             this.abortController = null;
             return;
           }

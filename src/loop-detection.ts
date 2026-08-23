@@ -50,3 +50,56 @@ export function detectStuckSignature(steps: SignedStep[]): string | null {
   }
   return null;
 }
+
+/** How many times the SAME failing call may repeat before we call it stuck. */
+export const REPEATED_FAILURE_LIMIT = 3;
+
+/**
+ * Signature of the CALL only — name and arguments, not the result.
+ */
+export function callSignatureOf(toolCalls: ToolCall[]): string {
+  if (toolCalls.length === 0) return '';
+  const h = createHash('sha256');
+  for (const call of toolCalls) {
+    h.update(call.function.name);
+    h.update('\x00');
+    h.update(JSON.stringify(call.function.arguments ?? {}));
+    h.update('\x00');
+  }
+  return h.digest('hex');
+}
+
+export interface SignedStep2 extends SignedStep {
+  /** Call-only signature. */
+  callSignature?: string;
+  /** True when every tool call in the step failed. */
+  allFailed?: boolean;
+}
+
+/**
+ * The loop the byte-identical detector cannot see.
+ *
+ * `detectStuckSignature` hashes the RESULT too, so it only fires when the output
+ * is byte-identical five times over. The failure that actually happens with a
+ * mid-size model is an edit that keeps missing: `old_string` not found, again and
+ * again, with the error text varying slightly each time — a different line
+ * quoted, a different nearby snippet — so no two signatures match and the run
+ * burns its whole budget. It is the single most reported failure of this class
+ * in other harnesses.
+ *
+ * So: the same call, repeated, FAILING every time, is stuck regardless of what
+ * the error says. Requiring failure is what keeps this off productive
+ * iteration — the same `bash` command run three times as a build progresses is
+ * fine, because those calls succeeded.
+ */
+export function detectRepeatedFailure(steps: SignedStep2[]): string | null {
+  const window = steps.slice(-LOOP_WINDOW);
+  const counts = new Map<string, number>();
+  for (const step of window) {
+    if (!step.callSignature || !step.allFailed) continue;
+    const next = (counts.get(step.callSignature) ?? 0) + 1;
+    counts.set(step.callSignature, next);
+    if (next >= REPEATED_FAILURE_LIMIT) return step.callSignature;
+  }
+  return null;
+}

@@ -204,6 +204,38 @@ function createWriteFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
   };
 }
 
+/**
+ * A capped capture of a stream that keeps BOTH ends.
+ *
+ * Head and tail are each bounded; everything between them is counted and
+ * discarded. The count is reported, because a truncation the model cannot see
+ * is a truncation it will reason past.
+ */
+export function boundedStream(headMax = 192 * 1024, tailMax = 192 * 1024) {
+  let head = '';
+  let tail = '';
+  let dropped = 0;
+  return {
+    push(chunk: string): void {
+      if (head.length < headMax) {
+        const room = headMax - head.length;
+        head += chunk.slice(0, room);
+        chunk = chunk.slice(room);
+        if (!chunk) return;
+      }
+      tail += chunk;
+      if (tail.length > tailMax) {
+        dropped += tail.length - tailMax;
+        tail = tail.slice(tail.length - tailMax);
+      }
+    },
+    text(): string {
+      if (!dropped) return head + tail;
+      return `${head}\n…[${dropped.toLocaleString()} chars of output dropped from the middle — head and tail kept]…\n${tail}`;
+    },
+  };
+}
+
 /** Process-group killers for bash commands currently running. */
 const liveBashChildren = new Set<(signal: NodeJS.Signals) => void>();
 
@@ -215,11 +247,23 @@ const liveBashChildren = new Set<(signal: NodeJS.Signals) => void>();
  * left dangling and no caller needs to special-case this.
  */
 export function killRunningBashCommands(): number {
-  const n = liveBashChildren.size;
-  for (const kill of [...liveBashChildren]) {
+  const targets = [...liveBashChildren];
+  for (const kill of targets) {
     try { kill('SIGTERM'); } catch { /* already gone */ }
   }
-  return n;
+  // Escalate. A process that ignores SIGTERM — a shell trapping it, a test
+  // runner mid-teardown — would otherwise keep the interrupt from meaning
+  // anything, which is the whole complaint this fixes. Anything still
+  // registered after the grace period is still alive.
+  if (targets.length > 0) {
+    setTimeout(() => {
+      for (const kill of targets) {
+        if (!liveBashChildren.has(kill)) continue;  // settled on its own
+        try { kill('SIGKILL'); } catch { /* already gone */ }
+      }
+    }, 2_000).unref?.();
+  }
+  return targets.length;
 }
 
 /**
@@ -1009,24 +1053,18 @@ function createBashTool(fileTracker?: FileTracker): ToolDef {
           env: { ...process.env },
         });
 
-        let stdout = '';
-        let stderr = '';
-        const MAX_OUTPUT = 512 * 1024; // 512KB cap per stream
-        let truncated = false;
-
-        child.stdout.on('data', (data: Buffer) => {
-          if (stdout.length < MAX_OUTPUT) {
-            stdout += data.toString();
-          } else if (!truncated) {
-            truncated = true;
-            stdout += '\n...(output truncated at 512KB)';
-          }
-        });
-        child.stderr.on('data', (data: Buffer) => {
-          if (stderr.length < MAX_OUTPUT) {
-            stderr += data.toString();
-          }
-        });
+        // TRUNCATE IN THE MIDDLE, NOT THE TAIL.
+        //
+        // This kept the first 512 KB and discarded everything after it — which,
+        // for the output that actually matters here, throws away the answer. A
+        // build log, a test run and a stack trace all put the diagnosis at the
+        // END; a compile that emits 600 KB of progress before the one error line
+        // was reported to the model as 512 KB of progress and nothing else. Keep
+        // both ends and say what was dropped in between.
+        const stdoutBuf = boundedStream();
+        const stderrBuf = boundedStream();
+        child.stdout.on('data', (data: Buffer) => stdoutBuf.push(data.toString()));
+        child.stderr.on('data', (data: Buffer) => stderrBuf.push(data.toString()));
 
         // The tool never feeds the command stdin, so close it immediately: a
         // command that reads stdin gets EOF and fails fast instead of blocking
@@ -1048,7 +1086,11 @@ function createBashTool(fileTracker?: FileTracker): ToolDef {
           child.stderr.destroy();
           res(result);
         };
-        const compose = () => stdout + (stderr ? `\n[stderr]\n${stderr}` : '');
+        const compose = () => {
+          const out = stdoutBuf.text();
+          const err = stderrBuf.text();
+          return out + (err ? `\n[stderr]\n${err}` : '');
+        };
 
         // Kill the whole process group. Negative pid = the group led by `child`.
         const killTree = (signal: NodeJS.Signals) => {

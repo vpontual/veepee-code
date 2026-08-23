@@ -4,8 +4,7 @@ import {
   signatureOf,
   detectStuckSignature,
   LOOP_WINDOW,
-  LOOP_MAX_REPEATS,
-} from '../src/loop-detection.js';
+  LOOP_MAX_REPEATS, detectRepeatedFailure, callSignatureOf, REPEATED_FAILURE_LIMIT } from '../src/loop-detection.js';
 
 function call(name: string, args: Record<string, unknown> = {}): ToolCall {
   return { function: { name, arguments: args } } as ToolCall;
@@ -94,5 +93,54 @@ describe('detectStuckSignature', () => {
     // 6 of A in the FIRST 6 slots, 10 of B in the last 10 → b exceeds
     const long = [a, a, a, a, a, a, b, b, b, b, b, b, b, b, b, b];
     expect(detectStuckSignature(long)).toBe(b.signature);
+  });
+});
+
+describe('detectRepeatedFailure — the loop the byte-identical check cannot see', () => {
+  it('fires when the same call fails repeatedly with varying error text', () => {
+    // The characteristic mid-size-model failure: `old_string not found`, again
+    // and again, with a different line quoted each time — so no two RESULT
+    // hashes match and `detectStuckSignature` never trips while the run burns
+    // its whole budget.
+    const steps = Array.from({ length: 3 }, (_, i) => ({
+      signature: `different-each-time-${i}`,
+      callSignature: 'same-call',
+      allFailed: true,
+    }));
+    expect(detectRepeatedFailure(steps)).toBe('same-call');
+  });
+
+  it('leaves productive repetition alone', () => {
+    // The same bash command three times as a build progresses is fine —
+    // requiring failure is what keeps this off legitimate iteration.
+    const steps = Array.from({ length: 5 }, (_, i) => ({
+      signature: `s${i}`,
+      callSignature: 'same-call',
+      allFailed: false,
+    }));
+    expect(detectRepeatedFailure(steps)).toBeNull();
+  });
+
+  it('does not fire below the limit', () => {
+    const steps = Array.from({ length: REPEATED_FAILURE_LIMIT - 1 }, (_, i) => ({
+      signature: `s${i}`,
+      callSignature: 'same-call',
+      allFailed: true,
+    }));
+    expect(detectRepeatedFailure(steps)).toBeNull();
+  });
+
+  it('distinguishes different calls that each failed once', () => {
+    const steps = ['a', 'b', 'c'].map((c, i) => ({
+      signature: `s${i}`, callSignature: c, allFailed: true,
+    }));
+    expect(detectRepeatedFailure(steps)).toBeNull();
+  });
+
+  it('hashes only name and arguments, not the result', () => {
+    const call = [{ function: { name: 'edit_file', arguments: { path: 'a.ts' } } }] as never;
+    const other = [{ function: { name: 'edit_file', arguments: { path: 'b.ts' } } }] as never;
+    expect(callSignatureOf(call)).toBe(callSignatureOf(call));
+    expect(callSignatureOf(call)).not.toBe(callSignatureOf(other));
   });
 });

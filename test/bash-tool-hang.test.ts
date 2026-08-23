@@ -109,3 +109,35 @@ describe('interrupt reaches running commands', () => {
     expect(killRunningBashCommands()).toBe(0); // unregistered once settled
   }, 30_000);
 });
+
+describe('output truncation keeps the end, where the error is', () => {
+  it('keeps head and tail and says what it dropped', async () => {
+    const { boundedStream } = await import('../src/tools/coding.js');
+    const s = boundedStream(100, 100);
+    s.push('H'.repeat(100));
+    s.push('M'.repeat(5_000));
+    s.push('T'.repeat(100));
+    const text = s.text();
+    // Pre-fix this kept the first 512 KB and discarded the rest — for a build
+    // log or a stack trace that throws away the diagnosis.
+    expect(text.startsWith('H'.repeat(100))).toBe(true);
+    expect(text.endsWith('T'.repeat(100))).toBe(true);
+    expect(text).toContain('dropped from the middle');
+  });
+
+  it('does not annotate output that fit', async () => {
+    const { boundedStream } = await import('../src/tools/coding.js');
+    const s = boundedStream(100, 100);
+    s.push('short');
+    expect(s.text()).toBe('short');
+  });
+
+  it('preserves the tail of a real command', async () => {
+    const result = await bashTool().execute({
+      command: 'for i in $(seq 1 20000); do echo "line $i"; done; echo FINAL_MARKER',
+      timeout: 60_000,
+    });
+    expect(result.success).toBe(true);
+    expect(result.output).toContain('FINAL_MARKER');
+  }, 30_000);
+});
