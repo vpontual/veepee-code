@@ -92,3 +92,20 @@ describe('bash tool — background processes must not stall the result', () => {
     expect(result.output).toContain('to-err');
   }, 20_000);
 });
+
+describe('interrupt reaches running commands', () => {
+  it('kills a running bash command when the agent aborts', async () => {
+    const { killRunningBashCommands } = await import('../src/tools/coding.js');
+    const started = Date.now();
+    const pending = bashTool().execute({ command: 'sleep 25; echo done', timeout: 60_000 });
+    // Give the child time to actually spawn before interrupting.
+    await new Promise(r => setTimeout(r, 400));
+    // Ctrl+C used to abort the model stream only: the command kept running and
+    // the terminal stayed hostage for the full timeout.
+    expect(killRunningBashCommands()).toBeGreaterThan(0);
+    const result = await pending;
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(result.success).toBe(false);
+    expect(killRunningBashCommands()).toBe(0); // unregistered once settled
+  }, 30_000);
+});

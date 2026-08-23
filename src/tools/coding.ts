@@ -173,6 +173,24 @@ function createWriteFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
   };
 }
 
+/** Process-group killers for bash commands currently running. */
+const liveBashChildren = new Set<(signal: NodeJS.Signals) => void>();
+
+/**
+ * Kill every bash command this process started.
+ *
+ * Called on user interrupt. The tool promises still settle on their own — the
+ * child dies, `close` fires, the result comes back as a failure — so nothing is
+ * left dangling and no caller needs to special-case this.
+ */
+export function killRunningBashCommands(): number {
+  const n = liveBashChildren.size;
+  for (const kill of [...liveBashChildren]) {
+    try { kill('SIGTERM'); } catch { /* already gone */ }
+  }
+  return n;
+}
+
 /**
  * Apply a single edit (exact-match → fuzzy whitespace fallback) to `content`,
  * returning the new content + match count, or a typed error. Pure function —
@@ -985,6 +1003,7 @@ function createBashTool(fileTracker?: FileTracker): ToolDef {
         const finish = (result: ToolResult) => {
           if (settled) return;
           settled = true;
+          liveBashChildren.delete(killTree);
           clearTimeout(hardTimer);
           if (graceTimer) clearTimeout(graceTimer);
           // Stop holding the pipes so node isn't kept alive by a survivor.
@@ -1002,6 +1021,11 @@ function createBashTool(fileTracker?: FileTracker): ToolDef {
             // Group already gone, or we lost the race — nothing to reap.
           }
         };
+        // Ctrl+C used to stop the model stream and nothing else: a running
+        // `npm test` or a hung `curl` kept the terminal hostage for its whole
+        // timeout, with the interrupt visibly ignored. Registering here lets the
+        // agent's abort reach the process group that is actually blocking.
+        liveBashChildren.add(killTree);
 
         const hardTimer = setTimeout(() => {
           killTree('SIGKILL');

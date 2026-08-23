@@ -982,6 +982,69 @@ Modified: ${renderList(writes)}
     return this.projectedTokens() > this.messageBudget() * 0.9;
   }
 
+  /**
+   * Reclaim window by truncating STALE TOOL OUTPUT, before reaching for the
+   * summarizer.
+   *
+   * Compaction is lossy in a way this is not: it hands the transcript to a model
+   * and keeps whatever comes back, so a fact can be dropped or invented. Old
+   * tool output is different — a 40 KB `grep` result from twelve turns ago has
+   * already done its job, and the CALL and its arguments (which is what makes the
+   * transcript legible) survive here untouched. Only the bulk dies.
+   *
+   * Deliberate constraints, each of which is what stops this being harmful:
+   *  - the newest tool output is untouchable, because that is the output the
+   *    model is currently reasoning about;
+   *  - the last two user turns are skipped entirely, for the same reason;
+   *  - it stops at the summary message — anything older has already been
+   *    compacted and re-walking it wastes the pass;
+   *  - it only COMMITS if the pass would reclaim a worthwhile amount, which is
+   *    what stops it thrashing a few hundred tokens on every single turn;
+   *  - a message is pruned at most once, so repeated passes converge.
+   *
+   * Returns the tokens reclaimed (0 when it declined to act).
+   */
+  pruneToolOutputs(): number {
+    const PROTECT_TOKENS = Math.min(40_000, Math.floor(this.contextLimit * 0.3));
+    const MIN_RECLAIM_TOKENS = 4_000;
+    const TRUNCATE_TO_CHARS = 2_000;
+
+    let protectedTokens = 0;
+    let userTurns = 0;
+    const queued: Message[] = [];
+
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const msg = this.messages[i];
+      if (this.summaryMessage && msg === this.summaryMessage) break;
+      if (msg.role === 'user') { userTurns++; continue; }
+      if (userTurns < 2) continue;              // the live part of the conversation
+      if (msg.role !== 'tool') continue;
+      const m = msg as Message & { pruned?: boolean };
+      if (m.pruned) continue;
+      const content = msg.content ?? '';
+      if (content.length <= TRUNCATE_TO_CHARS) continue;
+
+      const tokens = this.messageTokens(msg);
+      if (protectedTokens < PROTECT_TOKENS) { protectedTokens += tokens; continue; }
+      queued.push(msg);
+    }
+
+    const reclaimable = queued.reduce(
+      (sum, m) => sum + Math.ceil(((m.content?.length ?? 0) - TRUNCATE_TO_CHARS) / this.charsPerToken()),
+      0,
+    );
+    if (reclaimable < MIN_RECLAIM_TOKENS) return 0;
+
+    for (const msg of queued) {
+      const m = msg as Message & { pruned?: boolean };
+      const original = msg.content ?? '';
+      msg.content = original.slice(0, TRUNCATE_TO_CHARS) +
+        `\n[… ${original.length - TRUNCATE_TO_CHARS} chars of older ${(msg as { tool_name?: string }).tool_name ?? 'tool'} output truncated to reclaim context — re-run the tool if you need it again]`;
+      m.pruned = true;
+    }
+    return reclaimable;
+  }
+
   /** Did the sliding window silently drop messages since the last compaction? */
   wasWindowTruncated(): boolean {
     return this.windowTruncated;

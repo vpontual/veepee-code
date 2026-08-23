@@ -4,6 +4,7 @@ import type { Config } from './config.js';
 import { OpenAIChatClient } from './openai-adapter.js';
 import { answerText } from './llm-answer.js';
 import { retryDecision } from './retry.js';
+import { killRunningBashCommands } from './tools/coding.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { PermissionManager } from './permissions.js';
 import type { BenchmarkResult } from './benchmark.js';
@@ -139,6 +140,10 @@ export function forceActNudge(content: string): string {
  *  routinely spent on the escape-hatch variant before the model has committed to
  *  anything, which leaves nothing for the stall that follows it. */
 export const FORCE_ACT_MAX_NUDGES = 2;
+
+/** Hard ceiling on agent turns for a single user message. Generous — real work
+ *  on a large repo genuinely runs long — but finite, which the loop was not. */
+export const MAX_TURNS_PER_MESSAGE = 120;
 
 /** Pure decision: should the loop force one more ACT turn instead of accepting a no-tool-call
  *  completion? The DGX (and Qwen3.6 on vLLM) reason WITHOUT <think> tags, so on open-ended
@@ -719,6 +724,11 @@ export class Agent {
   /** Abort the current running agent loop (called on Ctrl+C) */
   abort(): void {
     this.abortController?.abort();
+    // Interrupt must reach the WORK, not just the model stream. Aborting the
+    // stream while `npm test` keeps running holds the terminal for the tool's
+    // whole timeout with the Ctrl+C visibly ignored — the harness looks wedged
+    // at exactly the moment the user is trying to take control back.
+    killRunningBashCommands();
   }
 
   isRunning(): boolean {
@@ -966,6 +976,18 @@ export class Agent {
 
     // Check for context compaction
     if (this.context.needsCompaction()) {
+      // Prune before summarizing. Truncating stale tool output is LOSSLESS in
+      // structure — the call and its arguments survive, only the bulk goes — and
+      // costs no model call, no latency and no chance of the summarizer dropping
+      // or inventing a fact. Reach for the summarizer only if this wasn't enough.
+      const reclaimed = this.context.pruneToolOutputs();
+      if (reclaimed > 0) {
+        yield { type: 'info', content: `Pruned ~${reclaimed.toLocaleString()} tokens of older tool output` };
+        if (!this.context.needsCompaction()) {
+          this.context.getKnowledgeState().save().catch(() => {});
+          return;
+        }
+      }
       const retryEvents: Array<{ attempt: number; projected: number; limit: number }> = [];
       const compacted = await this.context.compactWithRetry(
         this.config.proxyUrl,
@@ -1009,7 +1031,18 @@ export class Agent {
     const editedPaths = new Set<string>();
     let forcedVerifyOnce = false;
 
+    // A hard ceiling on one user message. The loop's only other exits are the
+    // model choosing to stop, a stuck-signature match (which needs SIX
+    // byte-identical name+args+result tuples, so an alternating or
+    // output-varying loop never trips it), 15 turns with no visible content
+    // (reset by a single word of output), an error, or an abort. None of those
+    // bound a model that is making slow, plausible, unproductive progress.
     for (let turn = 0; ; turn++) {
+      if (turn >= MAX_TURNS_PER_MESSAGE) {
+        yield { type: 'error', error: `Stopped: ${MAX_TURNS_PER_MESSAGE} turns on one message without finishing. The work so far is kept — send a narrower instruction to continue.` };
+        this.abortController = null;
+        return;
+      }
       // Check if model should switch (only after the first turn of a message)
       if (turn > 0) {
         const signals = this.context.getSignals();
