@@ -128,6 +128,8 @@ describe('isGitConfigMutation', () => {
       'git config --list',
       'git config -l',
       'git config get user.email',
+      'git config user.email',          // a key with no value is a read
+      'git config --global user.email',
       'git branch --show-current',
       'git branch -a',
       'git branch --contains HEAD',

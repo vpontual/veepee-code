@@ -170,7 +170,14 @@ export function isGitConfigMutation(command: string): boolean {
       const readFlag = hasLongOptionPrefixOf(longs, 'get', 'get-all', 'get-regexp', 'get-urlmatch', 'list')
         || shorts.has('l');
       const readSub = rest[0] === 'get' || rest[0] === 'list';
-      if (rest.length > 0 && !readFlag && !readSub) return true;
+      const writeFlag = hasLongOptionPrefixOf(longs,
+        'unset', 'unset-all', 'add', 'replace-all', 'rename-section', 'remove-section', 'edit');
+      // A write flag settles it. Otherwise `git config <key>` with no value is a
+      // READ — the same shape as `--get <key>` — and only a key WITH a value
+      // writes. Prompting on the read form is how a guard earns its way into
+      // being switched off.
+      if (writeFlag) return true;
+      if (rest.length > 1 && !readFlag && !readSub) return true;
     }
 
     // Remote surgery.
