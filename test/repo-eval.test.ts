@@ -189,3 +189,20 @@ describe('blind mode withholds the assertions, not the API', () => {
     expect(task.prompt).not.toContain('must export');
   });
 });
+
+describe('task size is bounded by what the instrument can resolve', () => {
+  it('drops a commit too large for one blind run, and says why', async () => {
+    // crosstown@fc05e7a — 308 changed lines: a new maths module, a page rewrite
+    // and a 121-line test suite. Measured: a full 30 minutes, 56 tool calls, it
+    // wrote its own test file, never created the module the task was about, and
+    // never ran a suite. A `budget` row is not a verdict on the agent.
+    const t = await taskFromCommit('/home/vp/Dev/crosstown', 'fc05e7a9c', 900_000, 'blind');
+    expect(typeof t).toBe('string');
+    if (typeof t === 'string') expect(t).toContain('too large for one task');
+  });
+
+  it('keeps a normal-sized change', async () => {
+    const t = await taskFromCommit(process.cwd(), 'c3d71ea7a', 900_000, 'blind');
+    expect(typeof t).not.toBe('string');
+  });
+});

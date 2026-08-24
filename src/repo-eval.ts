@@ -143,6 +143,15 @@ export interface RepoTaskResult {
   detail?: string;
 }
 
+/**
+ * Changed-line ceiling for a replayable task.
+ *
+ * Sized from the candidate pool (median 196, p75 486) and from what a 30-minute
+ * blind run can actually finish. Raising it does not make the instrument more
+ * ambitious; it makes it produce `budget` rows instead of verdicts.
+ */
+export const MAX_TASK_CHANGED_LINES = 250;
+
 /** Test-file heuristics, matched against the repo layouts actually in use. */
 const TEST_PATH = /(^|\/)(test|tests|spec|__tests__)\//;
 const TEST_NAME = /\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py)$|(^|\/)test_[^/]+\.py$|_test\.py$/;
@@ -196,6 +205,30 @@ export async function taskFromCommit(
   if (testFiles.length === 0) return 'no test files — nothing could grade it';
   if (srcFiles.length === 0) return 'test-only commit — nothing for the agent to implement';
   if (files.length > 15) return `too large (${files.length} files)`;
+
+  // SIZE BOUND, chosen from the pool rather than picked out of the air.
+  //
+  // Measured across 30 candidate commits in four repos: median 196 changed
+  // lines, p75 486, max 10,505. A 250-line cap keeps 17 of 30 — and the drops
+  // are the commits a blind task cannot resolve inside any budget worth running.
+  // Evidence: crosstown@fc05e7a (308 lines: a new maths module, a page rewrite
+  // and a 121-line test suite) consumed a full 30 minutes across 56 tool calls,
+  // wrote its own test file, never created the module the task was about, and
+  // never ran a suite. That is not a verdict on the agent, it is a task the
+  // instrument cannot resolve.
+  //
+  // This is picking a task size the measurement can actually settle, not
+  // lowering the bar — and the number of drops is reported with every result so
+  // the narrowing is visible rather than assumed.
+  const churn = git(repoPath, ['show', '--numstat', '--format=', sha])
+    .split('\n').filter(Boolean)
+    .reduce((sum, line) => {
+      const [add, del] = line.split(/\s+/);
+      return sum + (Number(add) || 0) + (Number(del) || 0);
+    }, 0);
+  if (churn > MAX_TASK_CHANGED_LINES) {
+    return `too large for one task (${churn} changed lines > ${MAX_TASK_CHANGED_LINES})`;
+  }
 
   const testCommand = await detectTestCommand(repoPath);
   if (!testCommand) return 'no test command detected';
