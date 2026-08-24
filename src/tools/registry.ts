@@ -1,4 +1,5 @@
 import type { Tool as OllamaTool } from 'ollama';
+import { TRUNCATED_ARGS_KEY } from '../openai-adapter.js';
 import type { ToolDef, ToolResult, ToolSource } from './types.js';
 import { toOllamaTool } from './types.js';
 
@@ -211,6 +212,18 @@ export class ToolRegistry {
     }
 
     try {
+      // A call whose arguments were cut off mid-stream is not a call with
+      // default arguments. Rejecting it explicitly gives the model something it
+      // can act on — retry the call — instead of a result it will believe.
+      if (Object.prototype.hasOwnProperty.call(args, TRUNCATED_ARGS_KEY)) {
+        const partial = String(args[TRUNCATED_ARGS_KEY] ?? '');
+        return {
+          success: false,
+          output: '',
+          error: `The arguments for ${name} arrived truncated and could not be parsed, so the call was NOT executed. `
+            + `Send it again${partial ? ` (received: ${partial.slice(0, 120)}…)` : ''}.`,
+        };
+      }
       const coerced = coerceArgs(tool.schema, args);
       const parsed = tool.schema.safeParse(coerced);
       if (!parsed.success) {

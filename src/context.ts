@@ -1129,6 +1129,20 @@ Modified: ${renderList(writes)}
       } catch {
         // Summarizer failed — fall back to drop-only behavior.
       }
+
+      // DROPPED WITHOUT A SUMMARY IS NOT THE SAME AS COMPACTED, and the model
+      // was told nothing either way. A summarizer that times out or returns
+      // nothing leaves the conversation shorter and the agent unaware that
+      // anything is missing — so it goes on referring to files and decisions
+      // whose detail is gone, with full confidence. Say it plainly instead.
+      if (!this.summaryMessage) {
+        this.summaryMessage = {
+          role: 'user',
+          content:
+            `[Context was compacted: ${droppedMessages.length} earlier messages were dropped and NO summary could be produced. ` +
+            `Detail from those turns is gone — do not rely on remembered file contents or earlier tool output. Re-read what you need.]`,
+        };
+      }
     }
 
     this.messages = this.summaryMessage

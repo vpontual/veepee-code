@@ -21,6 +21,15 @@
  *   request is cancelled — never orphaned (orphaned streams can wedge vLLM).
  */
 
+/**
+ * Marker for a tool call whose arguments arrived truncated.
+ *
+ * Exported because the registry has to recognise it: a silently-defaulted call
+ * is indistinguishable from an intended one, which is the failure this exists to
+ * stop.
+ */
+export const TRUNCATED_ARGS_KEY = '__vcode_truncated_arguments';
+
 interface OllamaChunk {
   message: { content?: string; thinking?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
   eval_count?: number;
@@ -257,15 +266,24 @@ export class OpenAIChatClient {
 
       // Emit accumulated tool calls as a single Ollama-shaped chunk with
       // arguments PARSED to objects (the agent expects objects, not strings).
-      // If a stream is truncated mid-arguments the JSON won't parse; we emit
-      // {} rather than dropping the call, and the tool's own arg validation
-      // surfaces a clear error the model can react to on the next turn.
+      //
+      // A stream truncated mid-arguments used to become `{}` on the reasoning
+      // that "the tool's own arg validation surfaces a clear error". That holds
+      // only for tools with required fields. For a tool whose arguments are all
+      // optional — `list_files`, `git status` — an empty object is a VALID call,
+      // so a truncated request silently executed as a defaulted one and the
+      // model was told it succeeded. Absence must be its own value: the marker
+      // makes every tool reject it, and the registry says why.
       if (sawToolCalls && toolAcc.size > 0) {
         const tool_calls = [...toolAcc.entries()]
           .sort((a, b) => a[0] - b[0])
           .map(([, v]) => {
             let args: Record<string, unknown> = {};
-            try { args = v.args ? JSON.parse(v.args) : {}; } catch { args = {}; }
+            try {
+              args = v.args ? JSON.parse(v.args) : {};
+            } catch {
+              args = { [TRUNCATED_ARGS_KEY]: v.args.slice(0, 200) };
+            }
             return { function: { name: v.name, arguments: args } };
           });
         yield { message: { tool_calls }, done: true };
