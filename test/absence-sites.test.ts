@@ -93,3 +93,25 @@ describe('an empty fetch is a fact about the fetch', () => {
     }
   });
 });
+
+describe('write_file creates the directory it is asked to write into', () => {
+  it('writes a new file into a directory that does not exist yet', async () => {
+    const { registerCodingTools } = await import('../src/tools/coding.js');
+    const { mkdtemp, rm, readFile } = await import('fs/promises');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = await mkdtemp(join(tmpdir(), 'vcode-write-'));
+    try {
+      const write = registerCodingTools().find((t) => t.name === 'write_file')!;
+      const target = join(dir, 'server', 'lib', 'motion.mjs');
+      // Measured on a real replay task: a bare ENOENT here made the model retry
+      // the identical call three times, the loop guard stopped the run, and 432
+      // seconds were logged as the model being stuck.
+      const r = await write.execute({ path: target, content: 'export const x = 1;\n' });
+      expect(r.success).toBe(true);
+      expect(await readFile(target, 'utf-8')).toContain('export const x = 1;');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

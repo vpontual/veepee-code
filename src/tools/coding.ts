@@ -1,5 +1,5 @@
-import { readFile, writeFile, stat, readdir } from 'fs/promises';
-import { resolve, relative, join } from 'path';
+import { readFile, writeFile, stat, readdir, mkdir } from 'fs/promises';
+import { resolve, relative, join, dirname } from 'path';
 import { existsSync } from 'fs';
 import { execSync, execFileSync, spawn } from 'child_process';
 
@@ -209,6 +209,15 @@ function createWriteFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
           const stale = fileTracker.checkFresh(filePath, false);
           if (stale) return fail(stale);
         }
+        // Create the parent directory. Without this, writing a new file into a
+        // directory that does not exist yet fails with a bare ENOENT — and a
+        // model told "ENOENT" for a path it believes is correct retries the
+        // identical call. Measured on a real replay task: three identical
+        // write_file calls, the run stopped by the loop guard, 432 seconds
+        // burned, and the whole failure logged as the model being stuck. Every
+        // other agent in this class creates the directory; not doing so turns an
+        // ordinary "add a new module" into an unrecoverable one.
+        await mkdir(dirname(filePath), { recursive: true }).catch(() => {});
         await writeFile(filePath, params.content as string, 'utf-8');
         fileTracker?.recordRead(filePath);
         const lines = (params.content as string).split('\n').length;
