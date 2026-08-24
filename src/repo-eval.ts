@@ -88,7 +88,23 @@ export interface RepoTask {
  *           separately and never merged into either, because letting it through
  *           would make blind mode look like a harness regression when it is an
  *           oracle mismatch.
- * `unclassified` counts as HARNESS until proven otherwise. VP's bar is that the
+ * `unclassified` counts as HARNESS until proven otherwise.
+ *
+ * THE BURDEN OF PROOF SITS ON `model`, NOT ON `harness`.
+ *
+ * "Model" was the residual bucket — whatever was left when nothing else
+ * explained the failure. That default is backwards, and it would quietly absorb
+ * the exact bugs that are hardest to see: a harness that corrupts CONTENT while
+ * reporting success presents as model stupidity every single time. Truncated
+ * tool output the model believes is complete; a compaction that dropped the
+ * detail it then invents around; an edit applied to a plausible-but-wrong
+ * region; a stale version of a file served after a newer one. Every one of those
+ * looks like "the model did something dumb".
+ *
+ * So a `model` verdict now requires POSITIVE EVIDENCE: the run's captured
+ * transcript — tool calls, results, and the diff actually applied — must exist,
+ * so that a human can check the inputs were correct and complete. No transcript,
+ * no `model`; it falls back to `unclassified`, which counts as harness. VP's bar is that the
  *           residual gap be attributable to model size alone; an unexplained
  *           failure is not evidence for that, it is evidence against it.
  */
@@ -102,6 +118,12 @@ export interface RepoTaskResult {
   failure?: FailureClass;
   /** Evidence for the classification — never a bare label. */
   failureEvidence?: string;
+  /** What the agent actually changed, kept on failure so a wrong-location edit
+   *  can be caught by inspection rather than assumed absent. */
+  appliedDiff?: string;
+  /** Path to the captured transcript. A `model` verdict is not available
+   *  without one — see FailureClass. */
+  evidencePath?: string;
   /** The suite failed before the agent ran, as a valid task requires. */
   startedFailing: boolean;
   /** Blind mode: did the repo's own pre-existing tests pass after the agent's work? */
@@ -309,6 +331,8 @@ export async function runRepoTask(
   };
   const agentErrors: string[] = [];
   const toolFailures: string[] = [];
+  /** Everything the model saw and did, kept so a class-(a) verdict can be checked. */
+  const transcript: Array<Record<string, unknown>> = [];
 
   let work = '';
   try {
@@ -336,13 +360,23 @@ export async function runRepoTask(
       for await (const ev of agent.run(task.prompt, { permissionMode: 'auto_allow' })) {
         if (ev.type === 'tool_call') {
           result.toolCalls++;
+          transcript.push({ kind: 'tool_call', name: ev.name, args: ev.args });
           if (ev.name === 'bash') {
             const cmd = String((ev.args as { command?: string })?.command ?? '');
             if (/\b(npm|npx|vitest|pnpm|yarn|pytest|python)\b.*\b(test|vitest|pytest)\b/.test(cmd)) {
               result.selfVerified = true;
             }
           }
-        } else if (ev.type === 'tool_result' && ev.success === false) {
+        } else if (ev.type === 'tool_result') {
+          transcript.push({
+            kind: 'tool_result', name: ev.name, success: ev.success,
+            content: String(ev.content ?? ev.error ?? '').slice(0, 4_000),
+          });
+        }
+        if (ev.type === 'text' && ev.content) {
+          transcript.push({ kind: 'assistant_text', content: String(ev.content).slice(0, 4_000) });
+        }
+        if (ev.type === 'tool_result' && ev.success === false) {
           result.toolErrors++;
           if (toolFailures.length < 12) {
             toolFailures.push(`${ev.name ?? 'tool'}: ${String(ev.error ?? ev.content ?? '').slice(0, 200)}`);
@@ -375,9 +409,29 @@ export async function runRepoTask(
     result.passed = after.passed;
     if (!after.passed) {
       result.detail = after.output.slice(-1_500);
+      // Keep what the agent actually DID on a failure. The dangerous harness
+      // bug is the quiet one: an edit applied to a plausible-but-wrong region
+      // produces working-looking code that fails the tests, which is
+      // indistinguishable from the model writing the wrong thing. A diff can be
+      // inspected; an assumption that it did not happen cannot.
+      const diff = spawnSync('git', ['diff', '--stat', 'HEAD', '--', '.'], {
+        cwd: work, encoding: 'utf-8', maxBuffer: 8 * 1024 * 1024,
+      });
+      result.appliedDiff = (diff.stdout ?? '').slice(0, 2_000);
+      const fullDiff = spawnSync('git', ['diff', 'HEAD', '--', '.'], {
+        cwd: work, encoding: 'utf-8', maxBuffer: 16 * 1024 * 1024,
+      });
+      result.evidencePath = await saveEvidence(task, {
+        prompt: task.prompt,
+        transcript,
+        appliedDiff: (fullDiff.stdout ?? '').slice(0, 200_000),
+        suiteOutput: after.output,
+        agentErrors,
+      });
       const cls = classifyFailure({
         agentErrors, toolFailures, suiteOutput: after.output,
         preExistingSuitePassed: result.preExistingSuitePassed,
+        hasEvidence: Boolean(result.evidencePath),
       });
       result.failure = cls.failure;
       result.failureEvidence = cls.evidence;
@@ -409,6 +463,8 @@ export function classifyFailure(ev: {
   toolFailures: string[];
   suiteOutput: string;
   preExistingSuitePassed?: boolean;
+  /** Was a transcript captured? Without one, `model` is not available. */
+  hasEvidence?: boolean;
 }): { failure: FailureClass; evidence: string } {
   // A limit WE imposed is not the model failing. Separated so a harness
   // decision can never be counted as evidence about model capability.
@@ -447,9 +503,17 @@ export function classifyFailure(ev: {
       evidence: 'pre-existing suite passed; only the commit\'s own tests failed — review before counting',
     };
   }
-  // Tests ran and failed on assertions: the change was wrong or incomplete.
+  // Tests ran and failed on assertions: the change was wrong or incomplete —
+  // but only if there is a transcript to check that against. Without one this is
+  // an assumption wearing a label.
   if (/AssertionError|expected .* to|✕|FAIL /.test(ev.suiteOutput)) {
-    return { failure: 'model', evidence: 'suite ran; assertions failed' };
+    if (!ev.hasEvidence) {
+      return {
+        failure: 'unclassified',
+        evidence: 'assertions failed, but no transcript was captured — a model verdict needs one',
+      };
+    }
+    return { failure: 'model', evidence: 'suite ran; assertions failed (transcript captured for review)' };
   }
   return { failure: 'unclassified', evidence: ev.suiteOutput.slice(-300) };
 }
@@ -513,4 +577,14 @@ export async function runRepoSuite(
   const byClass: Record<string, number> = {};
   for (const r of results) if (!r.passed && r.failure) byClass[r.failure] = (byClass[r.failure] ?? 0) + 1;
   return { results, passRate: results.length ? Math.round((passes / results.length) * 100) : 0, byClass };
+}
+
+/** Write a failure's full evidence to disk and return the path. */
+async function saveEvidence(task: RepoTask, payload: unknown): Promise<string> {
+  const dir = resolve(process.env.HOME || '~', '.veepee-code', 'repo-evals', 'evidence');
+  await mkdir(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const path = join(dir, `${task.name.replace(/[^\w.@-]/g, '_')}-${task.mode}-${stamp}.json`);
+  await writeFile(path, JSON.stringify(payload, null, 2));
+  return path;
 }

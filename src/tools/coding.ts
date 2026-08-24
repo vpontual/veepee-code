@@ -554,10 +554,17 @@ export function describeMiss(content: string, oldStr: string, relPath: string): 
   // 3. Fall back to showing where the first line seems to live.
   const firstLine = oldStr.split('\n')[0].trim();
   const lineIdx = firstLine ? lines.findIndex((l) => l.trim().includes(firstLine)) : -1;
+  // Show AS MUCH of the real region as the needle was long, not a fixed four
+  // lines. Measured on a real replay task: an 8-line needle missed in a 73-line
+  // HTML file and the model was shown four lines of context — not enough to
+  // reconstruct what to send, so the next attempt missed too. The whole point of
+  // this message is that the model can copy the answer out of it.
+  const span = Math.min(40, Math.max(6, oldStr.split('\n').length + 4));
+  const start = Math.max(0, lineIdx - 2);
   const hint = lineIdx >= 0
-    ? `\nNearest match around line ${lineIdx + 1}:\n${lines
-        .slice(Math.max(0, lineIdx - 1), lineIdx + 3)
-        .map((l, i) => `  ${Math.max(1, lineIdx) + i}: ${l}`)
+    ? `\nThe file actually reads (copy this exactly, including indentation):\n${lines
+        .slice(start, start + span)
+        .map((l, i) => `  ${start + i + 1}: ${l}`)
         .join('\n')}`
     : '';
   return `${base} Read the file first to get the exact content.${hint}`;

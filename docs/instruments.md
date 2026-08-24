@@ -4,6 +4,24 @@ Written 2026-08-23, **before** the first blind real-repo numbers came back. The
 timing is deliberate: an instrument's fitness has to be settled on grounds that
 exist independently of the result, or the result picks the epistemics.
 
+## Void: every score measured before 2026-08-23 23:0x
+
+`write_file` had **never** been able to create a file in a directory that did not
+already exist. Not a regression — it had never worked. Every number produced
+before that fix was measured on a harness that could not do a basic thing, so:
+
+- the 15-task suite's **91% is void**, not caveated;
+- the earlier 88% on the previous artifact is void;
+- any rubric dimension scored off those runs is void.
+
+They are not carried forward with an asterisk. A number measured on a harness
+that could not create a file is not a smaller version of the truth; it is a
+measurement of something else.
+
+The reason it survived a full day of synthetic evals is structural: those
+workspaces are flat, so "add a new module in a new directory" — an ordinary act
+on a real repository — never came up.
+
 ## `benchmarks/harness/` — 15 synthetic tasks
 
 **Retired as a confidence input. Kept as a regression canary.**

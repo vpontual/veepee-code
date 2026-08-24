@@ -133,6 +133,24 @@ describe('failure classification is conservative by design', () => {
     expect(c.failure).toBe('alternative-impl');
   });
 
+  it('will not call a failure MODEL without a transcript to check', () => {
+    // "Model" was the residual bucket — whatever was left when nothing else
+    // explained it. That default quietly absorbs the hardest bugs to see: a
+    // harness that corrupts CONTENT while reporting success presents as model
+    // stupidity every time.
+    const noEvidence = classifyFailure({
+      agentErrors: [], toolFailures: [], suiteOutput: 'AssertionError: expected 1 to be 2',
+    });
+    expect(noEvidence.failure).toBe('unclassified');
+    expect(noEvidence.evidence).toContain('needs one');
+
+    const withEvidence = classifyFailure({
+      agentErrors: [], toolFailures: [], suiteOutput: 'AssertionError: expected 1 to be 2',
+      hasEvidence: true,
+    });
+    expect(withEvidence.failure).toBe('model');
+  });
+
   it('refuses to guess — unknown means harness until a human looks', () => {
     const c = classifyFailure({ agentErrors: [], toolFailures: [], suiteOutput: 'something inscrutable' });
     expect(c.failure).toBe('unclassified');
