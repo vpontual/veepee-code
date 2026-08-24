@@ -577,6 +577,9 @@ export async function discoverRepoTasks(
   return { tasks, dropped };
 }
 
+/** How long to wait for a dead engine before retrying a task once. */
+const INFRA_RETRY_WAIT_MS = 300_000;
+
 /** Run a set of replay tasks and summarise by failure class. */
 export async function runRepoSuite(
   tasks: RepoTask[],
@@ -595,7 +598,28 @@ export async function runRepoSuite(
   for (const [i, task] of tasks.entries()) {
     for (let n = 1; n <= repeat; n++) {
       opts.onProgress?.(`[${i + 1}/${tasks.length}] ${task.name} (${task.mode}${repeat > 1 ? `, run ${n}/${repeat}` : ''}) …`);
-      const r = await runRepoTask(task, config, modelManager);
+      let r = await runRepoTask(task, config, modelManager);
+
+      // A task lost to a dead engine measured the FLEET, not the agent — so it
+      // is re-queued rather than consumed. One sweep spent eight of twelve tasks
+      // on an engine the watchdog was already restarting; recording that as a
+      // result would have been recording the weather. One retry only: if the
+      // engine is still gone after a wait, the sweep should end rather than
+      // grind through a dozen more.
+      if (r.failure === 'infrastructure') {
+        opts.onProgress?.(`      infrastructure failure — waiting ${Math.round(INFRA_RETRY_WAIT_MS / 1000)}s for the engine, then retrying this task once`);
+        await new Promise((res) => setTimeout(res, INFRA_RETRY_WAIT_MS));
+        r = await runRepoTask(task, config, modelManager);
+        if (r.failure === 'infrastructure') {
+          opts.onProgress?.('      still unreachable — stopping the sweep rather than scoring the fleet');
+          results.push(r);
+          await writeFile(partial, JSON.stringify({ at: new Date().toISOString(), results, stoppedEarly: true }, null, 2)).catch(() => {});
+          const passesNow = results.filter((x) => x.passed).length;
+          const byClassNow: Record<string, number> = {};
+          for (const x of results) if (!x.passed && x.failure) byClassNow[x.failure] = (byClassNow[x.failure] ?? 0) + 1;
+          return { results, passRate: Math.round((passesNow / results.length) * 100), byClass: byClassNow };
+        }
+      }
       results.push(r);
       await mkdir(resolve(partial, '..'), { recursive: true }).catch(() => {});
       await writeFile(partial, JSON.stringify({ at: new Date().toISOString(), results }, null, 2)).catch(() => {});
