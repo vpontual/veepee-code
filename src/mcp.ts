@@ -550,14 +550,24 @@ function buildZodFromMcpSchema(input: McpToolDef['inputSchema']): z.ZodObject<z.
  *  text; image/resource get a placeholder marker since the model can't
  *  consume them inline yet — Phase 4 image input may revisit this. */
 function stringifyMcpContent(result: McpToolCallResult): string {
-  if (!result.content || result.content.length === 0) return '';
+  // An empty envelope is not an empty answer, and a content type we cannot
+  // render is not an absent one. Both used to reach the model as '' with
+  // `success: true` — which reads as "the tool ran and there was nothing there",
+  // a claim about the WORLD rather than about this client's ability to show it.
+  // MCP servers are third-party; a shape we do not handle is expected, and
+  // dropping it silently means the model reasons from an answer it never got.
+  if (!result.content || result.content.length === 0) {
+    return '(the MCP tool returned no content — this is an empty response, not a statement that there is nothing to report)';
+  }
   const parts: string[] = [];
   for (const c of result.content) {
     if (c.type === 'text') parts.push(c.text);
     else if (c.type === 'image') parts.push(`[image: ${c.mimeType}, ${c.data.length}B base64]`);
     else if (c.type === 'resource') parts.push(c.resource.text ?? `[resource: ${c.resource.uri}]`);
+    else parts.push(`[unrenderable MCP content of type "${(c as { type?: string }).type ?? 'unknown'}" — this client cannot display it]`);
   }
-  return parts.join('\n');
+  const text = parts.join('\n');
+  return text.trim() ? text : '(the MCP tool returned content this client could not render)';
 }
 
 /** Connect to all configured MCP servers and return their tools as ToolDefs.

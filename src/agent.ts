@@ -1026,7 +1026,12 @@ export class Agent {
       if (reclaimed > 0) {
         yield { type: 'info', content: `Pruned ~${reclaimed.toLocaleString()} tokens of older tool output` };
         if (!this.context.needsCompaction()) {
-          this.context.getKnowledgeState().save().catch(() => {});
+          this.context.getKnowledgeState().save().catch((err) => {
+          // Losing the knowledge state silently means the next session starts
+          // with less than it should and nobody knows why. It must not fail the
+          // turn — but it must not be invisible either.
+          process.stderr.write(`[knowledge-state] save failed: ${err instanceof Error ? err.message : String(err)}\n`);
+        });
           return;
         }
       }
@@ -1476,7 +1481,12 @@ export class Agent {
           }
         }
         // Save knowledge state to disk (non-blocking)
-        this.context.getKnowledgeState().save().catch(() => {});
+        this.context.getKnowledgeState().save().catch((err) => {
+          // Losing the knowledge state silently means the next session starts
+          // with less than it should and nobody knows why. It must not fail the
+          // turn — but it must not be invisible either.
+          process.stderr.write(`[knowledge-state] save failed: ${err instanceof Error ? err.message : String(err)}\n`);
+        });
 
         // Auto-save plans to disk so they survive compaction
         const planSaved = await this.autoSavePlan(fullContent);

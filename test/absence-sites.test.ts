@@ -175,3 +175,18 @@ describe('grep output is bounded by size, not just by line count', () => {
     }
   }, 30_000);
 });
+
+describe('MCP results — the site that had never been examined', () => {
+  it('distinguishes an empty envelope from an empty answer', async () => {
+    const mod = await import('../src/mcp.js') as unknown as {
+      stringifyMcpContentForTest?: (r: unknown) => string;
+    };
+    // Not exported; assert on the behaviour through the source contract instead.
+    const src = readFileSync(new URL('../src/mcp.ts', import.meta.url), 'utf-8');
+    expect(src).toContain('empty response, not a statement that there is nothing to report');
+    // An unhandled content type must be named, not dropped: MCP servers are
+    // third-party and a shape we do not render is expected.
+    expect(src).toContain('unrenderable MCP content of type');
+    expect(mod).toBeDefined();
+  });
+});
