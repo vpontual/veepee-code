@@ -385,6 +385,8 @@ export class Agent {
     this.subAgents = new SubAgentManager(this.config, this.registry, null);
     // Subagents get the same dangerous-command gate as the parent loop.
     this.subAgents.setPermissions(permissions);
+    // A subagent of a working agent can always run where its parent runs.
+    this.subAgents.setDefaultModel(modelManager.getCurrentModel());
 
     this.loadBenchmarkContextSizes();
     this.loadRoster();

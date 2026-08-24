@@ -589,8 +589,36 @@ export class SubAgentManager {
   /** Default model for tasks — falls back to roster heavy or 'qwen3:8b'.
    *  Subagents do NOT inherit the parent's lockModel; they may explicitly
    *  pick a fleet server via `model` override. */
+  /**
+   * The model a `task` runs on when the caller does not name one.
+   *
+   * THE ROSTER OUTLIVES THE FLEET. `~/.veepee-code/benchmarks/roster.json` still
+   * names `qwen3-coder-next:latest` and `gemma3:4b` — models retired months ago
+   * and absent from `subagent.allowedModels`. So this returned a model the
+   * allowlist then rejected, and EVERY subagent spawn failed before it started:
+   * `Model 'qwen3-coder-next:latest' not in subagent allowedModels`. The `task`
+   * tool was not degraded, it was dead, and nothing said so because the failure
+   * looked like a deliberate policy refusal.
+   *
+   * A roster entry is now a suggestion that must survive the allowlist; the
+   * parent's own model is the fallback, because a subagent of a working agent
+   * can always run where its parent runs.
+   */
   private defaultTaskModel(): string {
-    return this.roster?.act || this.roster?.plan || this.roster?.search || 'qwen3:8b';
+    const allowed = (m: string | null | undefined): m is string =>
+      Boolean(m) && (!this.allowedModels || this.allowedModels.has(m as string));
+    for (const candidate of [this.roster?.act, this.roster?.plan, this.roster?.search]) {
+      if (allowed(candidate)) return candidate;
+    }
+    if (allowed(this.defaultModel)) return this.defaultModel as string;
+    return this.defaultModel ?? 'qwen3:8b';
+  }
+
+  /** The parent agent's model — the sane fallback when the roster is stale. */
+  private defaultModel?: string;
+
+  setDefaultModel(model: string): void {
+    this.defaultModel = model;
   }
 
   private assignId(): string {

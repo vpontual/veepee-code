@@ -98,7 +98,13 @@ async function search(cfg: RCfg, query: string, n = 6): Promise<Hit[]> {
     if (!r.ok) return [];
     const d: any = await r.json();
     return (d.results || []).slice(0, n).map((x: any) => ({ title: x.title || '', url: x.url || '', snippet: x.content || '' })).filter((h: Hit) => h.url);
-  } catch { return []; }
+  } catch (err) {
+    // A search that FAILED and a search that found nothing are the same value
+    // here and opposite facts. Reported as "no sources", the model concludes the
+    // question has no answer on the web.
+    process.stderr.write(`[deep-research] search failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    return [];
+  }
 }
 
 // ── SSRF-guarded fetch ───────────────────────────────────────────────────────
@@ -236,7 +242,12 @@ export async function deepResearch(question: string, config: Config, log?: (s: s
     const findings = (await pool(fresh, cfg.fetchConcurrency, async (h) => {
       const text = await safeFetchText(h.url);
       if (!text || text.length < 80) return null;
-      try { return await extract(cfg, question, h, text); } catch { return null; }
+      try {
+        return await extract(cfg, question, h, text);
+      } catch (err) {
+        process.stderr.write(`[deep-research] extraction failed for ${h.url}: ${err instanceof Error ? err.message : String(err)}\n`);
+        return null;
+      }
     })).filter((f): f is Finding => f !== null);
     log?.(`round ${round + 1}: ${findings.length} useful findings`);
     if (findings.length) report = await synthesize(cfg, question, report, findings);

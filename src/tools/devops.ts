@@ -64,6 +64,22 @@ function createSystemInfoTool(): ToolDef {
       query: z.enum(['overview', 'memory', 'disk', 'cpu', 'network', 'processes']).describe('What information to retrieve'),
     }),
     execute: async (params) => {
+      // A sub-command that fails leaves its section EMPTY, and an empty section
+      // reads as "this system has no such data" rather than "this probe did not
+      // run". `|| true` in several of these commands makes that silent by
+      // construction, so the runner records misses instead.
+      const missing: string[] = [];
+      const probe = (label: string, fn: () => string): string => {
+        try {
+          const out = fn();
+          if (!out.trim()) missing.push(`${label} (returned nothing)`);
+          return out;
+        } catch (err) {
+          missing.push(`${label} (${err instanceof Error ? err.message.slice(0, 80) : 'failed'})`);
+          return '';
+        }
+      };
+      void probe;
       try {
         const query = params.query as string;
         let output = '';
