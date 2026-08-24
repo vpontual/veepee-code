@@ -178,11 +178,17 @@ async function main() {
     const mode = (arg('--mode', 'blind') as 'spec' | 'blind');
     const count = Number(arg('--count', '5'));
     const repeat = Number(arg('--repeat', '1'));
+    // Per-task wall-clock ceiling. The default was 15 minutes and it was the
+    // binding constraint on blind tasks — four of six runs were killed while
+    // actively working, with real diffs in the tree. A limit we impose is not
+    // the model failing (see the `budget` class), so the default is now 30
+    // minutes and it is adjustable.
+    const timeoutMs = Number(arg('--timeout', '1800')) * 1000;
 
     const tasks = [];
     const drops: Array<{ sha: string; reason: string }> = [];
     for (const repo of repos) {
-      const found = await discoverRepoTasks(repo, { limit: count, mode });
+      const found = await discoverRepoTasks(repo, { limit: count, mode, timeoutMs });
       tasks.push(...found.tasks);
       drops.push(...found.dropped);
     }

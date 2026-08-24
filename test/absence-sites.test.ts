@@ -115,3 +115,17 @@ describe('write_file creates the directory it is asked to write into', () => {
     }
   });
 });
+
+describe('a single tool result cannot eat the context window', () => {
+  it('bounds bash output to a context budget, not a memory limit', async () => {
+    const { boundedStream } = await import('../src/tools/coding.js');
+    const s = boundedStream();
+    s.push('x'.repeat(2_000_000));
+    // 192KB per end was 384KB — ~110k tokens, 84% of a 131k window, in ONE
+    // result. Measured: a real task died at 8 seconds with
+    // "your prompt contains at least 128001 input tokens" after two calls.
+    // No compaction saves a turn whose single result does not fit.
+    expect(s.text().length).toBeLessThan(60_000);
+    expect(s.text()).toContain('dropped from the middle');
+  });
+});

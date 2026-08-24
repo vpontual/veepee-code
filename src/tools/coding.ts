@@ -237,8 +237,16 @@ function createWriteFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
  * Head and tail are each bounded; everything between them is counted and
  * discarded. The count is reported, because a truncation the model cannot see
  * is a truncation it will reason past.
+ *
+ * THE CAP IS A CONTEXT BUDGET, NOT A MEMORY LIMIT. It was 192 KB per end —
+ * 384 KB of a single tool result, roughly 110k tokens, or 84% of this model's
+ * entire 131k window in one command. Measured on a real replay task: the run
+ * died at 8 seconds with `HTTP 400: your prompt contains at least 128001 input
+ * tokens` after two tool calls. No compaction can save a turn whose single
+ * result does not fit; the only fix is not to produce it. 48 KB total is ~14k
+ * tokens: generous for a build log, and survivable.
  */
-export function boundedStream(headMax = 192 * 1024, tailMax = 192 * 1024) {
+export function boundedStream(headMax = 24 * 1024, tailMax = 24 * 1024) {
   let head = '';
   let tail = '';
   let dropped = 0;

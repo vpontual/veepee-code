@@ -110,6 +110,31 @@ describe('detectRepeatedFailure — the loop the byte-identical check cannot see
     expect(detectRepeatedFailure(steps)).toBe('same-call');
   });
 
+  it('a successful edit between failures is work, not a loop', () => {
+    // Edit, run the tests, they fail, edit again, run again: the command is
+    // byte-identical and failing every time, and that is what fixing a bug looks
+    // like. Measured on a real replay task — an agent 34 calls into a working
+    // change was stopped for running `npm test` three times having modified
+    // three files in between.
+    const steps = [
+      { signature: 'a', callSignature: 'npm-test', allFailed: true },
+      { signature: 'b', callSignature: 'edit', allFailed: false, mutated: true },
+      { signature: 'c', callSignature: 'npm-test', allFailed: true },
+      { signature: 'd', callSignature: 'edit', allFailed: false, mutated: true },
+      { signature: 'e', callSignature: 'npm-test', allFailed: true },
+    ];
+    expect(detectRepeatedFailure(steps)).toBeNull();
+  });
+
+  it('still fires when nothing changed between the failures', () => {
+    const steps = [
+      { signature: 'a', callSignature: 'npm-test', allFailed: true },
+      { signature: 'b', callSignature: 'npm-test', allFailed: true },
+      { signature: 'c', callSignature: 'npm-test', allFailed: true },
+    ];
+    expect(detectRepeatedFailure(steps)).toBe('npm-test');
+  });
+
   it('leaves productive repetition alone', () => {
     // The same bash command three times as a build progresses is fine —
     // requiring failure is what keeps this off legitimate iteration.

@@ -1680,6 +1680,8 @@ export class Agent {
             signature: sig,
             callSignature: callSignatureOf(toolCalls),
             allFailed: stepSuccess.every(ok => !ok),
+            mutated: toolCalls.some((c, idx) =>
+              stepSuccess[idx] && CODE_MUTATION_TOOLS.has(c.function.name)),
           });
           if (recentSteps.length > LOOP_WINDOW) recentSteps.shift();
           const names = toolCalls.map(c => c.function.name).join(', ');

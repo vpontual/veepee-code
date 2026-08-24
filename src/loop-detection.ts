@@ -74,6 +74,8 @@ export interface SignedStep2 extends SignedStep {
   callSignature?: string;
   /** True when every tool call in the step failed. */
   allFailed?: boolean;
+  /** True when this step successfully changed a file. */
+  mutated?: boolean;
 }
 
 /**
@@ -96,6 +98,15 @@ export function detectRepeatedFailure(steps: SignedStep2[]): string | null {
   const window = steps.slice(-LOOP_WINDOW);
   const counts = new Map<string, number>();
   for (const step of window) {
+    // A SUCCESSFUL EDIT RESETS THE COUNT, and this is the difference between a
+    // loop and ordinary work. Edit, run the tests, they fail, edit again, run
+    // again — the command is byte-identical every time and failing every time,
+    // and it is exactly what fixing a bug looks like. Measured on a real replay
+    // task: an agent 34 tool calls into a working change was stopped for
+    // running `npm test` three times, having modified three files in between.
+    // The world changed between those calls; only an unchanged world makes a
+    // repeat pointless.
+    if (step.mutated) counts.clear();
     if (!step.callSignature || !step.allFailed) continue;
     const next = (counts.get(step.callSignature) ?? 0) + 1;
     counts.set(step.callSignature, next);
