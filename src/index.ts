@@ -164,6 +164,46 @@ async function main() {
   // copy of each task's workspace, and grades with a test file the agent never
   // sees. This measures vcode, not the model — the point is that a change to
   // the agent loop can be shown to help or hurt instead of merely felt.
+  if (process.argv.includes('--repo-eval')) {
+    const { discoverRepoTasks, runRepoSuite, saveRepoEvalResult } = await import('./repo-eval.js');
+    const arg = (name: string, fallback?: string): string | undefined => {
+      const i = process.argv.indexOf(name);
+      return i >= 0 ? process.argv[i + 1] : fallback;
+    };
+    const repos = (arg('--repo') ?? '').split(',').filter(Boolean);
+    if (repos.length === 0) {
+      console.error(chalk.red('--repo-eval needs --repo <path>[,<path>…]'));
+      process.exit(1);
+    }
+    const mode = (arg('--mode', 'blind') as 'spec' | 'blind');
+    const count = Number(arg('--count', '5'));
+    const repeat = Number(arg('--repeat', '1'));
+
+    const tasks = [];
+    const drops: Array<{ sha: string; reason: string }> = [];
+    for (const repo of repos) {
+      const found = await discoverRepoTasks(repo, { limit: count, mode });
+      tasks.push(...found.tasks);
+      drops.push(...found.dropped);
+    }
+    console.error(chalk.bold(`Repo replay — ${tasks.length} task(s), mode=${mode}, repeat=${repeat}`));
+    // The drop count is part of the result, not noise: it says how narrow the
+    // slice of real work this suite actually covers is.
+    console.error(chalk.dim(`${drops.length} commit(s) dropped — ${[...new Set(drops.map(d => d.reason.split(':')[0]))].join('; ')}`));
+
+    const { results, passRate, byClass } = await runRepoSuite(tasks, config, modelManager, {
+      repeat,
+      onProgress: (m) => console.error(chalk.dim(m)),
+    });
+    console.error('');
+    console.error(chalk.bold(`Pass rate: ${passRate}% (${results.filter(r => r.passed).length}/${results.length})  mode=${mode}`));
+    for (const [cls, n] of Object.entries(byClass)) console.error(`  ${cls}: ${n}`);
+    console.error(chalk.dim('This measures test-shaped commits, which are the well-scoped half of real work.'));
+    const path = await saveRepoEvalResult(results);
+    console.error(chalk.dim(`saved ${path}`));
+    process.exit(0);
+  }
+
   if (process.argv.includes('--eval')) {
     const { runHarnessSuite, saveEvalResult, loadHarnessTasks } = await import('./harness-eval.js');
     const evalIdx = process.argv.indexOf('--eval');

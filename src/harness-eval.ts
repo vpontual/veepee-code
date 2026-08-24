@@ -281,6 +281,48 @@ function run(cmd: string, args: string[], cwd: string, timeoutMs: number): Promi
  * human to prompt — which is also why this must only ever run against a scratch
  * directory.
  */
+/**
+ * The agent an eval measures, wired exactly as the real CLI wires it.
+ *
+ * Shared by both instruments — the synthetic task suite and the commit-replay
+ * runner — because an eval that registers a different toolset measures a
+ * different harness, which makes its score worthless for the question being
+ * asked. (An earlier version registered only two tool groups; the model
+ * hallucinated a `syntax` tool, called it ten times and was stopped by loop
+ * detection — a failure caused entirely by the eval.)
+ *
+ * MCP servers, remote-bridge tools and skills are deliberately excluded: they
+ * depend on the machine and the network, so including them would make scores
+ * incomparable across runs and across machines.
+ */
+export function buildEvalAgent(config: Config, modelManager: ModelManager, cwd: string): {
+  agent: Agent;
+  registry: ToolRegistry;
+  permissions: PermissionManager;
+  lspManager: LspManager;
+} {
+  const registry = new ToolRegistry();
+  const ignoreManager = new IgnoreManager(cwd);
+  const fileTracker = new FileTracker();
+  const lspManager = new LspManager(config.lsp, cwd);
+
+  const permissions = new PermissionManager();
+  permissions.setPromptHandler(PermissionManager.unattendedHandler());
+  const agent = new Agent(config, registry, modelManager, permissions);
+
+  for (const tool of registerCodingTools(ignoreManager, fileTracker, lspManager)) registry.register(tool);
+  for (const tool of registerWebTools(config)) registry.register(tool);
+  registry.register(buildDeepResearchTool(config));
+  registry.register(buildAskUserTool());
+  for (const tool of registerDevOpsTools()) registry.register(tool);
+  for (const tool of registerLspTools(lspManager)) registry.register(tool);
+  registry.register(createTaskTool(agent.getSubAgents()));
+  registry.register(createExitPlanModeTool(agent, permissions));
+  registry.register(createNotebookEditTool(ignoreManager, fileTracker));
+
+  return { agent, registry, permissions, lspManager };
+}
+
 export async function runHarnessTask(
   task: HarnessTask,
   config: Config,
@@ -335,25 +377,9 @@ export async function runHarnessTask(
     // MCP servers, remote-bridge tools and skills are deliberately NOT included:
     // they depend on the machine and network, so including them would make
     // scores incomparable across runs.
-    const registry = new ToolRegistry();
-    const ignoreManager = new IgnoreManager(scratch);
-    const fileTracker = new FileTracker();
-    const lspManager = new LspManager(config.lsp, scratch);
+    const built = buildEvalAgent(config, modelManager, scratch);
+    const { agent, lspManager } = built;
     lspForTask = lspManager;
-
-    const permissions = new PermissionManager();
-    permissions.setPromptHandler(PermissionManager.unattendedHandler());
-    const agent = new Agent(config, registry, modelManager, permissions);
-
-    for (const tool of registerCodingTools(ignoreManager, fileTracker, lspManager)) registry.register(tool);
-    for (const tool of registerWebTools(config)) registry.register(tool);
-    registry.register(buildDeepResearchTool(config));
-    registry.register(buildAskUserTool());
-    for (const tool of registerDevOpsTools()) registry.register(tool);
-    for (const tool of registerLspTools(lspManager)) registry.register(tool);
-    registry.register(createTaskTool(agent.getSubAgents()));
-    registry.register(createExitPlanModeTool(agent, permissions));
-    registry.register(createNotebookEditTool(ignoreManager, fileTracker));
 
     const deadline = setTimeout(() => agent.abort(), task.timeoutMs);
     try {

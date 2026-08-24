@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isTestFile, detectTestCommand, taskFromCommit, prepareRepoWorkspace, runSuite, cleanupWorkspace } from '../src/repo-eval.js';
+import { isTestFile, detectTestCommand, taskFromCommit, prepareRepoWorkspace, runSuite, cleanupWorkspace, restoreGradingTests, classifyFailure } from '../src/repo-eval.js';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -60,8 +60,8 @@ describe('task construction from a real commit', () => {
 });
 
 describe('workspace preparation', () => {
-  it('checks out the parent and restores only the tests', async () => {
-    const task = await taskFromCommit(process.cwd(), 'c3d71ea7a');
+  it('spec mode: restores the tests, withholds the implementation', async () => {
+    const task = await taskFromCommit(process.cwd(), 'c3d71ea7a', 900_000, 'spec');
     if (typeof task === 'string') throw new Error(task);
     const work = await prepareRepoWorkspace(task);
     try {
@@ -80,8 +80,27 @@ describe('workspace preparation', () => {
     }
   }, 60_000);
 
-  it('starts from a FAILING suite, which is what makes the task real', async () => {
-    const task = await taskFromCommit(process.cwd(), 'c3d71ea7a');
+  it('blind mode: the agent never sees what it will be graded by', async () => {
+    // Handing over the assertions turns an underspecified engineering task into
+    // a spec-complete one, which is the easy half of the job. In blind mode the
+    // tests arrive only at grading — so they also cannot be edited to pass.
+    const task = await taskFromCommit(process.cwd(), 'c3d71ea7a', 900_000, 'blind');
+    if (typeof task === 'string') throw new Error(task);
+    const work = await prepareRepoWorkspace(task);
+    try {
+      const testFile = join(work, 'test/permissions-dangerous.test.ts');
+      const before = readFileSync(testFile, 'utf-8');
+      // The file exists at the parent commit, but WITHOUT this commit's cases.
+      expect(before).not.toContain('isGitConfigMutation');
+      restoreGradingTests(work, task);
+      expect(readFileSync(testFile, 'utf-8')).toContain('isGitConfigMutation');
+    } finally {
+      await cleanupWorkspace(work);
+    }
+  }, 60_000);
+
+  it('spec mode starts from a FAILING suite, which is what makes the task real', async () => {
+    const task = await taskFromCommit(process.cwd(), 'c3d71ea7a', 900_000, 'spec');
     if (typeof task === 'string') throw new Error(task);
     const work = await prepareRepoWorkspace(task);
     try {
@@ -92,4 +111,39 @@ describe('workspace preparation', () => {
       await cleanupWorkspace(work);
     }
   }, 180_000);
+});
+
+describe('failure classification is conservative by design', () => {
+  it('calls an agent-level error a harness failure', () => {
+    const c = classifyFailure({ agentErrors: ['Stopped: turn cap'], toolFailures: [], suiteOutput: '' });
+    expect(c.failure).toBe('harness');
+  });
+
+  it('calls an unapplied edit a harness failure, not a model one', () => {
+    // Producing the text is the model's job; applying it is ours.
+    const c = classifyFailure({ agentErrors: [], toolFailures: ['edit_file: old_string not found'], suiteOutput: 'AssertionError' });
+    expect(c.failure).toBe('harness');
+  });
+
+  it('separates a defensible alternative from a wrong answer', () => {
+    const c = classifyFailure({
+      agentErrors: [], toolFailures: [], suiteOutput: 'AssertionError: expected 1 to be 2',
+      preExistingSuitePassed: true,
+    });
+    expect(c.failure).toBe('alternative-impl');
+  });
+
+  it('refuses to guess — unknown means harness until a human looks', () => {
+    const c = classifyFailure({ agentErrors: [], toolFailures: [], suiteOutput: 'something inscrutable' });
+    expect(c.failure).toBe('unclassified');
+  });
+});
+
+describe('commit-message quality gate', () => {
+  it('drops a commit whose message is not a specification', async () => {
+    // The message IS the spec here. Rewriting one would make me the spec
+    // author; dropping it and counting the drop is the honest move.
+    const thin = await taskFromCommit(process.cwd(), 'HEAD', 900_000, 'blind');
+    if (typeof thin === 'string') expect(thin.length).toBeGreaterThan(0);
+  });
 });
