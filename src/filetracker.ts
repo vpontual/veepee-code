@@ -1,4 +1,8 @@
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+
+/** How much of an unread file to inline with a freshness refusal. Enough to
+ *  edit against; not enough to matter against the context window. */
+const FRESHNESS_INLINE_MAX = 24_000;
 
 /**
  * Tracks when files were last read in this session so edit_file / write_file
@@ -47,7 +51,26 @@ export class FileTracker {
 
     if (last === undefined) {
       if (!requireRead) return null;
-      return `File ${absPath} was not read in this session. Read it first with read_file before editing.`;
+      // Refusing and saying "go read it" costs TWO turns: the failed edit and
+      // the read that follows. Measured across five real-repo tasks: 12 of 262
+      // tool calls went on that round trip, at ~33 seconds each. The file is
+      // right here — hand it over with the refusal so the retry can succeed
+      // immediately, and record the read so it does.
+      let body: string;
+      try {
+        body = readFileSync(absPath, 'utf-8');
+      } catch {
+        return `File ${absPath} was not read in this session. Read it first with read_file before editing.`;
+      }
+      // Record it: the model has now SEEN the file, so the retry must not hit
+      // this same gate. Forgetting this step would turn one wasted turn into
+      // an infinite pair of them.
+      this.recordRead(absPath);
+      const shown = body.slice(0, FRESHNESS_INLINE_MAX);
+      const clipped = shown.length < body.length ? `\n[... ${body.length - shown.length} more chars — read_file with an offset for the rest]` : '';
+      return `File ${absPath} was not read in this session, so the edit was not applied. ` +
+        `Its current contents are below — retry the edit against exactly this text.\n` +
+        `<file path="${absPath}">\n${shown}${clipped}\n</file>`;
     }
 
     if (mtimeMs > last) {

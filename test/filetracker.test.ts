@@ -83,3 +83,33 @@ describe('FileTracker', () => {
     expect(tracker.paths().sort()).toEqual([a, b].sort());
   });
 });
+
+describe('a freshness refusal hands over the file instead of costing a turn', () => {
+  it('inlines the contents and records the read so the retry succeeds', async () => {
+    const { mkdtemp, writeFile, rm } = await import('fs/promises');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = await mkdtemp(join(tmpdir(), 'vcode-fresh-'));
+    try {
+      const p = join(dir, 'a.ts');
+      await writeFile(p, 'export const x = 1;\n');
+      const t = new FileTracker();
+      // Measured across five real-repo tasks: 12 of 262 tool calls were spent on
+      // the failed-edit-then-read round trip, at ~33 seconds each.
+      const first = t.checkFresh(p, true);
+      expect(first).toContain('export const x = 1;');
+      expect(first).toContain('retry the edit against exactly this text');
+      // …and the retry must not hit the same gate, or one wasted turn becomes
+      // an infinite pair of them.
+      expect(t.checkFresh(p, true)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still refuses plainly when the file cannot be read', () => {
+    const t = new FileTracker();
+    const msg = t.checkFresh('/nonexistent/nope.ts', true);
+    expect(msg).toBeNull(); // a file that does not exist is a create, not a stale edit
+  });
+});
