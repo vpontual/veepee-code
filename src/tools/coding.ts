@@ -1485,13 +1485,55 @@ function createListFilesTool(): ToolDef {
  * command. Matches by basename (foo.ts) or by relative/absolute path. Avoids
  * O(N) regex per path with a quick substring pre-filter.
  */
+/**
+ * Commands that can CHANGE a file. Anything else naming a file is reading it.
+ *
+ * The distinction is the whole point: a command that only reads cannot make the
+ * model's copy stale, so forgetting the file after it costs a wasted turn and
+ * buys nothing.
+ */
+const MUTATING_COMMAND = new RegExp([
+  // in-place editors and formatters
+  /\b(sed|perl|awk)\b[^|;&]*\s-i\b/, /\b(prettier|eslint|biome|ruff|black|gofmt|rustfmt|dprint)\b[^|;&]*--write\b/,
+  /\b(prettier|black|gofmt|rustfmt)\b(?![^|;&]*--(check|list-different|diff))/,
+  // writes, moves, deletes
+  /\b(mv|cp|rm|install|truncate|dd|tee|patch|touch|chmod|chown|ln)\b/,
+  // redirections into a file
+  />{1,2}\s*\S/,
+  // version control that rewrites the tree
+  /\bgit\s+(checkout|restore|stash|apply|reset|merge|rebase|revert|cherry-pick|clean|pull)\b/,
+  // package managers and builds that regenerate sources
+  /\b(npm|pnpm|yarn|bun)\s+(install|ci|update|add|remove)\b/, /\b(make|cargo|go|tsc|webpack|vite|rollup|esbuild)\b/,
+  // anything piped into a file-writing python/node one-liner
+  /\b(python3?|node)\b[^|;&]*\b(write|open\()/,
+].map((r) => `(?:${r.source})`).join('|'));
+
+/**
+ * Forget tracker entries for files a command may have CHANGED.
+ *
+ * This used to forget any tracked file whose basename appeared ANYWHERE in the
+ * command string, read-only or not. `git diff public/index.html`,
+ * `node test/test.js`, `sed -n '533p' public/index.html | cat -A` — all pure
+ * reads — each wiped the entry, and the next edit was refused with the hardest
+ * refusal there is ("was not read in this session"), costing a read plus a retry.
+ *
+ * Measured in the final sweep: 14 of 38 bash calls invalidated an
+ * already-read file, and 25% of ALL re-reads trace to this one line. At ~33s a
+ * turn that is minutes per task spent re-fetching what the harness had already
+ * delivered and then chose to disbelieve.
+ *
+ * Bare-basename matching goes too: `test.js` appears in half the commands in a
+ * JavaScript repo without referring to the tracked file at all.
+ */
 function forgetReferencedPaths(tracker: FileTracker, command: string, cwd: string): void {
   const tracked = tracker.paths();
   if (tracked.length === 0) return;
+  if (!MUTATING_COMMAND.test(command)) return;
   for (const abs of tracked) {
     const rel = relative(cwd, abs);
-    const base = abs.split('/').pop() ?? abs;
-    if (command.includes(abs) || (rel && !rel.startsWith('..') && command.includes(rel)) || command.includes(base)) {
+    // Path-shaped references only. A bare basename is not evidence that THIS
+    // file was touched.
+    if (command.includes(abs) || (rel && !rel.startsWith('..') && command.includes(rel))) {
       tracker.forget(abs);
     }
   }

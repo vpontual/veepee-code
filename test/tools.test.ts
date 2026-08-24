@@ -240,7 +240,7 @@ describe('FileTracker integration with edit_file / write_file', () => {
     expect(readFileSync(p, 'utf-8')).toBe('v1\n');
   });
 
-  it('bash command mentioning a tracked file forgets it', async () => {
+  it('a read-only bash command that merely names a tracked file does NOT forget it', async () => {
     const tracker = new FileTracker();
     const registry = new ToolRegistry();
     for (const tool of registerCodingTools(undefined, tracker)) registry.register(tool);
@@ -250,9 +250,28 @@ describe('FileTracker integration with edit_file / write_file', () => {
     await registry.execute('read_file', { path: p });
     expect(tracker.size()).toBe(1);
 
-    // A bash command that just references the file by basename should clear it.
+    // This asserted the opposite until 2026-08-24. Forgetting on any mention of
+    // a basename meant `git diff public/index.html`, `node test/test.js` and
+    // `sed -n '533p' file | cat -A` — all pure reads — each cost the model a
+    // re-read plus a refused edit. Measured in a real sweep: 14 of 38 bash calls
+    // invalidated an already-read file, and 25% of ALL re-reads trace to it.
+    //
+    // Safe because forgetting was never the real guard: `checkFresh` compares
+    // mtime, so a file that genuinely changed is still caught.
     const result = await registry.execute('bash', { command: `echo skipping sed-target.txt` });
     expect(result.success).toBe(true);
+    expect(tracker.size()).toBe(1);
+  });
+
+  it('a mutating bash command naming the file DOES forget it', async () => {
+    const tracker = new FileTracker();
+    const registry = new ToolRegistry();
+    for (const tool of registerCodingTools(undefined, tracker)) registry.register(tool);
+
+    const p = join(dir, 'mutated.txt');
+    writeFileSync(p, 'before\n');
+    await registry.execute('read_file', { path: p });
+    await registry.execute('bash', { command: `sed -i 's/before/after/' ${p}` });
     expect(tracker.size()).toBe(0);
   });
 

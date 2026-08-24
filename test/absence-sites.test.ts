@@ -194,3 +194,52 @@ describe('MCP results — the site that had never been examined', () => {
     expect(mod).toBeDefined();
   });
 });
+
+describe('freshness is only invalidated by commands that can change a file', () => {
+  it('keeps the file fresh after read-only commands that merely name it', async () => {
+    const { registerCodingTools } = await import('../src/tools/coding.js');
+    const { FileTracker } = await import('../src/filetracker.js');
+    const { mkdtemp, writeFile, rm } = await import('fs/promises');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = await mkdtemp(join(tmpdir(), 'vcode-forget-'));
+    try {
+      const p = join(dir, 'index.html');
+      await writeFile(p, '<html></html>');
+      const tracker = new FileTracker();
+      const bash = registerCodingTools(undefined, tracker).find((t) => t.name === 'bash')!;
+      // Measured in the final sweep: 14 of 38 bash calls invalidated an
+      // already-read file, and 25% of ALL re-reads trace to this. Each one cost
+      // a read plus a retry at ~33s a turn.
+      for (const cmd of [`git diff -- ${p}`, `cat ${p}`, `grep -n foo ${p}`, `node --check ${p} || true`]) {
+        tracker.recordRead(p);
+        await bash.execute({ command: cmd, timeout: 20_000 });
+        expect(tracker.checkFresh(p, true), cmd).toBeNull();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('still forgets after a command that rewrites the file', async () => {
+    const { registerCodingTools } = await import('../src/tools/coding.js');
+    const { FileTracker } = await import('../src/filetracker.js');
+    const { mkdtemp, writeFile, rm } = await import('fs/promises');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = await mkdtemp(join(tmpdir(), 'vcode-forget2-'));
+    try {
+      const p = join(dir, 'app.js');
+      await writeFile(p, 'const a = 1;\n');
+      const tracker = new FileTracker();
+      const bash = registerCodingTools(undefined, tracker).find((t) => t.name === 'bash')!;
+      tracker.recordRead(p);
+      await bash.execute({ command: `sed -i 's/1/2/' ${p}`, timeout: 20_000 });
+      // The model's copy is genuinely stale now; the refusal is correct and
+      // hands the new contents over.
+      expect(tracker.checkFresh(p, true)).toContain('const a = 2;');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
