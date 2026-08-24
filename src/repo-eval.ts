@@ -73,6 +73,12 @@ export interface RepoTask {
  * `harness` vcode lost, truncated, mis-parsed, mis-routed or dropped something —
  *           a failed edit application, a swallowed error, a context loss, a
  *           guard that fired when it should not have.
+ * `budget`  the run was STOPPED by a limit we imposed — turn cap, wall-clock
+ *           deadline, stuck-loop guard. Its own class because a limit reported
+ *           as an inability is the same mistake as an unknown reported as a
+ *           fact, with the sign inverted: the agent did not fail to do the work,
+ *           it was not allowed to finish. Counting these as model failures would
+ *           launder harness decisions into evidence about the model.
  * `grader`  the task or the grading is wrong (this happened tonight: a task
  *           scored 0/5 on work that was correct).
  * `alternative-impl` (blind mode only) the repo's PRE-EXISTING suite passes and
@@ -86,7 +92,7 @@ export interface RepoTask {
  *           residual gap be attributable to model size alone; an unexplained
  *           failure is not evidence for that, it is evidence against it.
  */
-export type FailureClass = 'model' | 'harness' | 'grader' | 'alternative-impl' | 'unclassified';
+export type FailureClass = 'model' | 'harness' | 'budget' | 'grader' | 'alternative-impl' | 'unclassified';
 
 export interface RepoTaskResult {
   task: string;
@@ -102,6 +108,8 @@ export interface RepoTaskResult {
   preExistingSuitePassed?: boolean;
   toolCalls: number;
   toolErrors: number;
+  /** Assistant turns consumed — a first-class metric, not a log artifact. */
+  turns: number;
   wallMs: number;
   selfVerified: boolean;
   detail?: string;
@@ -297,7 +305,7 @@ export async function runRepoTask(
   const prevCwd = process.cwd();
   const result: RepoTaskResult = {
     task: task.name, mode: task.mode, passed: false, startedFailing: false,
-    toolCalls: 0, toolErrors: 0, wallMs: 0, selfVerified: false,
+    toolCalls: 0, toolErrors: 0, turns: 0, wallMs: 0, selfVerified: false,
   };
   const agentErrors: string[] = [];
   const toolFailures: string[] = [];
@@ -339,6 +347,8 @@ export async function runRepoTask(
           if (toolFailures.length < 12) {
             toolFailures.push(`${ev.name ?? 'tool'}: ${String(ev.error ?? ev.content ?? '').slice(0, 200)}`);
           }
+        } else if (ev.type === 'done') {
+          result.turns++;
         } else if (ev.type === 'error') {
           // Agent-level failure — stuck-loop abort, turn cap, model unreachable,
           // context rejected. These are harness events by definition and must
@@ -400,10 +410,22 @@ export function classifyFailure(ev: {
   suiteOutput: string;
   preExistingSuitePassed?: boolean;
 }): { failure: FailureClass; evidence: string } {
-  // An agent-level error is a harness event by definition — the loop stopped,
-  // the model did not decline.
+  // A limit WE imposed is not the model failing. Separated so a harness
+  // decision can never be counted as evidence about model capability.
+  const limitStop = ev.agentErrors.find((e) =>
+    /turns on one message|exceeded its .* budget|timed out|Interrupted by user/i.test(e));
+  if (limitStop) {
+    return { failure: 'budget', evidence: `stopped by a limit: ${limitStop.slice(0, 300)}` };
+  }
+  // Any other agent-level error is a harness event: the loop stopped, the model
+  // did not decline. The tool failures that led there are the actionable part,
+  // so they travel with it rather than being reconstructed from logs later.
   if (ev.agentErrors.length > 0) {
-    return { failure: 'harness', evidence: `agent error: ${ev.agentErrors[0].slice(0, 300)}` };
+    const why = ev.toolFailures.slice(0, 3).join(' | ');
+    return {
+      failure: 'harness',
+      evidence: `agent error: ${ev.agentErrors[0].slice(0, 200)}${why ? ` — preceding tool failures: ${why.slice(0, 400)}` : ''}`,
+    };
   }
   // An edit the harness could not apply is a harness failure even though the
   // model produced the text: applying an edit is our job, not the model's.

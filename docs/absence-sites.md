@@ -47,12 +47,17 @@ live in `test/absence-sites.test.ts`.
 | 19 | `grep` result cap | matches beyond N dropped | **proven-loud** — "(truncated at N results)" |
 | 20 | LSP not configured for a file type | empty diagnostics block | **fixed** — says so once per extension per session; repeating it every edit would train the model to skip the block |
 | 21 | `web_fetch` empty response body | `''` | **fixed** — reports status, content-type, and that a JS-rendered page looks identical |
-| 22 | `deep-research` internal failures | `catch { return [] }` × 5 | **unresolved** — feature path, absent sources look like no sources |
-| 23 | Knowledge-state save failure | `.catch(() => {})` | **unresolved** — not model-visible, but state loss is silent |
-| 24 | MCP tool result empty | passthrough | **unresolved** — not audited |
-| 25 | `system_info` sub-command failures | partial output | **unresolved** — a missing section reads as a system with no such data |
+| 22 | `deep-research` internal failures | `catch { return [] }` × 5 | **known-unfixed** — feature path; absent sources look like no sources |
+| 23 | Knowledge-state save failure | `.catch(() => {})` | **known-unfixed** — not model-visible, but state loss is silent |
+| 24 | MCP tool results | passthrough | **NEVER EXAMINED** |
+| 25 | `system_info` sub-command failures | partial output | **known-unfixed** — a missing section reads as a system with no such data |
 
-**Score: 21 fixed or proven-loud, 4 unresolved, 25 enumerated.**
+**Score: 21 fixed or proven-loud, 3 known-unfixed, 1 never examined, 25 enumerated.**
+
+Known-unfixed and never-examined are deliberately separate columns. They are
+different risks, and the second is the one that produced three surprises tonight
+*after* the surface was thought to be understood. Collapsing them into
+"unresolved" hides exactly the thing worth knowing.
 
 Unresolved sites are allowed. Hidden ones are not — the gate for any confidence
 claim above 90 is that every site here is either fault-injection tested to fail
