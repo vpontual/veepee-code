@@ -20,20 +20,34 @@ function mgr(roster: Record<string, string> | null, allowed: string[], parentMod
 }
 
 describe('a stale roster cannot disable the task tool', () => {
-  it('falls back to the parent model when the roster names a retired one', async () => {
-    const m = mgr({ act: 'qwen3-coder-next:latest' }, ['Qwen/Qwen3.6-35B-A3B-FP8'], 'Qwen/Qwen3.6-35B-A3B-FP8');
+  const pick = (m: SubAgentManager) => (m as unknown as { defaultTaskModel(): string }).defaultTaskModel();
+
+  it('is not refused for naming a model nobody asked for', async () => {
+    const m = mgr({ act: 'qwen3-coder-next:latest' },
+      ['Qwen/Qwen3.6-35B-A3B-FP8', 'gemma4:26b-a4b'], 'Qwen/Qwen3.6-35B-A3B-FP8');
     const { result } = await m.runTask({ prompt: 'say hi', maxTurns: 1 });
-    // It must not be refused for naming a model nobody asked for.
     expect(result?.error ?? '').not.toContain('not in subagent allowedModels');
   });
 
-  it('uses a roster entry when it IS allowed', () => {
-    const m = mgr({ act: 'gemma4:26b-a4b' }, ['gemma4:26b-a4b', 'Qwen/Qwen3.6-35B-A3B-FP8'], 'Qwen/Qwen3.6-35B-A3B-FP8');
-    expect((m as unknown as { defaultTaskModel(): string }).defaultTaskModel()).toBe('gemma4:26b-a4b');
+  it('uses a roster entry when it is allowed AND on other hardware', () => {
+    const m = mgr({ act: 'gemma4:26b-a4b' },
+      ['gemma4:26b-a4b', 'Qwen/Qwen3.6-35B-A3B-FP8'], 'Qwen/Qwen3.6-35B-A3B-FP8');
+    expect(pick(m)).toBe('gemma4:26b-a4b');
   });
 
-  it('prefers the parent model over any retired roster entry', () => {
-    const m = mgr({ act: 'gemma3:4b', plan: 'qwen3-coder-next:latest' }, ['Qwen/Qwen3.6-35B-A3B-FP8'], 'Qwen/Qwen3.6-35B-A3B-FP8');
-    expect((m as unknown as { defaultTaskModel(): string }).defaultTaskModel()).toBe('Qwen/Qwen3.6-35B-A3B-FP8');
+  it('NEVER routes a subagent onto the parent\'s own model', () => {
+    // The DGX serves one model with a KV cache sized for it. A second
+    // concurrent generation of that model there is not slow, it is a crash —
+    // so the obvious fallback is the one that takes the box down.
+    const m = mgr({ act: 'Qwen/Qwen3.6-35B-A3B-FP8' },
+      ['Qwen/Qwen3.6-35B-A3B-FP8', 'gemma4:26b-a4b', 'qwen3:8b'], 'Qwen/Qwen3.6-35B-A3B-FP8');
+    expect(pick(m)).not.toBe('Qwen/Qwen3.6-35B-A3B-FP8');
+    expect(['gemma4:26b-a4b', 'qwen3:8b']).toContain(pick(m));
+  });
+
+  it('offloads to another fleet model when the roster is entirely stale', () => {
+    const m = mgr({ act: 'gemma3:4b', plan: 'qwen3-coder-next:latest' },
+      ['Qwen/Qwen3.6-35B-A3B-FP8', 'gemma4:26b-a4b'], 'Qwen/Qwen3.6-35B-A3B-FP8');
+    expect(pick(m)).toBe('gemma4:26b-a4b');
   });
 });

@@ -592,29 +592,49 @@ export class SubAgentManager {
   /**
    * The model a `task` runs on when the caller does not name one.
    *
-   * THE ROSTER OUTLIVES THE FLEET. `~/.veepee-code/benchmarks/roster.json` still
-   * names `qwen3-coder-next:latest` and `gemma3:4b` — models retired months ago
-   * and absent from `subagent.allowedModels`. So this returned a model the
-   * allowlist then rejected, and EVERY subagent spawn failed before it started:
-   * `Model 'qwen3-coder-next:latest' not in subagent allowedModels`. The `task`
-   * tool was not degraded, it was dead, and nothing said so because the failure
-   * looked like a deliberate policy refusal.
+   * A SUBAGENT MUST NOT LAND ON THE SAME BOX AS ITS PARENT. The DGX serves one
+   * model with a 131k window and a KV cache sized for it; a second concurrent
+   * generation of the same model there is not slow, it is a crash. Subagents
+   * exist to use the REST of the fleet — gemma4 on the Orin AGX, the small
+   * Qwen on the Nanos — while the DGX keeps working on the main thread.
    *
-   * A roster entry is now a suggestion that must survive the allowlist; the
-   * parent's own model is the fallback, because a subagent of a working agent
-   * can always run where its parent runs.
+   * So the parent's model is the one thing this will not return. It is the
+   * opposite of the obvious fallback, and the obvious fallback is what takes the
+   * box down.
+   *
+   * THE ROSTER ALSO OUTLIVES THE FLEET. `benchmarks/roster.json` still names
+   * `qwen3-coder-next:latest` and `gemma3:4b` — retired months ago and absent
+   * from `subagent.allowedModels` — so this returned a model the allowlist then
+   * rejected, and EVERY spawn failed before it started with "not in subagent
+   * allowedModels". That reads as a deliberate policy choice, which is why it
+   * survived: a policy refusal is the one failure shape nobody investigates.
    */
   private defaultTaskModel(): string {
-    const allowed = (m: string | null | undefined): m is string =>
-      Boolean(m) && (!this.allowedModels || this.allowedModels.has(m as string));
+    const usable = (m: string | null | undefined): m is string =>
+      Boolean(m)
+      && m !== this.defaultModel                                    // never the parent's box
+      && (!this.allowedModels || this.allowedModels.has(m as string));
+
     for (const candidate of [this.roster?.act, this.roster?.plan, this.roster?.search]) {
-      if (allowed(candidate)) return candidate;
+      if (usable(candidate)) return candidate;
     }
-    if (allowed(this.defaultModel)) return this.defaultModel as string;
+    // Anything allowed that is not the parent's model, largest first by
+    // convention: gemma4 on the AGX before the small Qwens on the Nanos.
+    const offload = [...(this.allowedModels ?? [])].filter(usable);
+    if (offload.length > 0) return offload[0];
+
+    // Nothing else is configured. Return the parent's model rather than failing
+    // outright — `generationLimiter` serialises same-model generations, so this
+    // queues behind the parent instead of running beside it — but say so,
+    // because a serialised subagent is a slow one and that is worth knowing.
+    process.stderr.write(
+      '[subagent] no offload model configured; running on the parent model, which serialises behind it. '
+      + 'Add another fleet model to subagent.allowedModels to fan out.\n',
+    );
     return this.defaultModel ?? 'qwen3:8b';
   }
 
-  /** The parent agent's model — the sane fallback when the roster is stale. */
+  /** The parent agent's model — the one box a subagent must NOT be sent to. */
   private defaultModel?: string;
 
   setDefaultModel(model: string): void {
