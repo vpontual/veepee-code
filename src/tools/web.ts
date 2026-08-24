@@ -88,6 +88,14 @@ async function rawFetchText(url: string): Promise<string> {
   }
 
   const html = await readCapped(res);
+  // An empty body is a FACT about the fetch, not a page with no words in it.
+  // Returned as '', a 200 with no body, a JS-only shell and a stripped-to-
+  // nothing page are indistinguishable from each other and from a successful
+  // read — so the model concludes the page said nothing and moves on.
+  if (!html.trim()) {
+    return `(the response had no readable body — ${res.status} ${res.statusText || ''}, content-type "${contentType || 'unset'}". `
+      + `This is not the same as a page with no content: it may be JavaScript-rendered, or served empty to a non-browser client.)`;
+  }
   // Basic HTML stripping — remove tags, decode entities, collapse whitespace
   return html
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')

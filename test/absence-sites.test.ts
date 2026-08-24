@@ -73,3 +73,23 @@ describe('compaction without a summary tells the model so', () => {
     expect(text).toContain('Re-read what you need');
   }, 60_000);
 });
+
+describe('an empty fetch is a fact about the fetch', () => {
+  it('says the body was unreadable instead of returning nothing', async () => {
+    const { registerWebTools } = await import('../src/tools/web.js');
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response('', {
+      status: 200, statusText: 'OK', headers: { 'content-type': 'text/html' },
+    })) as typeof fetch;
+    try {
+      const tool = registerWebTools({ } as never).find((t) => t.name === 'web_fetch');
+      const r = await tool!.execute({ url: 'https://example.invalid/' });
+      // '' made a 200-with-no-body, a JS-only shell and a real empty page
+      // indistinguishable — and all three read as "the page said nothing".
+      expect(String(r.output)).toContain('no readable body');
+      expect(String(r.output)).toContain('JavaScript-rendered');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});

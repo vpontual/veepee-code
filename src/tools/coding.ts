@@ -88,7 +88,18 @@ async function appendLspDiagnostics(
   if (!lspManager) return '';
   try {
     const label = lspManager.matchByPath(filePath);
-    if (!label) return '';
+    // No language server for this file type is not a clean bill of health
+    // either — it means nothing checked the edit. Said ONCE per extension per
+    // session: the fact is static, and repeating it on every edit would be
+    // noise that trains the model to skip the whole block.
+    if (!label) {
+      const ext = filePath.slice(filePath.lastIndexOf('.'));
+      if (ext && ext.length <= 6 && !announcedNoLsp.has(ext)) {
+        announcedNoLsp.add(ext);
+        return `\n\n<lsp_status>\nNo language server is configured for ${ext} files, so this edit was not type-checked. Verify it by building or running tests.\n</lsp_status>`;
+      }
+      return '';
+    }
     const { timedOut } = await notifyLSPs(lspManager, filePath);
     const block = formatDiagnostics(lspManager.getAllDiagnostics(), filePath);
     const failure = lspManager.failureReason(label);
@@ -242,6 +253,9 @@ export function boundedStream(headMax = 192 * 1024, tailMax = 192 * 1024) {
     },
   };
 }
+
+/** Extensions we have already told the model have no language server. */
+const announcedNoLsp = new Set<string>();
 
 /** Process-group killers for bash commands currently running. */
 const liveBashChildren = new Set<(signal: NodeJS.Signals) => void>();
