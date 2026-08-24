@@ -34,10 +34,14 @@ describe('a truncated tool call is not a call with default arguments', () => {
     const result = await registry.execute('list_files', { [TRUNCATED_ARGS_KEY]: '{"path":"/ho' });
     expect(ran).toBe(false);
     expect(result.success).toBe(false);
-    expect(result.error).toContain('truncated');
+    expect(result.error).toContain('cut off mid-JSON');
     expect(result.error).toContain('NOT executed');
-    // The model needs to know it can simply retry.
-    expect(result.error).toContain('Send it again');
+    // "Send it again" was the wrong advice and caused the failure it reported:
+    // the arguments truncate because the RESPONSE hit its output-token ceiling,
+    // so an identical retry truncates identically — three times, then the loop
+    // guard ends the run. The model needs the cause and a smaller unit of work.
+    expect(result.error).toContain('output-token limit');
+    expect(result.error).toContain('two or three parts');
   });
 
   it('leaves an ordinary call alone', async () => {

@@ -21,7 +21,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "npm run build",
-    "smoke": "node scripts/tool-smoke.mjs && node scripts/fleet-smoke.mjs"
+    "smoke": "node scripts/tool-smoke.mjs && node scripts/fleet-smoke.mjs",
+    "smoke:model": "node scripts/model-smoke.mjs"
   },
   "keywords": [
     "cli",

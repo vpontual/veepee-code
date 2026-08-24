@@ -217,11 +217,21 @@ export class ToolRegistry {
       // can act on — retry the call — instead of a result it will believe.
       if (Object.prototype.hasOwnProperty.call(args, TRUNCATED_ARGS_KEY)) {
         const partial = String(args[TRUNCATED_ARGS_KEY] ?? '');
+        // "Send it again" was the wrong advice and it caused the failure it was
+        // meant to report. Arguments truncate because the RESPONSE hit its
+        // output-token ceiling mid-JSON — so an identical retry produces an
+        // identical truncation, three times over, and the loop guard ends the
+        // run. Measured on a real task: four truncated calls, then a timeout.
+        // The model needs the cause and a smaller unit of work, not a retry.
         return {
           success: false,
           output: '',
-          error: `The arguments for ${name} arrived truncated and could not be parsed, so the call was NOT executed. `
-            + `Send it again${partial ? ` (received: ${partial.slice(0, 120)}…)` : ''}.`,
+          error: `The arguments for ${name} were cut off mid-JSON and the call was NOT executed. `
+            + `This means the response hit its output-token limit while still writing the arguments — `
+            + `retrying the same call verbatim will truncate at the same place. `
+            + `Send LESS in one call: write the file in two or three parts (create it with the first section, `
+            + `then append the rest with further edits), or split the work across turns.`
+            + (partial ? ` Received: ${partial.slice(0, 120)}…` : ''),
         };
       }
       const coerced = coerceArgs(tool.schema, args);

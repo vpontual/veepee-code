@@ -732,6 +732,12 @@ export class Agent {
     // Qwen3.6) eats into this budget BEFORE the answer — hence the generous headroom.
     // Old values (256/1024/4096) predate thinking-mode and truncated answers; low=256
     // couldn't even fit the reasoning, so it emitted no answer at all.
+    // RAISED TWICE on 2026-08-24, the second time because 8192 was still not
+    // enough: a real replay task hit FOUR truncated tool calls in one run — a
+    // whole `server/lib.js`, a heredoc via bash, then the same file again —
+    // because a new source file plus its reasoning does not fit in 8k. The model
+    // was not being verbose; the file was simply that size.
+    //
     // RAISED 2026-08-24 after measuring what the old ceiling actually cost.
     // At medium (3072) the budget covers reasoning (~500-2000 on Qwen3.6) plus
     // the answer — which means a `write_file` whose content is a real source
@@ -741,10 +747,10 @@ export class Agent {
     // thinking about it. A ceiling costs nothing when a response ends
     // naturally; this one was truncating the work.
     switch (this.effort) {
-      case 'low': return { num_predict: 2048 };
-      case 'high': return { num_predict: 16384 };
+      case 'low': return { num_predict: 4096 };
+      case 'high': return { num_predict: 32768 };
       case 'medium':
-      default: return { num_predict: 8192 };
+      default: return { num_predict: 16384 };
     }
   }
 
