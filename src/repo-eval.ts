@@ -361,6 +361,18 @@ export async function runRepoTask(
 
     process.chdir(work);
     const { agent } = buildEvalAgent(config, modelManager, work);
+    // Ladder, not a guillotine. The deadline itself is a PROVEN state so
+    // terminating on it is legitimate — but a task killed mid-edit with a
+    // 276-line diff in the tree had five more minutes of useful work available
+    // to it, and no way to know. Warn first so it can land what it has.
+    const warning = setTimeout(
+      () => agent.notify(
+        '[SYSTEM] About five minutes of wall-clock budget remain for this task. '
+        + 'Finish and verify what you already have rather than starting anything new; '
+        + 'partial work that runs beats complete work that gets cut off.',
+      ),
+      Math.max(0, task.timeoutMs - 300_000),
+    );
     const deadline = setTimeout(() => agent.abort(), task.timeoutMs);
     try {
       for await (const ev of agent.run(task.prompt, { permissionMode: 'auto_allow' })) {
@@ -397,6 +409,7 @@ export async function runRepoTask(
         }
       }
     } finally {
+      clearTimeout(warning);
       clearTimeout(deadline);
     }
 

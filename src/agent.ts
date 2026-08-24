@@ -739,6 +739,21 @@ export class Agent {
   }
 
   /** Abort the current running agent loop (called on Ctrl+C) */
+  /**
+   * Deliver a message to the running agent at the next turn boundary.
+   *
+   * The reversible rung of the ladder. A guard that has INFERRED something —
+   * that the agent looks stuck, that a deadline is approaching — may say so and
+   * let the model decide; only a PROVEN state (an exit code, a byte count, a
+   * wall clock) earns a terminal action. Every guard that killed a working run
+   * tonight did it by inferring a state and acting as though it knew.
+   */
+  notify(text: string): void {
+    this.pendingNotices.push(text);
+  }
+
+  private pendingNotices: string[] = [];
+
   abort(): void {
     this.abortController?.abort();
     // Interrupt must reach the WORK, not just the model stream. Aborting the
@@ -1046,6 +1061,7 @@ export class Agent {
     // something (bash) — so we can force a verify-and-fix turn if it finishes without running it.
     let codeChangedUnverified = false;
     let forcedCompletenessOnce = false;
+    let repeatedFailureWarned = false;
     /** Files this run wrote to, for the incomplete-extension check. */
     const editedPaths = new Set<string>();
     let forcedVerifyOnce = false;
@@ -1057,6 +1073,13 @@ export class Agent {
     // (reset by a single word of output), an error, or an abort. None of those
     // bound a model that is making slow, plausible, unproductive progress.
     for (let turn = 0; ; turn++) {
+      // Drain anything queued for the agent since the last turn.
+      while (this.pendingNotices.length > 0) {
+        const notice = this.pendingNotices.shift()!;
+        this.context.addUser(notice);
+        yield { type: 'info', content: notice.slice(0, 120) };
+      }
+
       if (turn >= MAX_TURNS_PER_MESSAGE) {
         yield { type: 'error', error: `Stopped: ${MAX_TURNS_PER_MESSAGE} turns on one message without finishing. The work so far is kept — send a narrower instruction to continue.` };
         this.abortController = null;
@@ -1692,10 +1715,29 @@ export class Agent {
           }
           // The loop the byte-identical check cannot see: the same call failing
           // over and over with slightly different error text each time.
+          //
+          // WARN BEFORE KILLING. Whether this is a loop or a debugging cycle is
+          // an INFERENCE from an ambiguous signal, and this guard has already
+          // been wrong once tonight — it stopped an agent 34 tool calls into a
+          // real multi-file change for running `npm test` three times. A guard
+          // may not take a terminal action on an inferred state; it gets to say
+          // so, and the model gets to answer. Only a second occurrence AFTER the
+          // warning is evidence rather than a guess.
           if (detectRepeatedFailure(recentSteps)) {
-            yield { type: 'error', error: `Stopped: ${names} failed ${REPEATED_FAILURE_LIMIT} times with identical arguments. Change the approach rather than repeating the call.` };
-            this.abortController = null;
-            return;
+            if (!repeatedFailureWarned) {
+              repeatedFailureWarned = true;
+              recentSteps.length = 0;
+              this.context.addUser(
+                `[SYSTEM] ${names} has now failed ${REPEATED_FAILURE_LIMIT} times with identical arguments and nothing changed in between. `
+                + `If you are iterating on a fix, keep going — this is only a warning. If you are repeating a call that cannot work, `
+                + `change the approach: read the file again, check the path, or try a different tool.`,
+              );
+              yield { type: 'info', content: 'Warned: repeated identical failure' };
+            } else {
+              yield { type: 'error', error: `Stopped: ${names} kept failing with identical arguments after a warning. Likely stuck.` };
+              this.abortController = null;
+              return;
+            }
           }
         }
       }

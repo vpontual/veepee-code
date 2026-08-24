@@ -75,3 +75,40 @@ reported as a fact, versus a limit reported as an inability.
 The claim "the residual gap is model size" is only supportable when
 `harness + budget + unclassified` is zero. Until then that residue *is* the
 distance from the goal, and its size is the honest progress metric.
+
+## The guard rule
+
+Three guards I added in one night each killed a working run. The shallow reading
+is "machinery added faster than it was measured". The useful one is that all
+three had the **same shape**:
+
+> a guard inferred a state from an ambiguous surface signal, then took a
+> **terminal** action on that inference.
+
+Three identical failing commands *look* like a loop and *are* a debugging cycle.
+Missing detail *looks* incomplete and *is* concision. Each guard resolved the
+ambiguity by assuming the bad case, and then killed something.
+
+That is the exact twin of the absence family: **absence reported as fine;
+ambiguity resolved as failure.** Both are the harness deciding something it does
+not know and acting as though it does.
+
+### The rule
+
+**A guard may not take a terminal action on an inferred state.**
+
+- **Proven** states — an exit code, a byte count, a wall clock, a token count —
+  may terminate.
+- **Inferred** states get the reversible rung: tell the model, let it override,
+  log it.
+- The ladder is observe → warn → terminate, and only the bottom rung may be
+  reached from evidence rather than inference.
+
+Applied: the repeated-failure detector now warns and clears its window, and only
+stops the run if the pattern survives the warning. The wall-clock deadline is a
+proven state so it may terminate — but it warns five minutes out first, because a
+task killed mid-edit had work it could have landed.
+
+New machinery ships **default-off** as well. A disabled wrong guard is still a
+latent wrong guard, so default-off is not a substitute for the rule — it is what
+lets an A/B decide the default instead of an argument.

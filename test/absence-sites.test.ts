@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { ToolRegistry } from '../src/tools/registry.js';
 import { TRUNCATED_ARGS_KEY } from '../src/openai-adapter.js';
 import { z } from 'zod';
+import { readFileSync } from 'fs';
 
 /**
  * Fault injection for the ABSENCE SITES — every point where a value can be
@@ -127,5 +128,27 @@ describe('a single tool result cannot eat the context window', () => {
     // No compaction saves a turn whose single result does not fit.
     expect(s.text().length).toBeLessThan(60_000);
     expect(s.text()).toContain('dropped from the middle');
+  });
+});
+
+describe('a guard may not take a terminal action on an inferred state', () => {
+  it('warns on a repeated identical failure before it ever stops the run', () => {
+    const src = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
+    // Whether three identical failing calls are a loop or a debugging cycle is
+    // an INFERENCE from an ambiguous signal — and this guard was wrong once,
+    // killing an agent 34 tool calls into a real multi-file change. Terminal
+    // actions need a proven state (an exit code, a byte count, a wall clock);
+    // inferences get to speak and be overruled.
+    expect(src).toContain('repeatedFailureWarned');
+    expect(src).toContain('Warned: repeated identical failure');
+    const warnAt = src.indexOf('Warned: repeated identical failure');
+    const stopAt = src.indexOf('kept failing with identical arguments after a warning');
+    expect(warnAt).toBeGreaterThan(0);
+    expect(stopAt).toBeGreaterThan(warnAt);
+  });
+
+  it('gives the agent a channel to be told things mid-run', async () => {
+    const { Agent } = await import('../src/agent.js');
+    expect(typeof Agent.prototype.notify).toBe('function');
   });
 });
