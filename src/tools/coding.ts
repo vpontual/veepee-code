@@ -1050,12 +1050,34 @@ function createGrepTool(ignoreManager?: IgnoreManager): ToolDef {
 
         if (!output) return ok('No matches found.');
 
-        const lines = output.split('\n');
-        const result = lines.length > maxResults
-          ? lines.slice(0, maxResults).join('\n') + `\n... (truncated at ${maxResults} results)`
-          : output;
+        // CAP BY CHARACTERS, NOT JUST BY LINE COUNT. A match inside a minified
+        // bundle or a long data line returns the WHOLE line, so 50 results can
+        // be hundreds of kilobytes — measured: a grep in a repo with bundled JS
+        // put ~450k chars into one tool result, and the next request died with
+        // `your prompt contains at least 128001 input tokens`, two calls into
+        // the task. Line count is not a proxy for size when lines are unbounded.
+        const MAX_LINE_CHARS = 400;
+        const MAX_TOTAL_CHARS = 24 * 1024;
+        const clip = (l: string) => (l.length > MAX_LINE_CHARS
+          ? `${l.slice(0, MAX_LINE_CHARS)} …[line truncated, ${l.length} chars]`
+          : l);
+        const clipped = output.split('\n').map(clip);
+        const budgeted: string[] = [];
+        let used = 0;
+        for (const l of clipped) {
+          if (used + l.length > MAX_TOTAL_CHARS) break;
+          budgeted.push(l);
+          used += l.length;
+        }
+        const omitted = clipped.length - budgeted.length;
+        if (omitted > 0) {
+          budgeted.push(`... (${omitted} more matching lines omitted to fit the context window)`);
+        }
+        const result = budgeted.length > maxResults
+          ? budgeted.slice(0, maxResults).join('\n') + `\n... (truncated at ${maxResults} results)`
+          : budgeted.join('\n');
 
-        return ok(`${lines.length} matches:\n${result}`);
+        return ok(`${clipped.length} matches:\n${result}`);
       } catch (err) {
         const error = err as { status?: number; message?: string; stdout?: string };
         // grep returns exit code 1 for no matches

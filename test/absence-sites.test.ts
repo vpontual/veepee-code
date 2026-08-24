@@ -152,3 +152,26 @@ describe('a guard may not take a terminal action on an inferred state', () => {
     expect(typeof Agent.prototype.notify).toBe('function');
   });
 });
+
+describe('grep output is bounded by size, not just by line count', () => {
+  it('clips a very long matching line and says it did', async () => {
+    const { registerCodingTools } = await import('../src/tools/coding.js');
+    const { mkdtemp, writeFile, rm } = await import('fs/promises');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = await mkdtemp(join(tmpdir(), 'vcode-grep-'));
+    try {
+      // A minified bundle: one match, one enormous line. Fifty such results is
+      // hundreds of KB — measured, a grep put ~450k chars into one tool result
+      // and the next request died with "at least 128001 input tokens".
+      await writeFile(join(dir, 'bundle.js'), `const x=1;${'a'.repeat(200_000)}needle${'b'.repeat(200_000)}\n`);
+      const grep = registerCodingTools().find((t) => t.name === 'grep')!;
+      const r = await grep.execute({ pattern: 'needle', path: dir });
+      expect(r.success).toBe(true);
+      expect(String(r.output).length).toBeLessThan(30_000);
+      expect(String(r.output)).toContain('line truncated');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});

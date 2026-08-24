@@ -730,11 +730,19 @@ export class Agent {
     // Qwen3.6) eats into this budget BEFORE the answer — hence the generous headroom.
     // Old values (256/1024/4096) predate thinking-mode and truncated answers; low=256
     // couldn't even fit the reasoning, so it emitted no answer at all.
+    // RAISED 2026-08-24 after measuring what the old ceiling actually cost.
+    // At medium (3072) the budget covers reasoning (~500-2000 on Qwen3.6) plus
+    // the answer — which means a `write_file` whose content is a real source
+    // file cannot fit. The stream is then cut mid-JSON, the arguments arrive
+    // unparseable, and the call never runs. Two of six real-repo tasks died
+    // exactly that way, both on files of a size an engineer writes without
+    // thinking about it. A ceiling costs nothing when a response ends
+    // naturally; this one was truncating the work.
     switch (this.effort) {
-      case 'low': return { num_predict: 1024 };
-      case 'high': return { num_predict: 8192 };
+      case 'low': return { num_predict: 2048 };
+      case 'high': return { num_predict: 16384 };
       case 'medium':
-      default: return { num_predict: 3072 };
+      default: return { num_predict: 8192 };
     }
   }
 
