@@ -159,9 +159,20 @@ export function selectGaps(
   editedFiles: Set<string>,
   contents: Map<string, string>,
 ): ExtensionGap[] {
-  // Same-build A/B: restores the old rule (skip any file the model edited) so
-  // the change can be measured against itself rather than argued about.
-  if (process.env.VCODE_COMPLETENESS_SKIP_EDITED === '1') {
+  // MEASURED, AND THE MEASUREMENT WON.
+  //
+  // The argument below for including edited files is a good one, and it is
+  // wrong. A/B on one binary, 10 runs per arm, `extend-existing-pattern`:
+  //
+  //   including edited files   7/10   (59s avg, 17 tool calls)
+  //   excluding them          10/10   (48s avg, 15 tool calls)
+  //
+  // Not significant on its own (Fisher p≈0.21) but the direction is against the
+  // change and the cost is visible in the trajectory: the extra nudge fires,
+  // adds a turn, and the model goes and does something with it. So the original
+  // exclusion stays the default and the "improvement" is the opt-in, which is
+  // the opposite of what I expected when I wrote it.
+  if (process.env.VCODE_COMPLETENESS_INCLUDE_EDITED !== '1') {
     return gaps.filter((g) => !editedFiles.has(g.file));
   }
   const strength = (g: ExtensionGap): number => {

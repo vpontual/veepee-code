@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   enumerationSites,
   findExtensionGaps,
@@ -168,7 +168,9 @@ describe('buildCompletenessNudge', () => {
   });
 });
 
-describe('selectGaps — an edited file is the strongest signal, not an exemption', () => {
+describe('selectGaps — measured behaviour, not the one I argued for', () => {
+  afterEach(() => { delete process.env.VCODE_COMPLETENESS_INCLUDE_EDITED; });
+
   const RENDER = `switch (op.type) { case 'add_column': case 'drop_column': case 'rename': }
 export const SUPPORTED = ['add_column', 'drop_column', 'rename'];`;
   const OPERATIONS = `export interface Rename { type: 'rename'; from: string; to: string }
@@ -181,7 +183,8 @@ export function validate(op) {
 }`;
   const files = new Map([['src/render.ts', RENDER], ['src/operations.ts', OPERATIONS]]);
 
-  it('keeps the gap when the model edited the incomplete file', () => {
+  it('keeps the gap when the model edited the incomplete file (opt-in)', () => {
+    process.env.VCODE_COMPLETENESS_INCLUDE_EDITED = '1';
     // The measured failure: told to add `rename`, the model adds the interface
     // and the union member in operations.ts, forgets the validator case two
     // functions below, and gets render.ts right. The old rule excluded any
@@ -192,7 +195,8 @@ export function validate(op) {
     expect(selected.map(g => g.file)).toContain('src/operations.ts');
   });
 
-  it('ranks a half-finished edited file first', () => {
+  it('ranks a half-finished edited file first (opt-in)', () => {
+    process.env.VCODE_COMPLETENESS_INCLUDE_EDITED = '1';
     const untouched = new Map(files);
     untouched.set('src/docs.ts', `const TYPES = ['add_column', 'drop_column'];`);
     const gaps = findExtensionGaps(untouched);
@@ -200,6 +204,14 @@ export function validate(op) {
     // operations.ts was edited AND already mentions 'rename' — the model
     // committed to the extension and stopped halfway.
     expect(selected[0].file).toBe('src/operations.ts');
+  });
+
+  it('EXCLUDES an edited file by default — the A/B said so', () => {
+    // Including them measured 7/10 against 10/10 on `extend-existing-pattern`,
+    // same binary, 10 runs per arm. The reasoning for including them is good
+    // and the measurement disagreed, so the measurement wins.
+    const selected = selectGaps(findExtensionGaps(files), new Set(['src/operations.ts']), files);
+    expect(selected.map(g => g.file)).not.toContain('src/operations.ts');
   });
 
   it('still reports a file that was never touched', () => {
