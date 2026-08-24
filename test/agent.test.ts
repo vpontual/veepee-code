@@ -732,3 +732,20 @@ describe('plan mode no longer withholds tools', () => {
     expect(src).toMatch(/if \(configured\) \{\s*\n\s*this\.modelManager\.switchTo\(configured\);/);
   });
 });
+
+describe('the output ceiling is a budget, not a constant', () => {
+  it('never asks for more output than the window can still hold', () => {
+    // Raising num_predict to 16384 fixed truncated tool arguments and created a
+    // failure at the other end: a 52-call session died on `HTTP 400: maximum
+    // context length is 131072, you requested 16384 output tokens and your
+    // prompt contains …`. The request is refused ENTIRELY — the turn produces
+    // nothing, which is worse than a short answer.
+    const src = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
+    expect(src).toContain('private outputBudget()');
+    expect(src).toContain('const effortOpts = this.outputBudget();');
+    // Budgeted against the REMAINING room, with a reserve for template
+    // overhead and our own estimate error.
+    expect(src).toMatch(/const room = limit - prompt - RESERVE;/);
+    expect(src).toMatch(/if \(room >= ceiling\) return \{ num_predict: ceiling \};/);
+  });
+});

@@ -725,6 +725,31 @@ export class Agent {
    * Effort controls output length only; sampling temp/top_p/etc come from
    * QWEN_CODING_PRESET (Qwen-recommended values for thinking-mode coding).
    */
+  /**
+   * The output ceiling, clamped to what the context window can still hold.
+   *
+   * `num_predict` is not free: the server rejects the whole request when
+   * prompt + requested output exceeds the model's window. Raising the ceiling to
+   * 16384 this morning fixed truncated tool arguments and immediately created a
+   * new failure at the other end — a 52-call session died on
+   * `HTTP 400: maximum context length is 131072, you requested 16384 output
+   * tokens and your prompt contains …`. The request was refused entirely, so the
+   * turn produced nothing at all.
+   *
+   * A ceiling has to be a budget against the remaining room, not a constant. The
+   * floor exists because a request that can only produce 200 tokens is not worth
+   * making — better to compact and try again with room to answer.
+   */
+  private outputBudget(): { num_predict: number } {
+    const ceiling = this.getEffortOptions().num_predict;
+    const limit = this.context.getContextLimit();
+    const prompt = this.context.getLastPromptTokens() || this.context.projectedTokens();
+    const RESERVE = 2_048; // template overhead, tool schemas, our own estimate error
+    const room = limit - prompt - RESERVE;
+    if (room >= ceiling) return { num_predict: ceiling };
+    return { num_predict: Math.max(1_024, room) };
+  }
+
   private getEffortOptions(): { num_predict: number } {
     // num_predict is a CEILING (reasoning + answer), not a target: a response that
     // finishes naturally costs nothing extra, the cap only prevents truncation on
@@ -1218,7 +1243,7 @@ export class Agent {
         if (allowedTools) {
           tools = tools.filter(t => allowedTools.has(t.function?.name || ''));
         }
-        const effortOpts = this.getEffortOptions();
+        const effortOpts = this.outputBudget();
         // Sampling preset: chat mode → conversational/general; act/plan → coding.
         // Both Qwen-recommended; harmless on other Qwen3.x models, only wrong if
         // the user unlocks to a non-Qwen family (no current path does this).
