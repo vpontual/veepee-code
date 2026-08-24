@@ -106,6 +106,8 @@ describe('write_file creates the directory it is asked to write into', () => {
     const { tmpdir } = await import('os');
     const { join } = await import('path');
     const dir = await mkdtemp(join(tmpdir(), 'vcode-write-'));
+    const prevCwd = process.cwd();
+    process.chdir(dir); // the agent always runs with cwd inside its workspace
     try {
       const write = registerCodingTools().find((t) => t.name === 'write_file')!;
       const target = join(dir, 'server', 'lib', 'motion.mjs');
@@ -116,6 +118,7 @@ describe('write_file creates the directory it is asked to write into', () => {
       expect(r.success).toBe(true);
       expect(await readFile(target, 'utf-8')).toContain('export const x = 1;');
     } finally {
+      process.chdir(prevCwd);
       await rm(dir, { recursive: true, force: true });
     }
   });
@@ -242,4 +245,98 @@ describe('freshness is only invalidated by commands that can change a file', () 
       await rm(dir, { recursive: true, force: true });
     }
   }, 60_000);
+});
+
+describe('multi_edit accepts the shapes models actually emit', () => {
+  it('decodes arguments the model encoded twice', async () => {
+    const { decodeJsonish } = await import('../src/tools/coding.js');
+    // Real payload from the final sweep, rejected outright:
+    //   'edits': "\"import * as maplibregl from '/vendor/…"
+    const once = JSON.stringify([{ old_string: 'a', new_string: 'b' }]);
+    const twice = JSON.stringify(once);
+    expect(decodeJsonish(twice)).toEqual([{ old_string: 'a', new_string: 'b' }]);
+    expect(decodeJsonish(once)).toEqual([{ old_string: 'a', new_string: 'b' }]);
+  });
+
+  it('leaves genuine text that starts with a bracket alone', async () => {
+    const { decodeJsonish } = await import('../src/tools/coding.js');
+    expect(decodeJsonish('[not json at all')).toBe('[not json at all');
+  });
+
+  it('accepts a positional pair as an edit', async () => {
+    const { coerceEditShape } = await import('../src/tools/coding.js');
+    expect(coerceEditShape(['old text', 'new text']))
+      .toEqual({ old_string: 'old text', new_string: 'new text' });
+    expect(coerceEditShape(['old', 'new', true]))
+      .toEqual({ old_string: 'old', new_string: 'new', replace_all: true });
+    // Anything else is left for zod to report normally.
+    expect(coerceEditShape(['only one'])).toEqual(['only one']);
+  });
+
+  it('applies a multi_edit sent in the wrong shape end to end', async () => {
+    const { registerCodingTools } = await import('../src/tools/coding.js');
+    const { ToolRegistry } = await import('../src/tools/registry.js');
+    const { mkdtemp, writeFile, rm, readFile } = await import('fs/promises');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = await mkdtemp(join(tmpdir(), 'vcode-multiedit-'));
+    const prevCwd = process.cwd();
+    process.chdir(dir);
+    try {
+      const p = join(dir, 'a.ts');
+      await writeFile(p, 'const a = 1;\nconst b = 2;\n');
+      const registry = new ToolRegistry();
+      for (const t of registerCodingTools()) registry.register(t);
+      await registry.execute('read_file', { path: p });
+      const r = await registry.execute('multi_edit', {
+        path: p,
+        edits: JSON.stringify([['const a = 1;', 'const a = 10;'], ['const b = 2;', 'const b = 20;']]),
+      });
+      expect(r.success).toBe(true);
+      const body = await readFile(p, 'utf-8');
+      expect(body).toContain('const a = 10;');
+      expect(body).toContain('const b = 20;');
+    } finally {
+      process.chdir(prevCwd);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the file tools cannot write outside the workspace', () => {
+  it('refuses an absolute path outside the working directory', async () => {
+    const { registerCodingTools } = await import('../src/tools/coding.js');
+    const tools = registerCodingTools();
+    // `resolve(path)` with one argument passes an absolute path straight
+    // through, so write_file with /etc/anything wrote to /etc/anything. A grant
+    // is the bare tool name and persists to disk, so one "always allow" on
+    // write_file was unrestricted filesystem write for the life of the config.
+    for (const name of ['write_file', 'edit_file', 'multi_edit']) {
+      const t = tools.find((x) => x.name === name)!;
+      const r = await t.execute({
+        path: '/tmp/vcode-outside-workspace-should-refuse.txt',
+        content: 'x',
+        old_string: 'a', new_string: 'b',
+        edits: [{ old_string: 'a', new_string: 'b' }],
+      });
+      expect(r.success, name).toBe(false);
+      expect(String(r.error), name).toContain('outside the working directory');
+    }
+  });
+
+  it('has one explicit, greppable opt-out', async () => {
+    const { registerCodingTools } = await import('../src/tools/coding.js');
+    const { readFile, rm } = await import('fs/promises');
+    process.env.VCODE_ALLOW_OUTSIDE_WORKSPACE = '1';
+    const target = '/tmp/vcode-outside-allowed.txt';
+    try {
+      const write = registerCodingTools().find((t) => t.name === 'write_file')!;
+      const r = await write.execute({ path: target, content: 'allowed\n' });
+      expect(r.success).toBe(true);
+      expect(await readFile(target, 'utf-8')).toBe('allowed\n');
+    } finally {
+      delete process.env.VCODE_ALLOW_OUTSIDE_WORKSPACE;
+      await rm(target, { force: true });
+    }
+  });
 });

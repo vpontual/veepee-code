@@ -28,6 +28,11 @@ function check(name, ok, detail = '') {
 }
 
 const dir = await mkdtemp(join(tmpdir(), 'vcode-toolsmoke-'));
+// The file tools are contained to the working directory, and the agent always
+// runs with cwd inside its workspace — so the smoke must too, or it tests a
+// configuration nothing uses.
+const prevCwd = process.cwd();
+process.chdir(dir);
 try {
   // 1. write_file into a directory that does not exist yet.
   //    Shipped broken: a bare ENOENT, the model retried the identical call, the
@@ -93,6 +98,7 @@ try {
     miss.success === false && /copy this exactly|not found/.test(String(miss.error)),
     String(miss.error ?? '').slice(0, 60));
 } finally {
+  process.chdir(prevCwd);
   await rm(dir, { recursive: true, force: true });
 }
 

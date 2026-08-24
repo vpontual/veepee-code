@@ -48,10 +48,16 @@ const message: string = greet('world');
 console.log(message);
 `;
 
+let prevCwd = '';
+
 beforeAll(async () => {
   if (!HAS_TSLS) return;
 
   dir = mkdtempSync(join(tmpdir(), 'vcode-lsp-e2e-'));
+  // Contained file tools mean the workspace must BE the cwd, as it is for the
+  // real agent.
+  prevCwd = process.cwd();
+  process.chdir(dir);
   writeFileSync(join(dir, 'tsconfig.json'), JSON.stringify({
     compilerOptions: {
       strict: true, noEmit: true, target: 'es2022',
@@ -80,6 +86,7 @@ beforeAll(async () => {
 }, 30_000);
 
 afterAll(async () => {
+  if (prevCwd) process.chdir(prevCwd);
   if (!HAS_TSLS) return;
   await manager.shutdown();
   rmSync(dir, { recursive: true, force: true });

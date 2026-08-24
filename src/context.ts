@@ -1299,15 +1299,29 @@ Modified: ${renderList(writes)}
     const currentState = ks.serialize();
     const msgSummary = messages.map((m) => `[${m.role}] ${(m.content || '').slice(0, 400)}`).join('\n');
 
-    const prompt = `You are summarizing earlier conversation turns to free context. Produce two sections.
+    // A SCHEMA, NOT "SUMMARISE THIS".
+    //
+    // The old prompt asked for "one paragraph: what happened, what was decided,
+    // which files were touched, what state the work is in" — four questions in
+    // one sentence, answered in free prose, built from 400-character excerpts.
+    // A frontier model produces a usable handoff from that. A mid-size model
+    // produces mush, and mush is what the agent then works from for the rest of
+    // the session: it is the ONLY record of everything before this point.
+    //
+    // Named slots are far more reliable to fill than a paragraph is to write,
+    // and each one here answers a question the agent demonstrably asks after a
+    // compaction — which is why 48% of re-reads in a measured sweep were files
+    // it had already read. FILES carries the how, not just the path, because
+    // "touched src/ops.ts" is what sends it back to read the file again.
+    const prompt = `You are compacting the earlier part of a coding session so the work can continue without it. What you write is the ONLY record of everything before this point — anything you leave out is gone.
 
 Current knowledge state:
 ${currentState}
 
-Messages being summarized (oldest first):
+Messages being compacted (oldest first):
 ${msgSummary}
 
-Output format (no preamble, no fences):
+Fill in every field. Be specific: name files, functions, commands and errors exactly. No preamble, no fences, no commentary.
 
 KS:
 FACTS: [fact1 | fact2]
@@ -1315,8 +1329,12 @@ DECISIONS: [decision1 | decision2]
 OPEN_QUESTIONS: [q1]
 ERRORS: [err1]
 
-SUMMARY:
-<one paragraph: what happened, what was decided, which files were touched, what state the work is in. Keep under 800 characters.>`;
+GOAL: <the task in one sentence, as the user framed it>
+FILES: <path — what was done to it and what state it is in now; one per line; say "read only" where nothing changed>
+APPROACH: <the approach being taken, and why that one>
+REJECTED: <approaches already tried and abandoned, with the reason; "none" if there were none>
+VERIFIED: <what has actually been run and what it reported; "nothing run yet" if so>
+NEXT: <the single next action, concretely>`;
 
     const resp = (await client.chat({
       model,
@@ -1331,13 +1349,28 @@ SUMMARY:
     const content = nonStreamingAnswer(resp);
     if (!content) return null;
 
-    // Apply KS updates if the KS: section is present.
-    const ksMatch = content.match(/KS:\s*([\s\S]*?)(?:\n\s*SUMMARY:|$)/);
+    // Apply KS updates if the KS: section is present. The KS block ends where
+    // the narrative schema begins.
+    const ksMatch = content.match(/KS:\s*([\s\S]*?)(?:\n\s*(?:GOAL|SUMMARY):|$)/);
     if (ksMatch) {
       this.applyKsBlock(ksMatch[1]);
       await ks.save();
     }
 
+    // The schema fields, kept in order and labelled, rather than flattened into
+    // prose. A model reading this back needs to find "what did I already try"
+    // without parsing a paragraph for it.
+    const fields = ['GOAL', 'FILES', 'APPROACH', 'REJECTED', 'VERIFIED', 'NEXT'];
+    const parts: string[] = [];
+    for (const field of fields) {
+      const m = content.match(new RegExp(`^${field}:\\s*([\\s\\S]*?)(?=\\n[A-Z_]{3,}:|$)`, 'm'));
+      const value = m?.[1]?.trim();
+      if (value) parts.push(`${field}: ${value}`);
+    }
+    if (parts.length > 0) return parts.join('\n');
+
+    // A model that ignored the schema and wrote a paragraph anyway is still
+    // more useful than nothing — the old format stays readable.
     const summaryMatch = content.match(/SUMMARY:\s*([\s\S]+?)$/);
     const paragraph = summaryMatch?.[1]?.trim();
     return paragraph || null;

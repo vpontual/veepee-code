@@ -221,8 +221,12 @@ describe('applySingleEdit — a miss must be recoverable', () => {
 
 describe('edit_file end to end', () => {
   let tmp: string;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'vcode-edit-')); });
-  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+  let prevCwd = '';
+  // The file tools are contained to the working directory, and the agent always
+  // runs with cwd inside its workspace — so these tests must too, or they
+  // exercise a configuration nothing uses.
+  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'vcode-edit-')); prevCwd = process.cwd(); process.chdir(tmp); });
+  afterEach(() => { if (prevCwd) process.chdir(prevCwd); rmSync(tmp, { recursive: true, force: true }); });
 
   it('writes an indentation-mismatched edit through the real tool', async () => {
     const path = join(tmp, 'render.ts');
@@ -244,8 +248,9 @@ describe('edit_file end to end', () => {
 
 describe('multi_edit reports every failure at once', () => {
   let tmp: string;
-  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'vcode-medit-')); });
-  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+  let prevCwd2 = '';
+  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'vcode-medit-')); prevCwd2 = process.cwd(); process.chdir(tmp); });
+  afterEach(() => { if (prevCwd2) process.chdir(prevCwd2); rmSync(tmp, { recursive: true, force: true }); });
 
   const run = async (edits: Array<{ old_string: string; new_string: string }>) => {
     const path = join(tmp, 'render.ts');

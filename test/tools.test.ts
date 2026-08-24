@@ -142,11 +142,17 @@ describe('Coding tools execution', () => {
 describe('FileTracker integration with edit_file / write_file', () => {
   let dir: string;
 
+  let prevCwd = '';
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'vcode-tools-tracker-'));
+    // The file tools are contained to the working directory, and the agent
+    // always runs with cwd inside its workspace — so this must too.
+    prevCwd = process.cwd();
+    process.chdir(dir);
   });
 
   afterEach(() => {
+    if (prevCwd) process.chdir(prevCwd);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -294,11 +300,15 @@ describe('FileTracker integration with edit_file / write_file', () => {
 describe('multi_edit', () => {
   let dir: string;
 
+  let prevCwdM = '';
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'vcode-multiedit-'));
+    prevCwdM = process.cwd();
+    process.chdir(dir);
   });
 
   afterEach(() => {
+    if (prevCwdM) process.chdir(prevCwdM);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -467,8 +477,16 @@ describe('ToolRegistry arg coercion (Tier 3 #2)', () => {
 
 describe('nested argument coercion', () => {
   let dir: string;
-  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'vcode-coerce-')); });
-  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+  let prevCwdC = '';
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'vcode-coerce-'));
+    prevCwdC = process.cwd();
+    process.chdir(dir);
+  });
+  afterEach(() => {
+    if (prevCwdC) process.chdir(prevCwdC);
+    rmSync(dir, { recursive: true, force: true });
+  });
 
   const build = () => {
     const registry = new ToolRegistry();

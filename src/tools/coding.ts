@@ -1,5 +1,5 @@
 import { readFile, writeFile, stat, readdir, mkdir } from 'fs/promises';
-import { resolve, relative, join, dirname } from 'path';
+import { resolve, relative, join, dirname, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { execSync, execFileSync, spawn } from 'child_process';
 
@@ -47,16 +47,56 @@ const OUTPUT_FLUSH_GRACE_MS = 250;
  * confusing one about parsing.
  */
 export function jsonish<T extends z.ZodTypeAny>(schema: T) {
-  return z.preprocess((value) => {
-    if (typeof value !== 'string') return value;
-    const trimmed = value.trim();
-    if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return value;
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return value;
-    }
-  }, schema);
+  return z.preprocess((value) => decodeJsonish(value), schema);
+}
+
+/**
+ * Undo JSON encoding the model applied one or more times.
+ *
+ * Real payloads from the final sweep, all rejected outright:
+ *
+ *   'edits':   "\"import * as maplibregl from '/vendor/…"   ← encoded twice
+ *   'edits.0': "[\"    const results: SynthResult[] = […"   ← an element,
+ *                                                              itself encoded
+ *
+ * The original only unwrapped a string starting with `[` or `{`, so a value
+ * encoded twice — which begins with a quote character — fell straight through
+ * to a type error. Each of those cost a whole turn to a mistake with an
+ * unambiguous intent.
+ *
+ * Bounded at three passes: a value that still looks encoded after that is more
+ * likely to be genuine text that happens to start with a bracket.
+ */
+export function decodeJsonish(value: unknown, depth = 0): unknown {
+  if (depth >= 3 || typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!/^[[{"]/.test(trimmed)) return value;
+  try {
+    const parsed = JSON.parse(trimmed);
+    // A parse that yields another string means it was encoded more than once.
+    return typeof parsed === 'string' ? decodeJsonish(parsed, depth + 1) : parsed;
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * An edit written as a positional pair instead of an object.
+ *
+ * `["old text", "new text"]` and `["old", "new", true]` are unambiguous, and
+ * the model reaches for them often enough to have cost turns in a measured run.
+ * Anything else is left alone so zod reports its normal error.
+ */
+export function coerceEditShape(value: unknown): unknown {
+  const decoded = decodeJsonish(value);
+  if (!Array.isArray(decoded)) return decoded;
+  if (decoded.length < 2 || decoded.length > 3) return decoded;
+  if (typeof decoded[0] !== 'string' || typeof decoded[1] !== 'string') return decoded;
+  return {
+    old_string: decoded[0],
+    new_string: decoded[1],
+    ...(typeof decoded[2] === 'boolean' ? { replace_all: decoded[2] } : {}),
+  };
 }
 
 export function registerCodingTools(ignoreManager?: IgnoreManager, fileTracker?: FileTracker, lspManager?: LspManager): ToolDef[] {
@@ -200,7 +240,7 @@ function createWriteFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
     }),
     execute: async (params) => {
       try {
-        const filePath = resolve(params.path as string);
+        const filePath = resolveInWorkspace(params.path as string, 'write');
         const blocked = ignoreManager?.getBlockedReason(filePath);
         if (blocked) return fail(`Access blocked by .veepeignore (${blocked}): ${filePath}`);
         // Staleness check: only complain if the file already exists. Creating
@@ -269,6 +309,37 @@ export function boundedStream(headMax = 24 * 1024, tailMax = 24 * 1024) {
       return `${head}\n…[${dropped.toLocaleString()} chars of output dropped from the middle — head and tail kept]…\n${tail}`;
     },
   };
+}
+
+/**
+ * Absolute path for a tool argument, refusing anything outside the workspace.
+ *
+ * `resolve(path)` with one argument passes an absolute path straight through,
+ * so `write_file` with `/etc/anything` wrote to `/etc/anything`. Combined with a
+ * grant being the bare tool name — one "always allow" on `write_file` persists
+ * to disk and applies to every project forever — that is unrestricted
+ * filesystem write for the life of the config.
+ *
+ * The containment check itself was already in this codebase, at
+ * `sandbox.ts:resolveSandboxPath`, applied to scratch files and not to the
+ * user's own repository. This is the same check where it matters.
+ *
+ * `VCODE_ALLOW_OUTSIDE_WORKSPACE=1` restores the old behaviour for a caller
+ * that genuinely edits across roots. Opt-in, one variable, greppable.
+ */
+export function resolveInWorkspace(input: string, action: string): string {
+  const resolved = resolve(input);
+  if (process.env.VCODE_ALLOW_OUTSIDE_WORKSPACE === '1') return resolved;
+  const root = process.cwd();
+  const rel = relative(root, resolved);
+  const contained = rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  if (!contained) {
+    throw new Error(
+      `Refusing to ${action} outside the working directory: ${resolved} is not under ${root}. ` +
+      `Work inside the project, or set VCODE_ALLOW_OUTSIDE_WORKSPACE=1 if crossing roots is genuinely intended.`,
+    );
+  }
+  return resolved;
 }
 
 /** Extensions we have already told the model have no language server. */
@@ -856,7 +927,7 @@ function createEditFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTra
     }),
     execute: async (params) => {
       try {
-        const filePath = resolve(params.path as string);
+        const filePath = resolveInWorkspace(params.path as string, 'edit');
         const blocked = ignoreManager?.getBlockedReason(filePath);
         if (blocked) return fail(`Access blocked by .veepeignore (${blocked}): ${filePath}`);
         if (fileTracker) {
@@ -898,15 +969,15 @@ function createMultiEditTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
     description: 'Apply multiple edits to a single file, atomically. You must read_file it first in this session. Every edit is checked against the running content and ALL failures are reported together; if any would fail, nothing is written. Use for multi-step refactors on one file to avoid partial writes.',
     schema: z.object({
       path: z.string().describe('File path to edit'),
-      edits: jsonish(z.array(z.object({
+      edits: jsonish(z.array(z.preprocess(coerceEditShape, z.object({
         old_string: z.string().describe('Exact string to find and replace'),
         new_string: z.string().describe('Replacement string'),
         replace_all: z.boolean().optional().default(false).describe('Replace all occurrences instead of requiring uniqueness'),
-      })).min(1)).describe('List of edits to apply in order against the running content'),
+      }))).min(1)).describe('List of edits to apply in order against the running content'),
     }),
     execute: async (params) => {
       try {
-        const filePath = resolve(params.path as string);
+        const filePath = resolveInWorkspace(params.path as string, 'edit');
         const blocked = ignoreManager?.getBlockedReason(filePath);
         if (blocked) return fail(`Access blocked by .veepeignore (${blocked}): ${filePath}`);
         if (fileTracker) {
