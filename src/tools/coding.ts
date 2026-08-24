@@ -754,15 +754,21 @@ export function applySingleEdit(
     const indentMatches = findDeindentedMatches(content, oldStr);
     if (indentMatches.length === 1) {
       const { startLine, endLine, indentDelta, dedent } = indentMatches[0];
-      const replacement = dedent ? dedentBy(newStr, indentDelta) : reindent(newStr, indentDelta);
-      // dedentBy refuses when the replacement does not uniformly carry the
-      // indentation being removed. Refusing means falling through to
-      // describeMiss rather than writing a file we had to guess at.
-      if (replacement !== null) {
-        const lines = content.split('\n');
-        const updated = [...lines.slice(0, startLine), ...replacement.split('\n'), ...lines.slice(endLine + 1)].join('\n');
-        return { ok: true, updated, matchCount: 1 };
-      }
+      const shifted = dedent ? dedentBy(newStr, indentDelta) : reindent(newStr, indentDelta);
+      // `dedentBy` returns null when the replacement does not uniformly carry
+      // the indentation being removed. That used to REFUSE the whole edit and
+      // fall through to describeMiss — which then told the model "the same code
+      // is at line 299 with different indentation, use this text exactly",
+      // costing a turn to re-send something we had already located.
+      //
+      // Measured on a real replay task, and the inconsistency is the tell: the
+      // whitespace-fuzzy path above hits the identical case and writes
+      // `new_string` verbatim, on the reasoning that cosmetically wrong beats
+      // turning a working edit into a failure. Both paths now do that.
+      const replacement = shifted ?? newStr;
+      const lines = content.split('\n');
+      const updated = [...lines.slice(0, startLine), ...replacement.split('\n'), ...lines.slice(endLine + 1)].join('\n');
+      return { ok: true, updated, matchCount: 1 };
     }
 
     // ── Final resort: anchor on the first and last line, tolerate the middle ──

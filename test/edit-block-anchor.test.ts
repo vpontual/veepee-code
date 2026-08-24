@@ -103,3 +103,26 @@ describe('block-anchor edit recovery', () => {
     if (r.ok) expect(r.updated).toContain('let sum = 0.0;');
   });
 });
+
+describe('a located edit is applied, not refused', () => {
+  it('applies a de-indented match even when the replacement cannot carry the delta', () => {
+    // Measured on a real replay task: the harness FOUND the region ("the same
+    // code is at line 299 with different indentation") and then refused to
+    // write it, telling the model to re-send text the harness had already
+    // located. The whitespace-fuzzy path hits the identical case and writes
+    // new_string verbatim — cosmetically wrong beats a failed edit.
+    const file = [
+      'class Server {',
+      '    getInflight() {',
+      '      return osmInflight;',
+      '    }',
+      '}',
+      '',
+    ].join('\n');
+    // Needle at a different indentation, replacement that does not carry it.
+    const oldStr = ['getInflight() {', '  return osmInflight;', '}'].join('\n');
+    const r = applySingleEdit(file, oldStr, 'getInflight() {\nreturn cachedInflight;\n}', false, 'server.js');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.updated).toContain('cachedInflight');
+  });
+});

@@ -586,11 +586,19 @@ export async function runRepoSuite(
 ): Promise<{ results: RepoTaskResult[]; passRate: number; byClass: Record<string, number> }> {
   const repeat = Math.max(1, opts.repeat ?? 1);
   const results: RepoTaskResult[] = [];
+  // Persist after EVERY task. A sweep is hours long and a single kill — a build,
+  // an engine restart, an interrupt — used to take the whole thing with it,
+  // because results were only written at the end. That already cost three
+  // completed tasks once.
+  const partial = resolve(process.env.HOME || '~', '.veepee-code', 'repo-evals',
+    `.sweep-partial-${new Date().toISOString().slice(0, 10)}.json`);
   for (const [i, task] of tasks.entries()) {
     for (let n = 1; n <= repeat; n++) {
       opts.onProgress?.(`[${i + 1}/${tasks.length}] ${task.name} (${task.mode}${repeat > 1 ? `, run ${n}/${repeat}` : ''}) …`);
       const r = await runRepoTask(task, config, modelManager);
       results.push(r);
+      await mkdir(resolve(partial, '..'), { recursive: true }).catch(() => {});
+      await writeFile(partial, JSON.stringify({ at: new Date().toISOString(), results }, null, 2)).catch(() => {});
       opts.onProgress?.(
         `[${i + 1}/${tasks.length}] ${task.name}: ${r.passed ? 'PASS' : `FAIL (${r.failure})`} ` +
         `${Math.round(r.wallMs / 1000)}s, ${r.toolCalls} calls${r.selfVerified ? ', self-verified' : ''}` +
