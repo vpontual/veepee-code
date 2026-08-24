@@ -3,6 +3,7 @@ import {
   enumerationSites,
   findExtensionGaps,
   buildCompletenessNudge,
+  selectGaps,
 } from '../src/completeness.js';
 
 /**
@@ -164,5 +165,46 @@ describe('buildCompletenessNudge', () => {
       { file: 'a.ts', shared: ['x', 'y'], missing: ['z'], fullerFile: 'b.ts' },
     ]);
     expect(nudge).toMatch(/do not cover code you just added/);
+  });
+});
+
+describe('selectGaps — an edited file is the strongest signal, not an exemption', () => {
+  const RENDER = `switch (op.type) { case 'add_column': case 'drop_column': case 'rename': }
+export const SUPPORTED = ['add_column', 'drop_column', 'rename'];`;
+  const OPERATIONS = `export interface Rename { type: 'rename'; from: string; to: string }
+export type Operation = AddColumn | DropColumn | Rename;
+export function validate(op) {
+  switch (op.type) {
+    case 'add_column': break;
+    case 'drop_column': break;
+  }
+}`;
+  const files = new Map([['src/render.ts', RENDER], ['src/operations.ts', OPERATIONS]]);
+
+  it('keeps the gap when the model edited the incomplete file', () => {
+    // The measured failure: told to add `rename`, the model adds the interface
+    // and the union member in operations.ts, forgets the validator case two
+    // functions below, and gets render.ts right. The old rule excluded any
+    // edited file — throwing away the only gap that mattered.
+    const gaps = findExtensionGaps(files);
+    expect(gaps.map(g => g.file)).toContain('src/operations.ts');
+    const selected = selectGaps(gaps, new Set(['src/operations.ts', 'src/render.ts']), files);
+    expect(selected.map(g => g.file)).toContain('src/operations.ts');
+  });
+
+  it('ranks a half-finished edited file first', () => {
+    const untouched = new Map(files);
+    untouched.set('src/docs.ts', `const TYPES = ['add_column', 'drop_column'];`);
+    const gaps = findExtensionGaps(untouched);
+    const selected = selectGaps(gaps, new Set(['src/operations.ts']), untouched);
+    // operations.ts was edited AND already mentions 'rename' — the model
+    // committed to the extension and stopped halfway.
+    expect(selected[0].file).toBe('src/operations.ts');
+  });
+
+  it('still reports a file that was never touched', () => {
+    const gaps = findExtensionGaps(files);
+    const selected = selectGaps(gaps, new Set(), files);
+    expect(selected.length).toBe(gaps.length);
   });
 });

@@ -132,3 +132,45 @@ export function buildCompletenessNudge(gaps: ExtensionGap[]): string | null {
   );
   return lines.join('\n');
 }
+
+/**
+ * Which gaps are worth nudging about, given what the model just edited.
+ *
+ * The original rule excluded any file the model had touched — "if it edited the
+ * file and left it as-is, that was a decision, not an oversight." That reasoning
+ * does not survive contact with the failure it was written for. Told to add a
+ * `rename` operation, the model edits `operations.ts` to add the interface and
+ * the union member, forgets the `case 'rename':` in the validator two functions
+ * below, and edits `render.ts` correctly. The file IS edited, the extension IS
+ * half done, and the exclusion threw away the one gap that mattered. Measured:
+ * that task fails roughly three runs in ten, every time on the missing
+ * validator branch, with the detector able to see it perfectly.
+ *
+ * An edited file that already MENTIONS the new member elsewhere is in fact the
+ * strongest signal available — the model has committed to the extension and
+ * stopped halfway. That case is reported first.
+ *
+ * A file the model never touched and which never mentions the member is the
+ * weakest case and stays reportable, because that is the original scenario, but
+ * it sorts last.
+ */
+export function selectGaps(
+  gaps: ExtensionGap[],
+  editedFiles: Set<string>,
+  contents: Map<string, string>,
+): ExtensionGap[] {
+  // Same-build A/B: restores the old rule (skip any file the model edited) so
+  // the change can be measured against itself rather than argued about.
+  if (process.env.VCODE_COMPLETENESS_SKIP_EDITED === '1') {
+    return gaps.filter((g) => !editedFiles.has(g.file));
+  }
+  const strength = (g: ExtensionGap): number => {
+    const text = contents.get(g.file) ?? '';
+    const mentionsMissing = g.missing.some((m) => text.includes(m));
+    if (editedFiles.has(g.file) && mentionsMissing) return 0; // half-finished, in a file just touched
+    if (mentionsMissing) return 1;
+    if (editedFiles.has(g.file)) return 2;
+    return 3;
+  };
+  return [...gaps].sort((a, b) => strength(a) - strength(b));
+}

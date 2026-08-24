@@ -880,11 +880,13 @@ export class Agent {
       }
       if (files.size < 2) return null;
 
-      const { findExtensionGaps, buildCompletenessNudge } = await import('./completeness.js');
-      // Only report a file the model did NOT just edit; if it edited the file
-      // and left it as-is, that was a decision, not an oversight.
+      const { findExtensionGaps, buildCompletenessNudge, selectGaps } = await import('./completeness.js');
+      // Gaps in files the model EDITED are kept — see `selectGaps`. Excluding
+      // them threw away the strongest case there is: a file where the model
+      // added the new member in one place and missed the enumeration two
+      // functions below.
       const editedRel = new Set([...editedPaths].map((p) => rel(process.cwd(), p)));
-      const gaps = findExtensionGaps(files).filter((g) => !editedRel.has(g.file));
+      const gaps = selectGaps(findExtensionGaps(files), editedRel, files);
       return buildCompletenessNudge(gaps);
     } catch {
       return null; // never fail a turn over a nudge
@@ -1431,9 +1433,12 @@ export class Agent {
         // to the others that list the same family. Passing tests do not rule
         // this out — nothing exercises the half that was missed.
         if (this.mode === 'act' && !forcedCompletenessOnce && editedPaths.size > 0) {
-          forcedCompletenessOnce = true;
           const nudge = await this.buildCompletenessNudgeForTurn(editedPaths);
+          // Burn the once-flag only when a nudge is actually ISSUED. Setting it
+          // before the check spent the single allowance on the first no-tool-call
+          // turn — which is routinely the turn before the gap even exists.
           if (nudge) {
+            forcedCompletenessOnce = true;
             this.context.addUser(nudge);
             yield { type: 'info', content: 'Nudged: sibling files may need the same change' };
             continue;
