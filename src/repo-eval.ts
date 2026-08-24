@@ -216,6 +216,19 @@ export async function taskFromCommit(
     .join('\n')
     .trim();
 
+  // API surface the hidden tests will import from files this commit CREATES.
+  //
+  // Blind mode withholds the assertions, which is right. It must not also
+  // withhold the NAMES — a task that says "move the maths into public/motion.mjs"
+  // and then grades on `m.normalise` being exported is not underspecified, it is
+  // unanswerable except by luck. Reviewed by hand: one sweep task implemented the
+  // described behaviour correctly and failed on `TypeError: m.normalise is not a
+  // function`, which is a coin toss over naming, not a capability.
+  //
+  // A person doing this work has the ticket, the reviewer, or the calling code.
+  // The imported symbols are that context. The assertions stay hidden.
+  const apiHints = mode === 'blind' ? newModuleApi(repoPath, sha, testFiles, srcFiles) : '';
+
   return {
     name: `${repoPath.split('/').pop()}@${sha.slice(0, 7)}`,
     repoPath,
@@ -227,6 +240,7 @@ export async function taskFromCommit(
       mode === 'spec'
         ? 'The tests for this change are already written and currently failing. Implement it so they pass, then run the suite.'
         : 'Implement this. Verify your work however you think is appropriate before finishing.',
+      apiHints,
     ].filter(Boolean).join('\n\n'),
     testFiles,
     srcFiles,
@@ -644,4 +658,63 @@ async function saveEvidence(task: RepoTask, payload: unknown): Promise<string> {
   const path = join(dir, `${task.name.replace(/[^\w.@-]/g, '_')}-${task.mode}-${stamp}.json`);
   await writeFile(path, JSON.stringify(payload, null, 2));
   return path;
+}
+
+/**
+ * The exported names the commit's tests import from files the commit ADDS.
+ *
+ * Returns a prompt fragment, or '' when the commit introduces no new module —
+ * which is most of them, and those need no hint because the API already exists
+ * in the tree for the agent to read.
+ */
+function newModuleApi(repoPath: string, sha: string, testFiles: string[], srcFiles: string[]): string {
+  const addedAtThisCommit = new Set(
+    srcFiles.filter((f) => spawnSync('git', ['cat-file', '-e', `${sha}^:${f}`], { cwd: repoPath }).status !== 0),
+  );
+  if (addedAtThisCommit.size === 0) return '';
+
+  const lines: string[] = [];
+  for (const testFile of testFiles) {
+    let body = '';
+    try {
+      body = spawnSync('git', ['show', `${sha}:${testFile}`], { cwd: repoPath, encoding: 'utf-8', maxBuffer: 8 * 1024 * 1024 }).stdout ?? '';
+    } catch { continue; }
+    // DYNAMIC imports first — `m = await import(pathToFileURL(join(__dirname,
+    // '..', 'public', 'motion.mjs')))` is how the node:test suites in these
+    // repos reach an ESM module from CJS, and no static-import regex will ever
+    // see it. That is the exact commit this hint was written for.
+    for (const added of addedAtThisCommit) {
+      const base = added.split('/').pop() ?? added;
+      if (!body.includes(base)) continue;
+      const holder = /(\w+)\s*=\s*await\s+import\(/.exec(body)?.[1];
+      if (!holder) continue;
+      const used = [...body.matchAll(new RegExp(`\\b${holder}\\.(\\w+)`, 'g'))].map((x) => x[1]);
+      const uniq = [...new Set(used)];
+      if (uniq.length) lines.push(`  ${added} must export: ${uniq.join(', ')}`);
+    }
+
+    // `import { a, b } from './x.js'` and `import * as m from './x.js'`.
+    const importRe = /import\s+(?:\*\s+as\s+(\w+)|\{([^}]*)\})\s+from\s+['"]([^'"]+)['"]/g;
+    for (let m = importRe.exec(body); m; m = importRe.exec(body)) {
+      const spec = m[3];
+      const base = spec.replace(/^[./]+/, '').replace(/\.(m?js|ts)$/, '');
+      const target = [...addedAtThisCommit].find((f) => f.replace(/\.(m?js|ts)$/, '').endsWith(base));
+      if (!target) continue;
+      if (m[1]) {
+        // Namespace import: name the members the tests actually reach for.
+        const used = [...body.matchAll(new RegExp(`\\b${m[1]}\\.(\\w+)`, 'g'))].map((x) => x[1]);
+        const uniq = [...new Set(used)];
+        if (uniq.length) lines.push(`  ${target} must export: ${uniq.join(', ')}`);
+      } else if (m[2]) {
+        const named = m[2].split(',').map((x) => x.trim().split(/\s+as\s+/)[0]).filter(Boolean);
+        if (named.length) lines.push(`  ${target} must export: ${named.join(', ')}`);
+      }
+    }
+  }
+  if (lines.length === 0) return '';
+  return [
+    'This change introduces a new module, and other code will import it by name:',
+    ...[...new Set(lines)],
+    'Use exactly those paths and export names. Their behaviour is yours to determine from the description above.',
+  ].join('\n');
 }

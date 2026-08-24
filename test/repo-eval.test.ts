@@ -165,3 +165,27 @@ describe('commit-message quality gate', () => {
     if (typeof thin === 'string') expect(thin.length).toBeGreaterThan(0);
   });
 });
+
+describe('blind mode withholds the assertions, not the API', () => {
+  it('names the exports a new module must provide, and nothing about behaviour', async () => {
+    // Reviewed by hand from a real sweep: a task implemented the described
+    // behaviour correctly and failed on `TypeError: m.normalise is not a
+    // function`. That is a coin toss over naming, not a capability — a person
+    // doing this work has the ticket, the reviewer, or the calling code.
+    const task = await taskFromCommit('/home/vp/Dev/crosstown', 'fc05e7a9c', 900_000, 'blind');
+    if (typeof task === 'string') return; // repo not present on this machine
+    const hasNewModule = task.srcFiles.some((f) => f.includes('motion.mjs'));
+    if (!hasNewModule) return;
+    expect(task.prompt).toContain('must export');
+    // The assertions themselves stay hidden — that is the whole point of blind.
+    expect(task.prompt).not.toContain('assert.');
+    expect(task.prompt).not.toContain('describe(');
+  });
+
+  it('adds nothing when the commit only modifies existing files', async () => {
+    const task = await taskFromCommit(process.cwd(), '59e2e5973', 900_000, 'blind');
+    if (typeof task === 'string') return;
+    // The API already exists in the tree for the agent to read.
+    expect(task.prompt).not.toContain('must export');
+  });
+});
