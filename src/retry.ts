@@ -47,6 +47,36 @@ const RETRYABLE = /(^|\D)(429|500|502|503|504)(\D|$)|ECONNRESET|ECONNREFUSED|ETI
  */
 const NEVER_RETRY = /context length|maximum context|context_length_exceeded|too many tokens|reduce the length|400|401|403|404|422|invalid_request|model not found|does not exist|unauthorized|forbidden/i;
 
+/**
+ * Everything an error knows about itself, including the part Node hides.
+ *
+ * `fetch()` rejects with `Error: fetch failed` and NOTHING else — the actual
+ * reason (`ECONNREFUSED`, `ENOTFOUND`, a TLS failure) lives one level down in
+ * `err.cause`, and for a multi-address host two levels down in
+ * `cause.errors[]`. Reading only `.message` meant a refused connection matched
+ * the generic "fetch failed" rung and got the SHORT exponential ladder — five
+ * attempts, ~15 seconds — instead of the long flat one written specifically for
+ * an absent engine.
+ *
+ * Measured: the DGX went down mid-sweep and seven consecutive tasks gave up in
+ * ~17 seconds each, with zero tool calls, while the watchdog was already
+ * restarting it. The policy was correct and never saw the input it was written
+ * for.
+ */
+export function describeError(err: unknown, depth = 0): string {
+  if (depth > 3 || err === null || err === undefined) return '';
+  if (typeof err !== 'object') return String(err);
+  const e = err as Error & { code?: string; body?: unknown; cause?: unknown; errors?: unknown[] };
+  const parts = [
+    e.message ?? '',
+    e.code ?? '',
+    String(e.body ?? ''),
+    describeError(e.cause, depth + 1),
+    ...(Array.isArray(e.errors) ? e.errors.map((x) => describeError(x, depth + 1)) : []),
+  ];
+  return parts.filter(Boolean).join(' ');
+}
+
 export interface RetryDecision {
   retry: boolean;
   delayMs: number;
@@ -86,7 +116,7 @@ export function retryDecision(
     return { retry: false, delayMs: 0, reason: 'retry disabled by VCODE_NO_RETRY' };
   }
   const maxAttempts = opts?.maxAttempts ?? RETRY_MAX_ATTEMPTS;
-  const message = err instanceof Error ? `${err.message} ${String((err as { body?: unknown }).body ?? '')}` : String(err);
+  const message = describeError(err);
 
   if (NEVER_RETRY.test(message)) {
     return { retry: false, delayMs: 0, reason: 'deterministic failure — retrying cannot change it' };

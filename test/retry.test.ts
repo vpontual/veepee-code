@@ -92,6 +92,29 @@ describe('retryDecision', () => {
     expect(retryDecision(new Error('HTTP 429'), 1, fixed).delayMs).toBe(1_000);
   });
 
+  it('sees the reason Node hides in err.cause', () => {
+    // `fetch()` rejects with "fetch failed" and nothing else; the real reason is
+    // one level down. Reading only .message meant a refused connection matched
+    // the generic rung and got five attempts over ~15 seconds instead of the
+    // long flat schedule written for an absent engine. Measured: the DGX went
+    // down mid-sweep and seven tasks gave up in ~17s each, zero tool calls,
+    // while the watchdog was already restarting it.
+    const err = new Error('fetch failed');
+    (err as Error & { cause?: unknown }).cause = Object.assign(
+      new Error('connect ECONNREFUSED 10.0.154.246:8000'), { code: 'ECONNREFUSED' });
+    const d = retryDecision(err, 1, fixed);
+    expect(d.retry).toBe(true);
+    expect(d.delayMs).toBe(30_000);
+    expect(d.reason).toContain('unreachable');
+  });
+
+  it('sees it through an AggregateError from a multi-address host', () => {
+    const inner = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+    const err = new Error('fetch failed');
+    (err as Error & { cause?: unknown }).cause = Object.assign(new Error('all attempts failed'), { errors: [inner] });
+    expect(retryDecision(err, 1, fixed).delayMs).toBe(30_000);
+  });
+
   it('spreads retries with jitter by default', () => {
     const delays = new Set(
       Array.from({ length: 20 }, () => retryDecision(new Error('HTTP 503'), 3).delayMs),
