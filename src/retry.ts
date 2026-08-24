@@ -18,8 +18,25 @@
  */
 
 export const RETRY_MAX_ATTEMPTS = 5;
+/** Attempts allowed when the endpoint is UNREACHABLE rather than erroring. */
+export const RETRY_UNREACHABLE_ATTEMPTS = 20;
+/** Fixed poll while waiting for an engine to come back. */
+export const RETRY_UNREACHABLE_DELAY_MS = 30_000;
 export const RETRY_BASE_MS = 1_000;
 export const RETRY_CAP_MS = 30_000;
+
+/**
+ * The endpoint is not answering at all — the process is gone, not busy.
+ *
+ * This deserves a different schedule from a 429. The DGX watchdog takes ~63s to
+ * notice a wedged engine and 4–5 minutes to cold-load it, so the exponential
+ * ladder below — five attempts, ~15s of total backoff — gives up long before the
+ * engine is coming back, which it demonstrably is. Measured 2026-08-23: an
+ * overnight eval lost five consecutive tasks to ECONNREFUSED while the watchdog
+ * was already restarting the engine, and every one was recorded as a harness
+ * failure. Waiting is the correct behaviour and it costs nothing but time.
+ */
+const UNREACHABLE = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|UND_ERR_SOCKET|Failed to connect|connect ETIMEDOUT/i;
 
 /** Errors worth trying again: transport faults and server-side transients. */
 const RETRYABLE = /(^|\D)(429|500|502|503|504)(\D|$)|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|EPIPE|socket hang up|fetch failed|network error|terminated|premature close|service unavailable|too many requests|overloaded/i;
@@ -77,6 +94,21 @@ export function retryDecision(
   if (!RETRYABLE.test(message)) {
     return { retry: false, delayMs: 0, reason: 'not a transport or transient error' };
   }
+  // An unreachable endpoint gets the long, flat schedule: it is not overloaded,
+  // it is absent, and something is probably already bringing it back.
+  if (UNREACHABLE.test(message)) {
+    const unreachableMax = opts?.maxAttempts ?? RETRY_UNREACHABLE_ATTEMPTS;
+    if (attempt >= unreachableMax) {
+      return { retry: false, delayMs: 0, reason: `endpoint still unreachable after ${unreachableMax} attempts` };
+    }
+    const j = opts?.jitter ?? (0.9 + Math.random() * 0.2);
+    return {
+      retry: true,
+      delayMs: Math.round(RETRY_UNREACHABLE_DELAY_MS * j),
+      reason: `endpoint unreachable — waiting for it to come back (attempt ${attempt})`,
+    };
+  }
+
   if (attempt >= maxAttempts) {
     return { retry: false, delayMs: 0, reason: `giving up after ${maxAttempts} attempts` };
   }

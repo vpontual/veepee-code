@@ -66,6 +66,32 @@ describe('retryDecision', () => {
     expect(d.reason).toContain('Retry-After');
   });
 
+  it('waits out an engine that is coming back, rather than giving up in 15 seconds', () => {
+    // The DGX watchdog takes ~63s to notice a wedged engine and 4-5 minutes to
+    // cold-load it. Measured 2026-08-23: an overnight eval lost five consecutive
+    // tasks to ECONNREFUSED while the watchdog was already restarting the
+    // engine, and every one was recorded as a harness failure.
+    const d = retryDecision(new Error('fetch failed {"code":"ECONNREFUSED","port":8000}'), 1, fixed);
+    expect(d.retry).toBe(true);
+    expect(d.delayMs).toBe(30_000);
+    expect(d.reason).toContain('unreachable');
+    // Long enough to cover a cold load several times over.
+    expect(retryDecision(new Error('ECONNREFUSED'), 15, fixed).retry).toBe(true);
+    expect(retryDecision(new Error('ECONNREFUSED'), 20, fixed).retry).toBe(false);
+  });
+
+  it('treats a terminated socket as unreachable, not as a transient', () => {
+    const d = retryDecision(new Error('terminated {"name":"SocketError","code":"UND_ERR_SOCKET"}'), 1, fixed);
+    expect(d.retry).toBe(true);
+    expect(d.delayMs).toBe(30_000);
+  });
+
+  it('keeps HTTP transients on the short exponential schedule', () => {
+    // A 429 is a busy server, not an absent one — waiting 30s per attempt there
+    // would turn a two-second hiccup into a minute of dead time.
+    expect(retryDecision(new Error('HTTP 429'), 1, fixed).delayMs).toBe(1_000);
+  });
+
   it('spreads retries with jitter by default', () => {
     const delays = new Set(
       Array.from({ length: 20 }, () => retryDecision(new Error('HTTP 503'), 3).delayMs),

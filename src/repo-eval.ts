@@ -79,6 +79,12 @@ export interface RepoTask {
  *           fact, with the sign inverted: the agent did not fail to do the work,
  *           it was not allowed to finish. Counting these as model failures would
  *           launder harness decisions into evidence about the model.
+ * `infrastructure` the inference endpoint was unreachable — the engine was
+ *           down or restarting. Out of scope by VP's rule (vLLM and DGX
+ *           behaviour are not mine), and it must not be counted as harness
+ *           either: an eval run that loses tasks to a wedged engine is measuring
+ *           the fleet, not the agent. What IS mine is waiting long enough for
+ *           the watchdog to bring it back — see `retry.ts`.
  * `grader`  the task or the grading is wrong (this happened tonight: a task
  *           scored 0/5 on work that was correct).
  * `alternative-impl` (blind mode only) the repo's PRE-EXISTING suite passes and
@@ -108,7 +114,7 @@ export interface RepoTask {
  *           residual gap be attributable to model size alone; an unexplained
  *           failure is not evidence for that, it is evidence against it.
  */
-export type FailureClass = 'model' | 'harness' | 'budget' | 'grader' | 'alternative-impl' | 'unclassified';
+export type FailureClass = 'model' | 'harness' | 'budget' | 'infrastructure' | 'grader' | 'alternative-impl' | 'unclassified';
 
 export interface RepoTaskResult {
   task: string;
@@ -466,6 +472,12 @@ export function classifyFailure(ev: {
   /** Was a transcript captured? Without one, `model` is not available. */
   hasEvidence?: boolean;
 }): { failure: FailureClass; evidence: string } {
+  // The engine was absent. Neither the model's fault nor the harness's.
+  const unreachable = ev.agentErrors.find((e) =>
+    /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|UND_ERR_SOCKET|Failed to connect/i.test(e));
+  if (unreachable) {
+    return { failure: 'infrastructure', evidence: `inference endpoint unreachable: ${unreachable.slice(0, 200)}` };
+  }
   // A limit WE imposed is not the model failing. Separated so a harness
   // decision can never be counted as evidence about model capability.
   const limitStop = ev.agentErrors.find((e) =>
