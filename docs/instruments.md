@@ -112,3 +112,24 @@ task killed mid-edit had work it could have landed.
 New machinery ships **default-off** as well. A disabled wrong guard is still a
 latent wrong guard, so default-off is not a substitute for the rule — it is what
 lets an A/B decide the default instead of an argument.
+
+## Before shipping anything that touches the fleet
+
+`npm test` asserts that the code says what was meant. It cannot tell you whether
+the system does what was claimed.
+
+A subagent-routing change shipped on 2026-08-24 with green unit tests and no live
+spawn. The tests compared model NAMES — which cannot tell you whether a second
+generation would land on a box that cannot host one. The DGX serves a single
+model with a KV cache sized for it; two concurrent generations of that model is a
+crash, not a slowdown. The "obvious" fallback I wrote — use the parent's model —
+was the one choice that takes the hardware down, and it passed every test.
+
+So: **`node scripts/fleet-smoke.mjs` before committing anything that touches
+routing, subagents, retries or the adapter.** It checks that every fleet endpoint
+answers on the route its runtime actually serves (vLLM `/health`, Ollama
+`/api/tags` — that distinction was itself a bug in the script's first run), then
+spawns a real subagent and fails if it landed on the parent's model.
+
+Green unit tests plus a live smoke run is the bar. Either alone has now shipped a
+bug this week.
