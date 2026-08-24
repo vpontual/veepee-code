@@ -249,9 +249,26 @@ export class LspClient {
   }
 
   /**
+   * URIs whose last `waitForDiagnostics` gave up waiting.
+   *
+   * Lazily created rather than a field initializer: the lifecycle tests build
+   * partial clients without running the constructor, and a method that assumes
+   * its own fields exist turns those into TypeErrors.
+   */
+  private timedOutWaits?: Set<string>;
+
+  /** Did the most recent wait for this uri time out rather than being answered? */
+  diagnosticsTimedOut(uri: string): boolean {
+    return this.timedOutWaits?.has(uri) ?? false;
+  }
+
+  /**
    * Wait up to `timeoutMs` for the server to publish diagnostics for `uri`
    * matching the latest version we've sent. Resolves with whatever the
-   * server has (possibly empty) on timeout.
+   * server has (possibly empty) on timeout — and RECORDS that it timed out,
+   * because "no diagnostics yet" and "no diagnostics" are the same value and
+   * opposite facts. Reported as clean, the first one tells the model its broken
+   * edit compiled.
    */
   async waitForDiagnostics(uri: string, timeoutMs?: number): Promise<Diagnostic[]> {
     const tmo = timeoutMs ?? this.cfg.diagnosticsTimeoutMs ?? LSP_DEFAULT_DIAG_TIMEOUT_MS;
@@ -264,8 +281,10 @@ export class LspClient {
     // very diagnostics it is holding — the class comment claims the version
     // gate covers this case, and this is what actually makes that true.
     if ((this.lastDiagVersion.get(uri) ?? -1) >= expectedVersion) {
+      this.timedOutWaits?.delete(uri);
       return this.diagnostics.get(uri) ?? [];
     }
+    this.timedOutWaits?.delete(uri);
 
     return new Promise<Diagnostic[]>((resolve) => {
       const waiter: PendingWaiter = {
@@ -277,6 +296,7 @@ export class LspClient {
       this.pendingDiagWaiters.set(uri, list);
 
       const t = setTimeout(() => {
+        (this.timedOutWaits ??= new Set()).add(uri);
         // Remove this waiter and resolve with whatever we have.
         const arr = this.pendingDiagWaiters.get(uri);
         if (arr) {

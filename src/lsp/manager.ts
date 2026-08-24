@@ -190,20 +190,20 @@ export class LspManager {
  * The diagnostics live on the client after this returns; callers read
  * them via `manager.getAllDiagnostics()` or `client.diagnosticsFor(uri)`.
  */
-export async function notifyLSPs(manager: LspManager, filePath: string): Promise<void> {
+export async function notifyLSPs(manager: LspManager, filePath: string): Promise<{ timedOut: boolean }> {
   let client: LspClient | null;
   try {
     client = await manager.getClientForFile(filePath);
   } catch {
-    return;
+    return { timedOut: false };
   }
-  if (!client) return;
+  if (!client) return { timedOut: false };
 
   let content: string;
   try {
     content = await readFile(filePath, 'utf-8');
   } catch {
-    return;
+    return { timedOut: false };
   }
 
   const uri = pathToFileUri(filePath);
@@ -213,8 +213,10 @@ export async function notifyLSPs(manager: LspManager, filePath: string): Promise
     // known. Either way, the next publishDiagnostics carries the version
     // we just sent.
     await client.waitForDiagnostics(uri, LSP_DEFAULT_DIAG_TIMEOUT_MS);
+    return { timedOut: client.diagnosticsTimedOut(uri) };
   } catch {
     // Server died mid-call or returned an error — the diagnostics map
     // still has whatever's there. Don't propagate.
   }
+  return { timedOut: false };
 }

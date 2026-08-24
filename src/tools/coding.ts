@@ -89,9 +89,16 @@ async function appendLspDiagnostics(
   try {
     const label = lspManager.matchByPath(filePath);
     if (!label) return '';
-    await notifyLSPs(lspManager, filePath);
+    const { timedOut } = await notifyLSPs(lspManager, filePath);
     const block = formatDiagnostics(lspManager.getAllDiagnostics(), filePath);
     const failure = lspManager.failureReason(label);
+    // SILENCE IS NOT CLEANLINESS. If the server did not answer in time, the
+    // empty block means "we do not know yet" and was being handed to the model
+    // as "no problems" — so a broken edit read as a compiling one. Under load
+    // (a full test run, a busy machine) this is not rare.
+    if (!block && timedOut) {
+      return `\n\n<lsp_status>\nDiagnostics were not available in time — this is NOT a clean bill of health. Re-check with lsp_diagnostics or by building.\n</lsp_status>`;
+    }
     if (!block && failure) {
       return `\n\n<lsp_status>\nWarning: LSP diagnostics unavailable: ${failure}\n</lsp_status>`;
     }

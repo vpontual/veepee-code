@@ -159,3 +159,23 @@ describe('process-tree handling', () => {
     expect(src).toContain('void shutdownLspServers().finally(() => process.exit(0))');
   });
 });
+
+describe('a diagnostics timeout is not a clean bill of health', () => {
+  it('records the timeout so the caller can tell "unknown" from "clean"', async () => {
+    // Empty diagnostics and un-answered diagnostics are the same VALUE and
+    // opposite FACTS. Reported as clean, the first one tells the model its
+    // broken edit compiled — and under load (a full test run, a busy machine)
+    // the wait times out routinely.
+    const client = new LspClient({ label: 'ts', command: 'true', args: [], extensions: ['.ts'] } as never, process.cwd());
+    (client as unknown as { alive: boolean }).alive = true;
+    (client as unknown as { docVersions: Map<string, number> }).docVersions = new Map([['file:///x.ts', 2]]);
+    (client as unknown as { lastDiagVersion: Map<string, number> }).lastDiagVersion = new Map();
+    (client as unknown as { diagnostics: Map<string, unknown[]> }).diagnostics = new Map();
+    (client as unknown as { pendingDiagWaiters: Map<string, unknown[]> }).pendingDiagWaiters = new Map();
+
+    expect(client.diagnosticsTimedOut('file:///x.ts')).toBe(false);
+    const diags = await client.waitForDiagnostics('file:///x.ts', 20);
+    expect(diags).toEqual([]);
+    expect(client.diagnosticsTimedOut('file:///x.ts')).toBe(true);
+  });
+});
