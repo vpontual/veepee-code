@@ -151,7 +151,7 @@ describe('canary: a planted fact must survive the pipeline or be reported missin
     c.getMessages();
     // The message naming it is long gone. If the ledger does not carry it, the
     // model has silently lost the fact that it ever touched this file.
-    expect(c.getSystemPrompt()).toContain('src/canary-config.ts');
+    expect(c.getMessages().map((m) => m.content ?? '').join('\n')).toContain('src/canary-config.ts');
   });
 });
 

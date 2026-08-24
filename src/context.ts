@@ -591,10 +591,42 @@ export class ContextManager {
     }
   }
 
+  /**
+   * The system prompt, and NOTHING that changes between turns.
+   *
+   * This used to append the knowledge state and the compacted-file ledger. Both
+   * change constantly — the knowledge state carries a turn counter — and they
+   * sat at 99% through a ~33,900-character prompt. Twelve characters at the tail
+   * invalidated the KV prefix cache for everything after them, which is the
+   * whole conversation, on every single turn.
+   *
+   * Measured on the live engine with a controlled pair of requests:
+   *
+   *     system prompt STABLE          78%  (8,576/11,028 tokens cached)
+   *     system prompt TAIL CHANGED     0%  (0/11,028)
+   *
+   * The server's lifetime counter agreed: 4.0% hit rate over 36.5M queried
+   * tokens. An agent loop that resends its conversation every turn should be
+   * near the high end of that range, and vcode was paying full prefill for every
+   * token it had already sent. That is the dominant cost in a ~33s turn.
+   *
+   * The volatile blocks now ride at the END of the message list — see
+   * `getMessages()` — where they invalidate nothing behind them.
+   */
   getSystemPrompt(): string {
-    // Inject knowledge state into system prompt
-    const ksBlock = this.knowledgeState.toSystemPromptBlock();
-    return this.systemPrompt + ksBlock + this.compactedFilesBlock();
+    return this.systemPrompt;
+  }
+
+  /**
+   * The turn-varying context: knowledge state and the compacted-file ledger.
+   *
+   * Delivered as the last message rather than part of the system prompt, so the
+   * cacheable prefix ends before it rather than after it.
+   */
+  volatileContextBlock(): string {
+    const ks = this.knowledgeState.toSystemPromptBlock();
+    const files = this.compactedFilesBlock();
+    return ks + files;
   }
 
   /** Render a "files touched earlier" section for the system prompt when
@@ -774,6 +806,22 @@ Modified: ${renderList(writes)}
           break;
         }
       }
+    }
+
+    // The turn-varying context rides at the END, so the cacheable prefix ends
+    // before it rather than after it. As a system-prompt suffix it invalidated
+    // every token behind it — the whole conversation — on every turn.
+    //
+    // It goes immediately BEFORE the newest user message rather than after it:
+    // the model generates from the tail, and the last thing it reads should be
+    // what the user asked for, not a state dump. Placement is the difference
+    // between a cache fix and a behaviour change.
+    const volatileBlock = this.volatileContextBlock();
+    if (volatileBlock.trim()) {
+      const stateMsg = { role: 'user', content: `[SYSTEM]${volatileBlock}` } as Message;
+      const last = window[window.length - 1];
+      if (last?.role === 'user') window.splice(window.length - 1, 0, stateMsg);
+      else window.push(stateMsg);
     }
 
     return window;
@@ -1012,14 +1060,31 @@ Modified: ${renderList(writes)}
     const TRUNCATE_TO_CHARS = 2_000;
 
     let protectedTokens = 0;
-    let userTurns = 0;
+    // COUNT ASSISTANT TURNS, NOT USER TURNS.
+    //
+    // This skipped everything within the last two USER messages, to leave the
+    // live part of the conversation alone. In an interactive session that is
+    // right. In a headless one — `-p`, the API, every eval, the Nightly
+    // Engineer — there is exactly ONE user message for the whole run, so the
+    // guard covered the entire history and this function reclaimed nothing,
+    // ever, in precisely the mode where sessions run longest.
+    //
+    // Measured before the fix: 81 messages, 105,881 projected tokens,
+    // `needsCompaction()` true, `pruneToolOutputs()` returned 0. Adding two
+    // synthetic user turns made the same call reclaim 486,291. So the cheap
+    // lossless path was dead and the expensive summariser — a 35B call with a
+    // 60s budget — was the only thing that ever ran.
+    //
+    // An assistant turn is the unit that exists in both modes: it means "the
+    // model has spoken since", which is what "recent" was always trying to say.
+    let recentTurns = 0;
     const queued: Message[] = [];
 
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const msg = this.messages[i];
       if (this.summaryMessage && msg === this.summaryMessage) break;
-      if (msg.role === 'user') { userTurns++; continue; }
-      if (userTurns < 2) continue;              // the live part of the conversation
+      if (msg.role === 'user' || msg.role === 'assistant') { recentTurns++; continue; }
+      if (recentTurns < 4) continue;            // the live part of the conversation
       if (msg.role !== 'tool') continue;
       const m = msg as Message & { pruned?: boolean };
       if (m.pruned) continue;
@@ -1031,6 +1096,21 @@ Modified: ${renderList(writes)}
       queued.push(msg);
     }
 
+    // WHAT THIS BUYS DEPENDS ON WHETHER THE WINDOW IS FULL, and neither naive
+    // number is right on its own.
+    //
+    // The obvious figure — sum of everything shortened — reported 433,719
+    // tokens reclaimed from a context projected at 105,881, which cannot be
+    // true: it counts history already outside the window that would never have
+    // been sent. But measuring the drop in `projectedTokens()` reports ZERO in
+    // the same situation, and that is equally wrong: when the context is over
+    // budget the window is always full to its cap, so shortening messages does
+    // not reduce what is sent — it lets MORE HISTORY fit inside the same cap.
+    //
+    // So the return value is what was removed from the transcript, and it is
+    // named that way at the call site. The benefit is retained context, not a
+    // smaller request, and pretending otherwise would put a wrong number in
+    // front of the user in the one place they can least check it.
     const reclaimable = queued.reduce(
       (sum, m) => sum + Math.ceil(((m.content?.length ?? 0) - TRUNCATE_TO_CHARS) / this.charsPerToken()),
       0,

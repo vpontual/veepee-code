@@ -37,6 +37,12 @@ export interface AgentEvent {
   evalCount?: number;      // tokens generated
   promptEvalCount?: number; // prompt tokens processed
   tokensPerSecond?: number; // actual generation speed
+  /** Prompt tokens the server served from its KV prefix cache, and the share of
+   *  the prompt that represents. A low share means the prompt layout is
+   *  re-prefilling work the server already had — the dominant turn-latency cost
+   *  on a long session, and invisible until it is reported. */
+  promptCachedCount?: number;
+  promptCachedShare?: number;
   // Hook metadata (available on 'hook_output' events)
   hookEvent?: 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'Stop' | 'Notification';
   hookLayer?: 'global' | 'project' | 'local';
@@ -1057,7 +1063,7 @@ export class Agent {
       // or inventing a fact. Reach for the summarizer only if this wasn't enough.
       const reclaimed = this.context.pruneToolOutputs();
       if (reclaimed > 0) {
-        yield { type: 'info', content: `Pruned ~${reclaimed.toLocaleString()} tokens of older tool output` };
+        yield { type: 'info', content: `Pruned ~${reclaimed.toLocaleString()} tokens of stale tool output from history — more of the conversation now fits in the window` };
         if (!this.context.needsCompaction()) {
           this.context.getKnowledgeState().save().catch((err) => {
           // Losing the knowledge state silently means the next session starts
@@ -1200,6 +1206,11 @@ export class Agent {
       let thinkingBuffer = '';
       let evalCount = 0;
       let promptEvalCount = 0;
+      /** How much of this prompt the server served from its KV prefix cache.
+       *  The single most useful number for turn latency, and vcode was blind to
+       *  it: a prompt whose last 12 characters change every turn re-prefills the
+       *  entire conversation, and nothing in the harness could see that. */
+      let promptCachedCount = 0;
       let evalDuration = 0;
 
       try {
@@ -1394,6 +1405,7 @@ export class Agent {
           const c = chunk as unknown as Record<string, number>;
           if (c.eval_count) evalCount += c.eval_count;
           if (c.prompt_eval_count) promptEvalCount += c.prompt_eval_count;
+          if (typeof c.prompt_cached_count === 'number') promptCachedCount = c.prompt_cached_count;
           if (c.eval_duration) evalDuration += c.eval_duration;
         }
 
@@ -1543,6 +1555,8 @@ export class Agent {
           evalCount,
           promptEvalCount,
           tokensPerSecond: tps,
+          promptCachedCount,
+          promptCachedShare: promptEvalCount > 0 ? promptCachedCount / promptEvalCount : undefined,
         };
         return;
       }

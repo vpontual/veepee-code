@@ -70,11 +70,17 @@ describe('compaction file ledger', () => {
     expect(ledger.read).not.toContain('src/promoted.ts');
   });
 
-  it('the ledger surfaces in the system prompt', () => {
+  it('the ledger reaches the model (now as the last message, not the system prompt)', () => {
     const ctx = new ContextManager('test-3');
     ctx.setSystemPrompt('test');
     ctx.setCompactedFileLedger(['src/a.ts', 'src/b.ts'], ['src/c.ts']);
-    const sp = ctx.getSystemPrompt();
+    // A window with no messages is not sent at all — the chat template requires
+    // a user turn — so the block rides with a real conversation.
+    ctx.addUser('carry on');
+    // The ledger reaches the model as the turn-varying block at the tail, not
+    // as a system-prompt suffix — a changing suffix took the KV prefix-cache hit
+    // rate from 78% to 0% on the live engine.
+    const sp = ctx.getMessages().map((m) => m.content ?? '').join('\n');
     expect(sp).toContain('Files touched in earlier turns');
     expect(sp).toContain('src/a.ts');
     expect(sp).toContain('src/b.ts');
@@ -84,7 +90,7 @@ describe('compaction file ledger', () => {
   it('the ledger is empty when nothing has been compacted (no system prompt section)', () => {
     const ctx = new ContextManager('test-4');
     ctx.setSystemPrompt('test');
-    const sp = ctx.getSystemPrompt();
+    const sp = ctx.getMessages().map((m) => m.content ?? '').join('\n');
     expect(sp).not.toContain('Files touched in earlier turns');
   });
 

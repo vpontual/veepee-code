@@ -74,3 +74,36 @@ describe('tool-output pruning', () => {
     expect(pruned!.content).toContain('re-run the tool if you need it again');
   });
 });
+
+describe('pruning works in the mode where sessions run longest', () => {
+  it('reclaims in a headless run, which has exactly one user message', () => {
+    // The guard skipped everything within the last two USER turns. Interactive
+    // sessions have many; `-p`, the API, every eval and the Nightly Engineer
+    // have ONE for the whole run — so the guard covered all of history and this
+    // reclaimed nothing, ever, in precisely the mode that runs longest.
+    // Measured before the fix: 81 messages, 105,881 projected tokens,
+    // needsCompaction() true, reclaimed 0.
+    const c = ctx();
+    c.addUser('the one and only user message a -p run ever has');
+    for (let i = 0; i < 40; i++) {
+      c.addAssistant('', [{ function: { name: 'grep', arguments: { pattern: `p${i}` } } } as never]);
+      c.addToolResult('grep', 'match '.repeat(8_000));
+    }
+    expect(c.projectedTokens()).toBeGreaterThan(50_000);
+    expect(c.pruneToolOutputs()).toBeGreaterThan(10_000);
+  });
+
+  it('still protects the live end of the conversation', () => {
+    const c = ctx();
+    c.addUser('go');
+    for (let i = 0; i < 40; i++) {
+      c.addAssistant('', [{ function: { name: 'grep', arguments: { pattern: `p${i}` } } } as never]);
+      c.addToolResult('grep', 'match '.repeat(8_000));
+    }
+    c.pruneToolOutputs();
+    const msgs = c.getAllMessages();
+    const lastTool = [...msgs].reverse().find((m) => m.role === 'tool');
+    // The output the model is reasoning about right now is never touched.
+    expect(lastTool?.content).not.toContain('truncated to reclaim context');
+  });
+});

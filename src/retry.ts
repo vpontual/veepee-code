@@ -44,8 +44,21 @@ const RETRYABLE = /(^|\D)(429|500|502|503|504)(\D|$)|ECONNRESET|ECONNREFUSED|ETI
 /**
  * Deterministic failures. Retrying these burns wall-clock to reach the same
  * answer — and for the context ones, hides the real fix.
+ *
+ * ⚠ THE DIGIT BOUNDARIES ARE LOAD-BEARING, and their absence was a live bug.
+ * `RETRYABLE` had them and this did not, and this is checked FIRST — so
+ * `502 Bad Gateway: upstream timed out after 4000 ms` matched the bare `400`
+ * inside "4000" and was abandoned as deterministic. Verified against the built
+ * code: 502, 503, ECONNRESET-after-401203ms and a 429 quoting "4004 tokens" all
+ * classified GIVEUP. Every one is a transport failure that would have succeeded
+ * on retry.
+ *
+ * Found by an independent reviewer, in a function I had rewritten the same day
+ * to fix the OPPOSITE half — the policy that never saw `err.cause`. Two bugs,
+ * one function, both invisible to a suite that only tested the strings I
+ * happened to think of.
  */
-const NEVER_RETRY = /context length|maximum context|context_length_exceeded|too many tokens|reduce the length|400|401|403|404|422|invalid_request|model not found|does not exist|unauthorized|forbidden/i;
+const NEVER_RETRY = /context length|maximum context|context_length_exceeded|too many tokens|reduce the length|(^|\D)(400|401|403|404|422)(\D|$)|invalid_request|model not found|does not exist|unauthorized|forbidden/i;
 
 /**
  * Everything an error knows about itself, including the part Node hides.

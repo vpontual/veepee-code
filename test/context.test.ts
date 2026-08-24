@@ -32,7 +32,10 @@ describe('ContextManager', () => {
     expect(messages.length).toBeLessThan(20);
     expect(messages.length).toBeGreaterThanOrEqual(2); // minimum 2 messages
     // Most recent messages should be included
-    expect(messages[messages.length - 1].content).toContain('reply 9');
+    // The turn-varying state block now rides at the tail (see
+    // `volatileContextBlock`) so the cacheable prefix ends before it, so assert
+    // the newest real content is present rather than that it is last.
+    expect(messages.map((m) => m.content ?? '').join('\n')).toContain('reply 9');
   });
 
   it('getAllMessages returns full history', () => {
@@ -55,15 +58,21 @@ describe('ContextManager', () => {
     expect(prompt).toContain(new Date().toISOString().split('T')[0]);
   });
 
-  it('system prompt includes knowledge state after updates', () => {
+  it('knowledge state reaches the model, out of the cacheable prefix', () => {
     const ctx = new ContextManager('test');
     ctx.setSystemPrompt('test-model');
     ctx.addUser('fix the auth');
     ctx.addAssistant('done');
 
-    const prompt = ctx.getSystemPrompt();
-    expect(prompt).toContain('Knowledge State');
-    expect(prompt).toContain('TURN: 1');
+    // It must reach the model — but NOT from inside the system prompt, whose
+    // stability is what makes the KV prefix cache work. Measured: a changing
+    // tail took the hit rate from 78% to 0%.
+    // The static prompt DESCRIBES the knowledge state; what must not be in it
+    // is the turn-varying DATA, which is what breaks the cacheable prefix.
+    expect(ctx.getSystemPrompt()).not.toContain('TURN: 1');
+    const seen = ctx.getMessages().map((m) => m.content ?? '').join('\n');
+    expect(seen).toContain('Knowledge State');
+    expect(seen).toContain('TURN: 1');
   });
 
   it('compact trims messages to fit token budget', () => {

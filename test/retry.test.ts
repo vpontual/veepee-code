@@ -115,6 +115,27 @@ describe('retryDecision', () => {
     expect(retryDecision(err, 1, fixed).delayMs).toBe(30_000);
   });
 
+  it('does not read a digit inside a number as a status code', () => {
+    // `NEVER_RETRY` lacked the digit boundaries `RETRYABLE` had, and it is
+    // checked first — so "502 Bad Gateway: upstream timed out after 4000 ms"
+    // matched the bare `400` inside "4000" and was abandoned as deterministic.
+    // Every string here is a transport failure that would succeed on retry.
+    for (const msg of [
+      '502 Bad Gateway: upstream timed out after 4000 ms',
+      'HTTP 503 service unavailable (request id 7bf40412)',
+      'ECONNRESET after 401203 ms',
+      'HTTP 429 rate limited, 4004 tokens',
+    ]) {
+      expect(retryDecision(new Error(msg), 1, fixed).retry, msg).toBe(true);
+    }
+  });
+
+  it('still refuses a real 4xx', () => {
+    for (const msg of ['HTTP 400: invalid_request_error', 'HTTP 404: model not found', 'status 422']) {
+      expect(retryDecision(new Error(msg), 1, fixed).retry, msg).toBe(false);
+    }
+  });
+
   it('spreads retries with jitter by default', () => {
     const delays = new Set(
       Array.from({ length: 20 }, () => retryDecision(new Error('HTTP 503'), 3).delayMs),

@@ -34,6 +34,8 @@ interface OllamaChunk {
   message: { content?: string; thinking?: string; tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }> };
   eval_count?: number;
   prompt_eval_count?: number;
+  /** Prompt tokens served from the KV prefix cache, when the server reports it. */
+  prompt_cached_count?: number;
   eval_duration?: number;
   done?: boolean;
 }
@@ -185,7 +187,14 @@ export class OpenAIChatClient {
     const toolAcc = new Map<number, { name: string; args: string }>();
     let buf = '';
     let sawToolCalls = false;
-    let lastUsage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
+    let lastUsage: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      /** vLLM reports how much of the prompt was served from the KV prefix
+       *  cache. Nothing read it, which is why a 0%-hit-rate prompt layout went
+       *  undiagnosed for a day while everything else was being measured. */
+      prompt_tokens_details?: { cached_tokens?: number };
+    } | null = null;
     try {
       for await (const chunk of body as AsyncIterable<Uint8Array>) {
         buf += decoder.decode(chunk, { stream: true });
@@ -297,6 +306,7 @@ export class OpenAIChatClient {
           prompt_eval_count: lastUsage.prompt_tokens,
           eval_count: lastUsage.completion_tokens,
           eval_duration: (Date.now() - startedAt) * 1e6,
+          prompt_cached_count: lastUsage.prompt_tokens_details?.cached_tokens,
         };
       }
     } finally {

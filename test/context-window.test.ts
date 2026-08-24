@@ -60,7 +60,7 @@ describe('context window accounting', () => {
     c.getMessages();
     // The message naming early.ts is long gone from the window; the ledger is
     // the only thing that can still tell the model it was touched.
-    expect(c.getSystemPrompt()).toContain('src/early.ts');
+    expect(c.getMessages().map((m) => m.content ?? '').join('\n')).toContain('src/early.ts');
   });
 
   it('projects from current content while estimateTokens reports the last real cost', () => {
