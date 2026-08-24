@@ -77,7 +77,7 @@ interface ChatParams {
  * shift by the result's `tool_name`; a global FIFO is the fallback when a
  * result carries no name (older messages) so the request still validates.
  */
-function toOpenAIMessages(messages: any[]): any[] {
+export function toOpenAIMessages(messages: any[]): any[] {
   const out: any[] = [];
   const byName = new Map<string, string[]>();   // tool name -> queued ids (in call order)
   const globalQueue: string[] = [];             // fallback FIFO for un-named results
