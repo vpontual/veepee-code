@@ -39,6 +39,16 @@ import { registerRcRoutes, generateRcToken } from './rc.js';
 import { nextPosture, POSTURE_LABEL } from './permissions.js';
 import { checkForUpdate } from './update.js';
 import { resolveApiHost } from './api-host.js';
+import { execFile } from 'node:child_process';
+import { readdir, stat, readFile as readFs } from 'node:fs/promises';
+import { resolve as resolvePath } from 'node:path';
+import {
+  detectTestCommand,
+  shouldAttemptRepair,
+  buildRepairPrompt,
+  clipOutput,
+  diffTestFiles,
+} from './repair-loop.js';
 
 // Tool registrations
 import { registerCodingTools } from './tools/coding.js';
@@ -719,7 +729,164 @@ async function main() {
       }
     }
 
-    // If --json-schema was provided, extract JSON, validate against schema, and output
+      // ─── Print-mode: run tests, self-repair if they fail ────────────────
+      if (!process.env.VCODE_NO_REPAIR) {
+        const pkgPath = resolve(process.cwd(), 'package.json');
+        let testCmd: string | null = null;
+        try {
+          const pkgText = await readFs(pkgPath, 'utf-8');
+          testCmd = detectTestCommand(pkgText);
+        } catch { /* no package.json */ }
+
+        if (testCmd) {
+          const runResult = agent.getRunResult();
+          if (runResult && runResult.editedPaths.size > 0) {
+            const maxAttempts = Number(process.env.VCODE_REPAIR_ATTEMPTS ?? 3);
+
+            // Helper: run a shell command, return exit code and combined output
+              const runCmd = (cmd: string): Promise<{ code: number | null; output: string }> =>
+                new Promise((resolve) => {
+                  const child = execFile(cmd, { shell: true, cwd: process.cwd(), timeout: 600_000, encoding: 'buffer' } as import('node:child_process').ExecFileOptions & { encoding: 'buffer' });
+                const chunks: Buffer[] = [];
+                child.stdout?.on('data', (d) => chunks.push(d));
+                child.stderr?.on('data', (d) => chunks.push(d));
+                let done = false;
+                const finish = (code: number | null) => {
+                  if (done) return;
+                  done = true;
+                  resolve({ code, output: Buffer.concat(chunks).toString() });
+                };
+                child.on('exit', (code) => finish(code ?? null));
+                child.on('error', () => finish(null));
+              });
+
+            // Walk test files before first repair turn
+            const walkTestFiles = async (dir: string): Promise<Map<string, { size: number; mtimeMs: number }>> => {
+              const result = new Map<string, { size: number; mtimeMs: number }>();
+              try {
+                const entries = await readdir(dir);
+                for (const entry of entries) {
+                  const fullPath = resolvePath(dir, entry);
+                  try {
+                    const st = await stat(fullPath);
+                    if (st.isDirectory()) {
+                      const sub = await walkTestFiles(fullPath);
+                      for (const [k, v] of sub) result.set(k, v);
+                    } else if (st.isFile()) {
+                      result.set(fullPath, { size: st.size, mtimeMs: st.mtimeMs });
+                    }
+                  } catch { /* skip */ }
+                }
+              } catch { /* skip */ }
+              return result;
+            };
+
+            const baseline = new Map<string, { size: number; mtimeMs: number }>();
+            try {
+              const testDir = await walkTestFiles(resolvePath(process.cwd(), 'test'));
+              for (const [k, v] of testDir) baseline.set(k, v);
+            } catch { /* no test/ dir */ }
+            try {
+              const topEntries = await readdir(process.cwd());
+              for (const entry of topEntries) {
+                if (/^.*\.test\./.test(entry)) {
+                  const fullPath = resolvePath(process.cwd(), entry);
+                  try {
+                    const st = await stat(fullPath);
+                    if (st.isFile()) {
+                      baseline.set(fullPath, { size: st.size, mtimeMs: st.mtimeMs });
+                    }
+                  } catch { /* skip */ }
+                }
+              }
+            } catch { /* skip */ }
+
+            // First test run
+            let codeChanged = true;
+            let attempt = 0;
+            let testOutput = '';
+            let testExitCode: number | null = null;
+            ({ code: testExitCode, output: testOutput } = await runCmd(testCmd));
+
+            while (shouldAttemptRepair({ codeChanged, testCommand: testCmd, exitCode: testExitCode, attempt, maxAttempts })) {
+              attempt++;
+              const prompt = buildRepairPrompt(testCmd, clipOutput(testOutput));
+              for await (const event of agent.run(prompt)) {
+                if (event.type === 'text' && event.content) {
+                  process.stdout.write(event.content);
+                } else if (event.type === 'reset_stream') {
+                  process.stdout.write('\n');
+                } else if (event.type === 'error') {
+                  const e: unknown = event.error;
+                  const errStr = typeof e === 'string' ? e
+                    : e instanceof Error ? (e.message || e.toString())
+                    : e && typeof e === 'object' ? (() => { try { return JSON.stringify(e); } catch { return String(e); } })()
+                    : String(e ?? 'Unknown error');
+                  process.stderr.write(`Error: ${errStr}\n`);
+                }
+              }
+              ({ code: testExitCode, output: testOutput } = await runCmd(testCmd));
+              codeChanged = !!agent.getRunResult()?.editedPaths.size;
+            }
+
+            // Walk test files after the loop and diff
+            const postRun = new Map<string, { size: number; mtimeMs: number }>();
+            try {
+              const testDir = await walkTestFiles(resolvePath(process.cwd(), 'test'));
+              for (const [k, v] of testDir) postRun.set(k, v);
+            } catch { /* no test/ dir */ }
+            try {
+              const topEntries = await readdir(process.cwd());
+              for (const entry of topEntries) {
+                if (/^.*\.test\./.test(entry)) {
+                  const fullPath = resolvePath(process.cwd(), entry);
+                  try {
+                    const st = await stat(fullPath);
+                    if (st.isFile()) {
+                      postRun.set(fullPath, { size: st.size, mtimeMs: st.mtimeMs });
+                    }
+                  } catch { /* skip */ }
+                }
+              }
+            } catch { /* skip */ }
+
+            // Compare the UNION of both sets. The inline loop this replaces walked
+            // only the surviving files and required a `before` entry, so a DELETED
+            // test file was never examined and a newly created one was skipped —
+            // and deleting the failing test is the most effective way there is to
+            // turn a suite green. The guard printed "no test files modified" while
+            // a test sat deleted, which is worse than no guard: it reads as
+            // assurance that a check ran.
+            const { modified, deleted, added } = diffTestFiles(baseline, postRun);
+
+            // Final report to stderr
+            const status = testExitCode === 0 ? 'GREEN' : 'RED';
+            const lines: string[] = [
+              `[repair-loop] ${status}`,
+              `attempts: ${attempt}/${maxAttempts}`,
+            ];
+            if (modified.length === 0 && deleted.length === 0 && added.length === 0) {
+              lines.push('test files: none modified, deleted or added');
+            } else {
+              // Deleted first: it is the alarm. An added test may be a regression
+              // test accompanying a real fix, which is good, but must still be seen.
+              for (const [label, paths] of [
+                ['DELETED', deleted], ['modified', modified], ['added', added],
+              ] as const) {
+                if (paths.length === 0) continue;
+                lines.push(`test files ${label}:`);
+                for (const p of paths) lines.push(`  - ${p}`);
+              }
+            }
+            if (status === 'RED') {
+              lines.push('tests still failing after all repair attempts');
+            }
+            process.stderr.write(lines.join('\n') + '\n');
+          }
+        }
+      }
+
+      // If --json-schema was provided, extract JSON, validate against schema, and output
     if (jsonSchemaFile) {
       try {
         const { readFileSync, existsSync: schemaExists } = await import('fs');

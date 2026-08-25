@@ -368,7 +368,14 @@ export class Agent {
   private config: Config;
   private abortController: AbortController | null = null;
   /** True while a run is in flight. Guards the shared context + abort handle. */
-  private runLock = false;
+    private runLock = false;
+    /** Captured when _run() completes — lets callers inspect what changed. */
+    private _runResult: { editedPaths: Set<string>; codeChangedUnverified: boolean } | null = null;
+
+    /** Snapshot of what this run changed. Available after run() completes. */
+    getRunResult(): { editedPaths: Set<string>; codeChangedUnverified: boolean } | null {
+      return this._runResult;
+    }
   private effort: EffortLevel = 'medium';
   private modelStick = false; // when true, mode switches don't change the model
   /** How much the user wants to be asked. Cycled with Shift+Tab in the TUI. */
@@ -992,6 +999,7 @@ export class Agent {
       onTurnBoundary?: () => string[] | Promise<string[]>;
     },
   ): AsyncGenerator<AgentEvent> {
+    this._runResult = null;
     const permissionMode = options?.permissionMode || 'interactive';
     const allowedTools = options?.allowedTools ? new Set(options.allowedTools) : null;
     const onTurnBoundary = options?.onTurnBoundary;
@@ -1145,7 +1153,8 @@ export class Agent {
     // output-varying loop never trips it), 15 turns with no visible content
     // (reset by a single word of output), an error, or an abort. None of those
     // bound a model that is making slow, plausible, unproductive progress.
-    for (let turn = 0; ; turn++) {
+    try {
+      for (let turn = 0; ; turn++) {
       // Drain anything queued for the agent since the last turn.
       while (this.pendingNotices.length > 0) {
         const notice = this.pendingNotices.shift()!;
@@ -1880,6 +1889,12 @@ export class Agent {
           }
         }
       }
+      }
+    } finally {
+      this._runResult = {
+        editedPaths: new Set(editedPaths),
+        codeChangedUnverified,
+      };
     }
 
     // NOTE: no Stop hook here. The turn loop above is `for (;;)` with no
