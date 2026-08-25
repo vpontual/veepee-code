@@ -22,7 +22,8 @@
     "test:watch": "vitest",
     "prepublishOnly": "npm run build",
     "smoke": "node scripts/tool-smoke.mjs && node scripts/fleet-smoke.mjs",
-    "smoke:model": "node scripts/model-smoke.mjs"
+    "smoke:model": "node scripts/model-smoke.mjs",
+      "lint:columns": "tsx scripts/lint-columns.mjs"
   },
   "keywords": [
     "cli",
