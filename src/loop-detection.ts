@@ -69,6 +69,64 @@ export function callSignatureOf(toolCalls: ToolCall[]): string {
   return h.digest('hex');
 }
 
+export const CONTENT_REPETITION_LIMIT = 12;
+
+/**
+ * Detect degenerate content repetition in a single streamed response.
+ *
+ * Finds a short phrase (10–200 chars) repeated many times consecutively at the
+ * tail of the text. Returns null when there is no such repetition. Ordinary
+ * repeated code — a list of similar lines, a table, repeated imports — must NOT
+ * trip it, so the repetition must dominate the tail.
+ */
+export function detectContentRepetition(
+  text: string,
+): { repeated: string; count: number } | null {
+  if (text.length < 200) return null;
+
+  // NOT trimEnd(). The repeated phrase usually ENDS in whitespace — the real
+  // case was "Still writing game data... " with a trailing space — and trimming
+  // the last one breaks the periodicity, so every window comparison from the
+  // tail is misaligned by a character and the count comes up one short. That
+  // put the detector's own boundary case (exactly 12 repeats) below its limit:
+  // it would have missed the failure it was written for, at the boundary.
+  //
+  // Trailing whitespace is dropped from the REPORTED phrase instead, where it
+  // affects nothing but the message.
+  const trimmed = text;
+  if (trimmed.length < 200) return null;
+
+  // Scan candidate phrase lengths from longest to shortest.
+  for (let len = 200; len >= 10; len--) {
+    if (len > trimmed.length) continue;
+
+    const phrase = trimmed.slice(-len);
+    let count = 1;
+    let pos = trimmed.length - len;
+
+    while (pos >= len) {
+      if (trimmed.slice(pos - len, pos) === phrase) {
+        count++;
+        pos -= len;
+      } else {
+        break;
+      }
+    }
+
+    if (count >= CONTENT_REPETITION_LIMIT) {
+      // Verify the repetition dominates the tail.
+      const tailWindow = Math.min(trimmed.length, 32_000);
+      const tailContent = trimmed.slice(trimmed.length - tailWindow);
+      const repeatedLength = count * len;
+      if (repeatedLength >= tailContent.length * 0.5) {
+        return { repeated: phrase.trim(), count };
+      }
+    }
+  }
+
+  return null;
+}
+
 export interface SignedStep2 extends SignedStep {
   /** Call-only signature. */
   callSignature?: string;

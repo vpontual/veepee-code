@@ -17,7 +17,7 @@ import { report as reportAgentState } from './agentstate.js';
 import { previewEdit, previewWrite } from './diff.js';
 
 import type { CheckpointManager } from './checkpoint.js';
-import { signatureOf, callSignatureOf, detectStuckSignature, detectRepeatedFailure, LOOP_WINDOW, LOOP_MAX_REPEATS, REPEATED_FAILURE_LIMIT, type SignedStep2 } from './loop-detection.js';
+import { signatureOf, callSignatureOf, detectStuckSignature, detectRepeatedFailure, LOOP_WINDOW, LOOP_MAX_REPEATS, REPEATED_FAILURE_LIMIT, detectContentRepetition, CONTENT_REPETITION_LIMIT, type SignedStep2 } from './loop-detection.js';
 import { generationLimiter } from './generation-limit.js';
 import type { PermissionPosture } from './permissions.js';
 import { readFile, readFile as readFileAsync, writeFile, mkdir } from 'node:fs/promises';
@@ -61,12 +61,31 @@ export interface AgentEvent {
  * INSTRUCT: non-thinking conversational mode (chat) — Qwen's "Instruct" preset.
  *           Used when `think: false` is honored by the proxy (Qwen3 + vLLM only).
  */
+/**
+ * Sampling for act/plan — where all the long structured generation happens.
+ *
+ * ⚠ `presence_penalty` was 0.0 here while the CHAT preset below used 1.5, and
+ * that asymmetry cost a real task: asked to write a 15-record JSON fixture, the
+ * model emitted "Still writing game data... " **1,341 times**, produced 43KB of
+ * output, wrote no files, and would have run to the deadline. Qwen's own
+ * guidance recommends a presence penalty specifically to prevent endless
+ * repetition, and calls it out for quantized weights — which is exactly what the
+ * DGX serves (NVFP4).
+ *
+ * 1.0 rather than chat's 1.5: the penalty discourages reusing tokens already
+ * present, and code legitimately repeats itself far more than prose does —
+ * `const`, `return`, an identifier used twelve times in a function. Too high
+ * degrades the code to avoid the very tokens it needs.
+ *
+ * Behind `VCODE_NO_PRESENCE_PENALTY=1` so it can be A/B'd against itself on one
+ * binary, per the same-build rule.
+ */
 export const QWEN_CODING_PRESET = {
   temperature: 0.6,
   top_p: 0.95,
   top_k: 20,
   min_p: 0.0,
-  presence_penalty: 0.0,
+  presence_penalty: process.env.VCODE_NO_PRESENCE_PENALTY === '1' ? 0.0 : 1.0,
   repeat_penalty: 1.0,
 } as const;
 
@@ -1114,6 +1133,8 @@ export class Agent {
     let codeChangedUnverified = false;
     let forcedCompletenessOnce = false;
     let repeatedFailureWarned = false;
+    /** True once we've warned the model it is repeating streamed text. */
+    let contentRepetitionWarned = false;
     /** Files this run wrote to, for the incomplete-extension check. */
     const editedPaths = new Set<string>();
     let forcedVerifyOnce = false;
@@ -1337,6 +1358,20 @@ export class Agent {
           if (chunk.message.content) {
             const text = chunk.message.content;
             fullContent += text;
+
+            // Degenerate content repetition: same phrase repeated many times.
+            if (fullContent.length >= 500 && !contentRepetitionWarned) {
+              const rep = detectContentRepetition(fullContent);
+              if (rep) {
+                contentRepetitionWarned = true;
+                this.notify(
+                  `[SYSTEM] You are repeating the same phrase "${rep.repeated.trim()}" ${rep.count} times in a row. `
+                  + `Stop repeating and write what you have.`,
+                );
+                yield { type: 'info', content: 'Warned: degenerate content repetition' };
+                continue;
+              }
+            }
 
             // Detect <think> tags (used by Qwen, DeepSeek, etc.)
             if (!inThinking && text.includes('<think>')) {

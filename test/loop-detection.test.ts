@@ -4,7 +4,9 @@ import {
   signatureOf,
   detectStuckSignature,
   LOOP_WINDOW,
-  LOOP_MAX_REPEATS, detectRepeatedFailure, callSignatureOf, REPEATED_FAILURE_LIMIT } from '../src/loop-detection.js';
+  LOOP_MAX_REPEATS, detectRepeatedFailure, callSignatureOf, REPEATED_FAILURE_LIMIT,
+  detectContentRepetition, CONTENT_REPETITION_LIMIT,
+} from '../src/loop-detection.js';
 
 function call(name: string, args: Record<string, unknown> = {}): ToolCall {
   return { function: { name, arguments: args } } as ToolCall;
@@ -162,10 +164,71 @@ describe('detectRepeatedFailure — the loop the byte-identical check cannot see
     expect(detectRepeatedFailure(steps)).toBeNull();
   });
 
-  it('hashes only name and arguments, not the result', () => {
-    const call = [{ function: { name: 'edit_file', arguments: { path: 'a.ts' } } }] as never;
-    const other = [{ function: { name: 'edit_file', arguments: { path: 'b.ts' } } }] as never;
-    expect(callSignatureOf(call)).toBe(callSignatureOf(call));
-    expect(callSignatureOf(call)).not.toBe(callSignatureOf(other));
+it('hashes only name and arguments, not the result', () => {
+      const call = [{ function: { name: 'edit_file', arguments: { path: 'a.ts' } } }] as never;
+      const other = [{ function: { name: 'edit_file', arguments: { path: 'b.ts' } } }] as never;
+      expect(callSignatureOf(call)).toBe(callSignatureOf(call));
+      expect(callSignatureOf(call)).not.toBe(callSignatureOf(other));
+    });
+  });
+
+describe('detectContentRepetition', () => {
+  it('detects the real failure: "Still writing game data... " repeated 1341 times', () => {
+    const text = 'Still writing game data... '.repeat(1341);
+    const result = detectContentRepetition(text);
+    expect(result).not.toBeNull();
+    expect(result!.count).toBeGreaterThanOrEqual(CONTENT_REPETITION_LIMIT);
+  });
+
+  it('does not flag normal code with repeated similar lines', () => {
+    const lines = Array.from({ length: 30 }, (_, i) => `export const K${i} = ${i};`);
+    const text = lines.join('\n');
+    expect(detectContentRepetition(text)).toBeNull();
+  });
+
+  it('does not flag a long prose answer with no repetition', () => {
+    const text = Array.from({ length: 200 }, (_, i) =>
+      `This is sentence number ${i} in a long paragraph that discusses various topics.`,
+    ).join(' ');
+    expect(detectContentRepetition(text)).toBeNull();
+  });
+
+  it('does not detect below the limit (11 repeats)', () => {
+    const text = 'Still writing game data... '.repeat(11);
+    expect(detectContentRepetition(text)).toBeNull();
+  });
+
+  it('detects at the limit (12 repeats)', () => {
+    const text = 'Still writing game data... '.repeat(12);
+    const result = detectContentRepetition(text);
+    expect(result).not.toBeNull();
+  });
+});
+
+describe('the real failure, verbatim', () => {
+  it('catches the 1,341-repetition loop that killed a live task', () => {
+    // 2026-08-24, first real task on veegame: the model emitted this phrase
+    // 1,341 times in one turn, 43KB of output, wrote no files, and every
+    // existing guard saw a model working normally — they all watch tool calls,
+    // and nothing watched the content stream.
+    const result = detectContentRepetition('Still writing game data... '.repeat(1341));
+    expect(result).not.toBeNull();
+    expect(result!.count).toBeGreaterThanOrEqual(CONTENT_REPETITION_LIMIT);
+    expect(result!.repeated).toContain('Still writing game data');
+  });
+
+  it('is not fooled by a phrase that ends in whitespace', () => {
+    // The first implementation called trimEnd() before matching, which breaks
+    // the periodicity of a phrase ending in a space: every window from the tail
+    // is misaligned by one character and the count lands one short. The real
+    // phrase ended in a space, so the detector would have missed it at exactly
+    // its own limit.
+    // Enough repeats to clear the detector's 200-character floor, which exists
+    // so short text cannot trip it.
+    for (const phrase of ['working on it... ', 'thinking\n', 'processing\t']) {
+      const repeats = Math.max(CONTENT_REPETITION_LIMIT + 2, Math.ceil(220 / phrase.length));
+      const r = detectContentRepetition(phrase.repeat(repeats));
+      expect(r, phrase).not.toBeNull();
+    }
   });
 });

@@ -749,3 +749,16 @@ describe('the output ceiling is a budget, not a constant', () => {
     expect(src).toMatch(/if \(room >= ceiling\) return \{ num_predict: ceiling \};/);
   });
 });
+
+describe('the coding preset defends against degenerate repetition', () => {
+  it('applies a presence penalty in the mode that writes long output', async () => {
+    const { QWEN_CODING_PRESET, QWEN_INSTRUCT_PRESET } = await import('../src/agent.js');
+    // It was 0.0 here while chat used 1.5 — and act/plan is where the long
+    // structured generation happens. A 15-record JSON fixture became
+    // "Still writing game data... " 1,341 times, 43KB, no files written.
+    expect(QWEN_CODING_PRESET.presence_penalty).toBeGreaterThan(0);
+    // …but lower than chat's, because code legitimately repeats itself far more
+    // than prose does, and too high a penalty starves it of the tokens it needs.
+    expect(QWEN_CODING_PRESET.presence_penalty).toBeLessThan(QWEN_INSTRUCT_PRESET.presence_penalty);
+  });
+});
