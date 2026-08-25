@@ -340,3 +340,60 @@ describe('the file tools cannot write outside the workspace', () => {
     }
   });
 });
+
+describe('a structured file is checked when it is written', () => {
+  const tool = async (name: string) => {
+    const { registerCodingTools } = await import('../src/tools/coding.js');
+    return registerCodingTools().find((t) => t.name === name)!;
+  };
+  const scratch = async () => {
+    const { mkdtemp } = await import('fs/promises');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    return mkdtemp(join(tmpdir(), 'vcode-validate-'));
+  };
+
+  it('reports the line, column and text of broken JSON', async () => {
+    // The real failure, 2026-08-24: the model wrote `"appId": 570",` into a
+    // fixture, write_file reported SUCCESS, and it then spent five turns
+    // hunting for the problem until the loop guard ended the run. Parsing the
+    // file it just wrote is free and deterministic.
+    const { rm } = await import('fs/promises');
+    const { join } = await import('path');
+    const dir = await scratch();
+    const prev = process.cwd();
+    process.chdir(dir);
+    try {
+      const write = await tool('write_file');
+      const r = await write.execute({
+        path: join(dir, 'fixture.json'),
+        content: '[\n  {\n    "appId": 570",\n    "name": "Dota 2"\n  }\n]',
+      });
+      expect(r.success).toBe(true); // the write still happens — it may be mid-edit
+      expect(String(r.output)).toContain('line 3');
+      expect(String(r.output)).toContain('"appId": 570"'); // the offending line itself
+    } finally {
+      process.chdir(prev);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('says nothing about valid JSON, or about formats it does not know', async () => {
+    const { rm } = await import('fs/promises');
+    const { join } = await import('path');
+    const dir = await scratch();
+    const prev = process.cwd();
+    process.chdir(dir);
+    try {
+      const write = await tool('write_file');
+      const ok = await write.execute({ path: join(dir, 'ok.json'), content: '{"a":1}' });
+      expect(String(ok.output)).not.toContain('Invalid JSON');
+      // A checker that guesses at formats it does not know manufactures noise.
+      const ts = await write.execute({ path: join(dir, 'x.ts'), content: 'const a = 1; // not json' });
+      expect(String(ts.output)).not.toContain('Invalid');
+    } finally {
+      process.chdir(prev);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

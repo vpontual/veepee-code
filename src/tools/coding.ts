@@ -24,6 +24,78 @@ import { notifyLSPs } from '../lsp/manager.js';
 import { formatDiagnostics } from '../lsp/diagnostics.js';
 import { pathToFileUri } from '../lsp/uri.js';
 
+/** Structured-format extensions we validate at write time. */
+const STRUCTURED_JSON_EXT = new Set(['.json']);
+const STRUCTURED_JSONL_EXT = new Set(['.jsonl', '.ndjson']);
+
+/** Validate structured-content files after a write.
+ *
+ * Returns a human-readable problem description (with line/column info) or
+ * `null` when the file is fine or the extension is unknown. Never throws —
+ * a validation crash must not corrupt the tool result. */
+export function validateStructuredContent(
+  filePath: string,
+  content: string,
+): string | null {
+  try {
+    const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();
+
+    if (STRUCTURED_JSON_EXT.has(ext)) {
+      try {
+        JSON.parse(content);
+        return null;
+      } catch (err) {
+        const e = err as SyntaxError & { lineNumber?: number; columnNumber?: number };
+        const msg = e.message || 'Unexpected token';
+        // Use the parser's built-in line/column when available (Chrome/V8).
+        // Fall back to computing from the error position.
+        let line = e.lineNumber;
+        let col = e.columnNumber;
+        if (line == null || col == null) {
+          // `message` usually contains "Unexpected token … at position N".
+          const posMatch = msg.match(/position\s+(\d+)/i);
+          if (posMatch) {
+            const pos = parseInt(posMatch[1], 10);
+            let ln = 1;
+            let cn = 1;
+            for (let i = 0; i < pos && i < content.length; i++) {
+              if (content[i] === '\n') { ln++; cn = 1; } else { cn++; }
+            }
+            line = ln;
+            col = cn;
+          }
+        }
+        // Find the offending line text from the computed line number.
+        const lines = content.split('\n');
+        const lineIdx = Math.max(0, (line ?? 1) - 1);
+        const lineText = lineIdx < lines.length ? lines[lineIdx] : '';
+        const loc = line != null && col != null
+          ? ` at line ${line}, column ${col}`
+          : '';
+        return `Invalid JSON${loc}: ${msg}${lineText ? `\n  Line ${lineIdx + 1}: ${lineText}` : ''}`;
+      }
+    }
+
+    if (STRUCTURED_JSONL_EXT.has(ext)) {
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trim();
+        if (trimmed === '') continue; // skip blank lines
+        try {
+          JSON.parse(trimmed);
+        } catch {
+          return `Invalid JSON on line ${i + 1} of JSONL file`;
+        }
+      }
+      return null;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /** How long to wait for stdio EOF after a command has already exited. Covers
  *  the normal in-flight-buffer case without waiting on a background process
  *  that inherited the pipe and may never release it. */
@@ -261,18 +333,20 @@ function createWriteFileTool(ignoreManager?: IgnoreManager, fileTracker?: FileTr
         await writeFile(filePath, params.content as string, 'utf-8');
         fileTracker?.recordRead(filePath);
         const lines = (params.content as string).split('\n').length;
-        const summary = `Wrote ${lines} lines to ${relative(process.cwd(), filePath)}`;
-        const diagBlock = await appendLspDiagnostics(lspManager, filePath);
-        return ok(summary + diagBlock);
-      } catch (err) {
-        return fail(`Cannot write file: ${(err as Error).message}`);
-      }
-    },
-  };
-}
+const summary = `Wrote ${lines} lines to ${relative(process.cwd(), filePath)}`;
+          const diagBlock = await appendLspDiagnostics(lspManager, filePath);
+          const structWarn = validateStructuredContent(filePath, params.content as string);
+          const structBlock = structWarn ? `\n\n<structured_content_validation>\n${structWarn}\n</structured_content_validation>` : '';
+          return ok(summary + diagBlock + structBlock);
+        } catch (err) {
+          return fail(`Cannot write file: ${(err as Error).message}`);
+        }
+      },
+    };
+  }
 
-/**
- * A capped capture of a stream that keeps BOTH ends.
+  /**
+   * A capped capture of a stream that keeps BOTH ends.
  *
  * Head and tail are each bounded; everything between them is counted and
  * discarded. The count is reported, because a truncation the model cannot see
