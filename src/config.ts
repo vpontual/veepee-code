@@ -143,7 +143,8 @@ export interface HookEntry {
 }
 
 export interface ConfigFile {
-  proxyUrl?: string;
+  /** Empty or null = no gateway (only valid with llmBackend "openai"). */
+  proxyUrl?: string | null;
   llmBackend?: 'ollama' | 'openai';
   openaiBaseUrl?: string | null;
   openaiApiKey?: string | null;
@@ -422,7 +423,8 @@ export function loadConfig(configPath?: string): Config {
   }
 
   return {
-    proxyUrl: merged.proxyUrl ?? DEFAULTS.proxyUrl,
+    // null and "" both mean "no gateway"; only an absent key gets the default.
+    proxyUrl: merged.proxyUrl === null ? '' : (merged.proxyUrl ?? DEFAULTS.proxyUrl),
     llmBackend: merged.llmBackend ?? DEFAULTS.llmBackend,
     openaiBaseUrl: merged.openaiBaseUrl ?? DEFAULTS.openaiBaseUrl,
     openaiApiKey: merged.openaiApiKey ?? DEFAULTS.openaiApiKey,

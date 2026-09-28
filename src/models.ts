@@ -4,6 +4,7 @@ import { writeFileAtomicSync } from './atomic-write.js';
 import { resolve, join } from 'path';
 import os from 'os';
 import type { Config } from './config.js';
+import { createChatClient, isDirectOnly } from './llm-client.js';
 
 export interface ModelProfile {
   name: string;
@@ -169,6 +170,33 @@ export class ModelManager {
     // Load probe cache before building profiles so inferCapabilities can use it
     this.loadProbeCache();
 
+    // No gateway: the OpenAI-compatible server's own model list is the roster.
+    if (isDirectOnly(this.config)) {
+      this.models = (await this.fetchDirectModels()).map((m) => {
+        const paramCount = parseParamSize(m.id.match(/(\d+(?:\.\d+)?)[BbMm](?![a-z])/)?.[0] ?? '');
+        const profile: ModelProfile = {
+          name: m.id,
+          parameterSize: paramCount > 0 ? `${paramCount}B` : 'unknown',
+          parameterCount: paramCount,
+          family: 'unknown',
+          families: [],
+          quantization: 'unknown',
+          contextLength: m.max_model_len ?? 0,
+          capabilities: this.inferCapabilities(m.id),
+          // A model a vLLM server lists is a model it has loaded.
+          isLoaded: true,
+          serverName: null,
+          diskSize: 0,
+          tier: assignTier(paramCount),
+          score: 0,
+        };
+        profile.score = computeScore(profile);
+        return profile;
+      });
+      this.models.sort((a, b) => b.score - a.score);
+      return;
+    }
+
     const [tags, servers, discoveries] = await Promise.all([
       this.fetchTags(),
       this.fetchServers(),
@@ -274,7 +302,7 @@ export class ModelManager {
       return this.models[0].name;
     }
 
-    throw new Error('No models available on the proxy');
+    throw new Error('No models available on the model server');
   }
 
   /** Select default model from benchmark results — best overall that's fast enough */
@@ -528,8 +556,7 @@ export class ModelManager {
 
     if (toProbe.length === 0) return { probed: 0, updated: [] };
 
-    const { Ollama } = await import('ollama');
-    const ollama = new Ollama({ host: this.config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
+    const ollama = createChatClient(this.config);
 
     const PROBE_TOOL = {
       type: 'function' as const,
@@ -616,6 +643,19 @@ export class ModelManager {
     } catch {
       return [];
     }
+  }
+
+  /** `GET /v1/models` on the direct server. Throws, unlike fetchTags: with no
+   *  gateway this is the only source, so an unreachable server must surface as
+   *  a connection failure rather than as an empty roster. */
+  private async fetchDirectModels(): Promise<Array<{ id: string; max_model_len?: number }>> {
+    const base = this.config.openaiBaseUrl!.replace(/\/+$/, '').replace(/\/v1$/, '');
+    const headers: Record<string, string> = {};
+    if (this.config.openaiApiKey) headers['authorization'] = `Bearer ${this.config.openaiApiKey}`;
+    const res = await fetch(`${base}/v1/models`, { headers, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status} from ${base}/v1/models`);
+    const data = await res.json() as { data?: Array<{ id: string; max_model_len?: number }> };
+    return (data.data ?? []).filter((m) => m && m.id);
   }
 
   private async fetchServers(): Promise<DashboardServer[]> {

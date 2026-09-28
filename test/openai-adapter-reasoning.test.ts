@@ -38,7 +38,7 @@ function stubFetch(frames: unknown[]) {
 }
 
 async function collect(client: OpenAIChatClient): Promise<{ content: string; thinking: string }> {
-  const stream = await client.chat({ model: 'm', messages: [] });
+  const stream = await client.chat({ model: 'm', messages: [], stream: true });
   let content = '';
   let thinking = '';
   for await (const chunk of stream) {
@@ -99,7 +99,7 @@ describe('OpenAIChatClient reasoning extraction', () => {
       { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'read_file', arguments: '{"path":' } }] } }] },
       { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"a.ts"}' } }] } }] },
     ]);
-    const stream = await client.chat({ model: 'm', messages: [] });
+    const stream = await client.chat({ model: 'm', messages: [], stream: true });
     const calls: Array<{ function: { name: string; arguments: Record<string, unknown> } }> = [];
     for await (const chunk of stream) {
       if (chunk.message?.tool_calls) calls.push(...chunk.message.tool_calls);

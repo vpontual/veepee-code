@@ -50,26 +50,16 @@ interface WizardStep {
 const STEPS: WizardStep[] = [
   {
     id: 'proxy',
-    name: 'Ollama Proxy',
-    description: 'The Ollama API endpoint where your models are running. This can be a local Ollama instance or a remote server. If you use Ollama Fleet Manager, point this to the proxy address.',
+    name: 'Model Server',
+    description: 'Where your models run. An Ollama server or llm-gateway works as-is. An OpenAI-compatible server (vLLM, llama.cpp, LM Studio) works on its own, with no gateway in front of it. With both, the primary model goes straight to the server and every other model is found behind the gateway.',
     tools: ['All AI model interactions'],
     required: true,
+    // Listed so the summary screen can show what was chosen; the flow is customRun.
     envVars: [
-      { key: 'VEEPEE_CODE_PROXY_URL', label: 'Proxy URL', default: 'http://localhost:11434', secret: false, hint: 'e.g., http://your-server:11434' },
+      { key: 'VEEPEE_CODE_OPENAI_BASE_URL', label: 'Server URL', default: '', secret: false },
+      { key: 'VEEPEE_CODE_PROXY_URL', label: 'Gateway URL', default: '', secret: false },
     ],
-    validate: async (values) => {
-      const url = values['VEEPEE_CODE_PROXY_URL'];
-      try {
-        const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
-        if (res.ok) {
-          const data = await res.json() as { models: unknown[] };
-          return { ok: true, message: `Connected — ${data.models?.length || 0} models available` };
-        }
-        return { ok: false, message: `HTTP ${res.status} — check the URL` };
-      } catch (err) {
-        return { ok: false, message: `Cannot connect to ${url} — ${(err as Error).message}` };
-      }
-    },
+    customRun: runModelServerStep,
   },
   {
     id: 'model',
@@ -742,6 +732,8 @@ function loadExistingConfig(): Record<string, string> {
     }
     // Map JSON fields back to wizard env var keys
     if (config.proxyUrl) values['VEEPEE_CODE_PROXY_URL'] = config.proxyUrl;
+    if (config.llmBackend) values['VEEPEE_CODE_LLM_BACKEND'] = config.llmBackend;
+    if (config.openaiBaseUrl) values['VEEPEE_CODE_OPENAI_BASE_URL'] = config.openaiBaseUrl;
     if (config.dashboardUrl) values['VEEPEE_CODE_DASHBOARD_URL'] = config.dashboardUrl;
     if (config.model) values['VEEPEE_CODE_MODEL'] = config.model;
     if (config.lockModel) values['VEEPEE_CODE_LOCK_MODEL'] = config.lockModel;
@@ -773,8 +765,22 @@ function saveConfig(values: Record<string, string>): void {
   const configDir = resolve(process.env.HOME || '~', '.veepee-code');
   mkdirSync(configDir, { recursive: true });
 
+  // MERGE onto the existing file. Writing only the wizard's keys erased every
+  // setting it does not ask about — llmBackend, openaiBaseUrl, fleet,
+  // mcpServers, hooks, lsp — and startup re-runs the wizard on its own when it
+  // cannot reach a model server, so one outage could wipe a working config.
+  const settingsPath = resolve(configDir, 'settings.json');
+  let existing: Record<string, unknown> = {};
+  try {
+    if (existsSync(settingsPath)) existing = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+  } catch { /* unreadable: the wizard is how it gets repaired, so start clean */ }
+
+  const direct = values['VEEPEE_CODE_LLM_BACKEND'] === 'openai' && !!values['VEEPEE_CODE_OPENAI_BASE_URL'];
   const config: Record<string, unknown> = {
-    proxyUrl: values['VEEPEE_CODE_PROXY_URL'] || 'http://localhost:11434',
+    ...existing,
+    llmBackend: direct ? 'openai' : 'ollama',
+    // "" = no gateway, which is only meaningful with a direct server.
+    proxyUrl: values['VEEPEE_CODE_PROXY_URL'] || (direct ? '' : 'http://localhost:11434'),
     dashboardUrl: values['VEEPEE_CODE_DASHBOARD_URL'] || '',
     autoSwitch: values['VEEPEE_CODE_AUTO_SWITCH'] !== 'false',
     maxModelSize: parseFloat(values['VEEPEE_CODE_MAX_MODEL_SIZE'] || '40'),
@@ -797,14 +803,20 @@ function saveConfig(values: Record<string, string>): void {
   // validator explicitly supports an unauthenticated bridge. Requiring both
   // meant the user saw "Connected — N remote tools available" and then got no
   // remote at all.
-  if (values['VEEPEE_CODE_REMOTE_URL']) {
+  if (direct) config.openaiBaseUrl = values['VEEPEE_CODE_OPENAI_BASE_URL'];
+
+  if (!values['VEEPEE_CODE_REMOTE_URL']) {
+    // Explicit, now that the file is merged: blanking the URL must remove it.
+    config.remote = null;
+  } else {
     config.remote = {
+      ...(existing.remote && typeof existing.remote === 'object' ? existing.remote : {}),
       url: values['VEEPEE_CODE_REMOTE_URL'],
       apiKey: values['VEEPEE_CODE_REMOTE_API_KEY'] || null,
     };
   }
 
-  writeFileAtomicSync(resolve(configDir, 'settings.json'), JSON.stringify(config, null, 2) + '\n');
+  writeFileAtomicSync(settingsPath, JSON.stringify(config, null, 2) + '\n');
 }
 
 // ─── Step Runner ────────────────────────────────────────────────────────────
@@ -902,6 +914,122 @@ async function runStep(
   return 'next';
 }
 
+// ─── Model Server Step (gateway / direct / both) ───────────────────────────
+
+/** The two URL prompts the model-server step hands to runStep, so they keep its
+ *  input handling, validation and "Try again?" loop. */
+const GATEWAY_URL_STEP: WizardStep = {
+  id: 'proxy-url',
+  name: 'Model Server — Gateway',
+  description: 'The Ollama API endpoint: a local Ollama, a remote one, or an llm-gateway in front of several servers.',
+  tools: ['Model discovery', 'models other than the primary'],
+  required: true,
+  envVars: [
+    { key: 'VEEPEE_CODE_PROXY_URL', label: 'Gateway URL', default: 'http://localhost:11434', secret: false, hint: 'e.g., http://your-server:11434' },
+  ],
+  validate: async (values) => {
+    const url = values['VEEPEE_CODE_PROXY_URL'];
+    try {
+      const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const data = await res.json() as { models: unknown[] };
+        return { ok: true, message: `Connected — ${data.models?.length || 0} models available` };
+      }
+      return { ok: false, message: `HTTP ${res.status} — check the URL` };
+    } catch (err) {
+      return { ok: false, message: `Cannot connect to ${url} — ${(err as Error).message}` };
+    }
+  },
+};
+
+const DIRECT_URL_STEP: WizardStep = {
+  id: 'openai-url',
+  name: 'Model Server — Direct',
+  description: 'The base URL of an OpenAI-compatible server. vcode calls its /v1/chat/completions and lists models from /v1/models.',
+  tools: ['All AI model interactions'],
+  required: true,
+  envVars: [
+    { key: 'VEEPEE_CODE_OPENAI_BASE_URL', label: 'Server URL', default: 'http://localhost:8000', secret: false, hint: 'e.g., http://your-gpu-box:8000 (with or without /v1)' },
+  ],
+  validate: async (values) => {
+    const url = values['VEEPEE_CODE_OPENAI_BASE_URL'];
+    try {
+      const models = await fetchDirectModels(url);
+      return { ok: true, message: `Connected — ${models.length} model${models.length === 1 ? '' : 's'} served` };
+    } catch (err) {
+      return { ok: false, message: `Cannot reach ${url}/v1/models — ${(err as Error).message}` };
+    }
+  },
+};
+
+async function runModelServerStep(
+  stepNum: number,
+  totalSteps: number,
+  values: Record<string, string>,
+  canGoBack: boolean,
+): Promise<'next' | 'back'> {
+  const step = STEPS.find(s => s.id === 'proxy')!;
+  let row = renderHeader(stepNum, totalSteps, step.name);
+  row = renderDescription(row, step.description, step.tools, step.required);
+  renderProgressBar(stepNum, totalSteps);
+  renderFooter(canGoBack);
+
+  const direct = values['VEEPEE_CODE_LLM_BACKEND'] === 'openai' && !!values['VEEPEE_CODE_OPENAI_BASE_URL'];
+  const current = !direct ? '1' : values['VEEPEE_CODE_PROXY_URL'] ? '3' : '2';
+
+  moveTo(row, 5);
+  process.stdout.write(theme.accent('Choose:'));
+  row += 1;
+  moveTo(row, 7);
+  process.stdout.write(theme.text('[1] ') + theme.accent('Ollama / gateway') + theme.dim('   — one Ollama-API endpoint for everything'));
+  row += 1;
+  moveTo(row, 7);
+  process.stdout.write(theme.text('[2] ') + theme.accent('Direct server') + theme.dim('      — OpenAI-compatible (vLLM etc.), no gateway'));
+  row += 1;
+  moveTo(row, 7);
+  process.stdout.write(theme.text('[3] ') + theme.accent('Both') + theme.dim('               — primary model direct, the rest via gateway'));
+  row += 2;
+
+  const choice = await readLine({
+    row,
+    col: 5,
+    maxWidth: getSize().cols - 10,
+    label: 'Choice',
+    default: current,
+    allowBack: canGoBack,
+  });
+  if (choice.action === 'back') return 'back';
+
+  const c = ['1', '2', '3'].includes(choice.value.trim()) ? choice.value.trim() : current;
+
+  if (c === '1') {
+    values['VEEPEE_CODE_LLM_BACKEND'] = 'ollama';
+    return runStep(GATEWAY_URL_STEP, stepNum, totalSteps, values, true).then(r =>
+      r === 'back' ? runModelServerStep(stepNum, totalSteps, values, canGoBack) : r);
+  }
+
+  values['VEEPEE_CODE_LLM_BACKEND'] = 'openai';
+  const directResult = await runStep(DIRECT_URL_STEP, stepNum, totalSteps, values, true);
+  if (directResult === 'back') return runModelServerStep(stepNum, totalSteps, values, canGoBack);
+
+  if (c === '2') {
+    // No gateway. Written as "" so the config does not fall back to localhost:11434.
+    values['VEEPEE_CODE_PROXY_URL'] = '';
+    return 'next';
+  }
+  const gatewayResult = await runStep(GATEWAY_URL_STEP, stepNum, totalSteps, values, true);
+  return gatewayResult === 'back' ? runModelServerStep(stepNum, totalSteps, values, canGoBack) : gatewayResult;
+}
+
+/** `GET /v1/models` on an OpenAI-compatible server, as picker rows. */
+async function fetchDirectModels(baseUrl: string): Promise<TagsModel[]> {
+  const base = baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
+  const res = await fetch(`${base}/v1/models`, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json() as { data?: Array<{ id?: string }> };
+  return (data.data ?? []).filter(m => m && m.id).map(m => ({ name: m.id! }));
+}
+
 // ─── Model Step (lock / default / skip) ────────────────────────────────────
 
 interface TagsModel {
@@ -936,6 +1064,8 @@ async function runModelStep(
   renderFooter(canGoBack);
 
   const proxyUrl = values['VEEPEE_CODE_PROXY_URL'] || 'http://localhost:11434';
+  // With a direct server the primary model runs there, so pick from its list.
+  const directUrl = values['VEEPEE_CODE_LLM_BACKEND'] === 'openai' ? values['VEEPEE_CODE_OPENAI_BASE_URL'] : '';
   const currentLock = values['VEEPEE_CODE_LOCK_MODEL'] || '';
   const currentDefault = values['VEEPEE_CODE_MODEL'] || '';
 
@@ -997,10 +1127,10 @@ async function runModelStep(
   // Fetch models
   row += 2;
   moveTo(row, 5);
-  process.stdout.write(theme.muted('Fetching model list from proxy...'));
+  process.stdout.write(theme.muted(`Fetching model list from ${directUrl ? 'the server' : 'the gateway'}...`));
   let models: TagsModel[] = [];
   try {
-    models = await fetchProxyModels(proxyUrl);
+    models = directUrl ? await fetchDirectModels(directUrl) : await fetchProxyModels(proxyUrl);
   } catch (err) {
     moveTo(row, 5);
     clearLine();
@@ -1012,7 +1142,7 @@ async function runModelStep(
   moveTo(row, 5);
   clearLine();
   if (models.length === 0) {
-    process.stdout.write(theme.warning(`${icons.warn} Proxy returned no models — skipping`));
+    process.stdout.write(theme.warning(`${icons.warn} No models listed — skipping`));
     await new Promise(r => setTimeout(r, 1500));
     return 'next';
   }
@@ -1231,7 +1361,7 @@ async function renderSummary(values: Record<string, string>, steps: WizardStep[]
     if (hasValues) {
       configuredCount++;
       // Show first value as preview
-      const firstVar = step.envVars[0];
+      const firstVar = step.envVars.find(ev => values[ev.key]) ?? step.envVars[0];
       const val = values[firstVar.key] || '';
       if (val && !firstVar.secret) {
         moveTo(row, 40);

@@ -23,6 +23,7 @@ import type { PermissionPosture } from './permissions.js';
 import { readFile, readFile as readFileAsync, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, relative } from 'path';
 import { existsSync, readFileSync } from 'fs';
+import { createChatClient, isDirectOnly } from './llm-client.js';
 
 export interface AgentEvent {
   type: 'text' | 'tool_call' | 'tool_result' | 'model_switch' | 'thinking' | 'info' | 'done' | 'error' | 'permission_denied' | 'reset_stream' | 'hook_output';
@@ -901,7 +902,8 @@ export class Agent {
    * serialize an AbortSignal into the request body.
    */
   private clientFor(model: string): { client: Ollama; isAdapter: boolean } {
-    if (!this.openaiBackend || this.directModels.has(model)) {
+    // With no gateway there is nowhere else to go: every model is direct.
+    if (!this.openaiBackend || this.directModels.has(model) || isDirectOnly(this.config)) {
       return { client: this.ollama, isAdapter: this.openaiBackend };
     }
     if (!this.gatewayClient) {
@@ -1103,7 +1105,7 @@ export class Agent {
       }
       const retryEvents: Array<{ attempt: number; projected: number; limit: number }> = [];
       const compacted = await this.context.compactWithRetry(
-        this.config.proxyUrl,
+        createChatClient(this.config),
         this.modelManager.getCurrentModel(),
         this.config.summarizerModel,
         {
@@ -1867,7 +1869,7 @@ export class Agent {
       if (this.context.needsCompaction()) {
         const retryEvents: Array<{ attempt: number; projected: number; limit: number }> = [];
         const compacted = await this.context.compactWithRetry(
-          this.config.proxyUrl,
+          createChatClient(this.config),
           this.modelManager.getCurrentModel(),
           this.config.summarizerModel,
           {

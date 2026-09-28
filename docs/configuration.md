@@ -26,7 +26,7 @@ All fields below live in `~/.veepee-code/vcode.config.json`. Run `vcode --wizard
 
 | Field | Default | Description |
 |----------|---------|-------------|
-| `proxyUrl` | `http://localhost:11434` | URL of your Ollama proxy or standalone Ollama instance. The only truly required setting. |
+| `proxyUrl` | `http://localhost:11434` | URL of your Ollama proxy or standalone Ollama instance. Required unless you use a direct server with no gateway (`llmBackend: "openai"` and `proxyUrl: ""`; see [No gateway](#no-gateway-direct-server-only)). |
 | `dashboardUrl` | `""` | URL of the Ollama Fleet Manager dashboard. Used for enhanced model discovery (loaded models, capabilities, server status). Optional. |
 | `fleet` | `[]` | Array of `{name, url}` objects pointing to individual Ollama servers. When non-empty, the benchmark hits each server directly instead of going through the proxy. Used by the `/benchmark` command and `scripts/benchmark.ts`. |
 
@@ -40,7 +40,7 @@ By default VEEPEE Code speaks the **Ollama** wire format (`/api/chat`) to `proxy
 | `openaiBaseUrl` | `null` | Base URL of the OpenAI-compatible server, e.g. `"http://10.0.154.246:8000"` (a bare host is fine — `/v1` is appended automatically; `".../v1"` is also accepted). Required when `llmBackend` is `"openai"`. Pair with `lockModel` set to a model the server actually serves. |
 | `openaiApiKey` | `null` | Bearer token for the OpenAI backend, if it requires one. vLLM usually does not — leave `null`. |
 
-When `llmBackend` is `"openai"`: thinking is toggled via `chat_template_kwargs.enable_thinking`; tool-call `arguments` and the message history are translated to/from the strict `/v1` shape (synthesized `id`/`tool_call_id`, string-encoded arguments); and streaming requests are aborted on interrupt so they are never orphaned. The subagent (`task` tool) and model-discovery paths still use `proxyUrl`, so keep it valid as a fallback.
+When `llmBackend` is `"openai"`: thinking is toggled via `chat_template_kwargs.enable_thinking`; tool-call `arguments` and the message history are translated to/from the strict `/v1` shape (synthesized `id`/`tool_call_id`, string-encoded arguments); and streaming requests are aborted on interrupt so they are never orphaned. With a `proxyUrl` set, subagents, compaction, model discovery, `/init` and benchmarks go through the gateway; with `proxyUrl` empty they all go to `openaiBaseUrl` (below).
 
 #### Which endpoint serves which model
 
@@ -51,7 +51,21 @@ A direct `openaiBaseUrl` is a **single vLLM server, serving a single model** —
 | The primary (`lockModel`, else `model`) | `openaiBaseUrl` — the direct `/v1` endpoint |
 | Anything else (e.g. `reviewModel` via `/review`) | `proxyUrl` — the gateway, which fronts the whole fleet |
 
-Without this, a `/review` turn would send `reviewModel` to the direct endpoint and get a model-not-found, since that server only holds the primary. Falling back to the gateway is never *wrong* — just an extra hop — so an unrecognized model routes there rather than failing. **Keep `proxyUrl` valid even when running the direct backend.**
+Without this, a `/review` turn would send `reviewModel` to the direct endpoint and get a model-not-found, since that server only holds the primary. Falling back to the gateway is never *wrong* — just an extra hop — so an unrecognized model routes there rather than failing. **In this hybrid setup, keep `proxyUrl` valid.**
+
+#### No gateway (direct server only)
+
+A gateway is optional. With `llmBackend: "openai"` and `proxyUrl` set to `""` (or `null`), everything goes to `openaiBaseUrl`: the agent loop, subagents, compaction summaries, `/init` and `/compact`. The model list comes from the server's `GET /v1/models`, so no `lockModel` is needed to start. The setup wizard's **Model Server** step offers this as "Direct server".
+
+```json
+{
+  "llmBackend": "openai",
+  "openaiBaseUrl": "http://your-gpu-box:8000",
+  "proxyUrl": ""
+}
+```
+
+What you give up without a gateway: models the server does not serve (a `reviewModel` or subagent model has to be one it lists), and `/benchmark`, which speaks the Ollama API. An absent `proxyUrl` key still means `http://localhost:11434`; only an explicit `""` or `null` means "no gateway".
 
 ### Model Preferences
 

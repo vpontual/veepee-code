@@ -9,7 +9,7 @@ dns.setDefaultResultOrder('ipv4first');
 import { resolve } from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
-import { loadConfig, getConfigPath } from './config.js';
+import { loadConfig, getConfigPath, type Config } from './config.js';
 import { ModelManager } from './models.js';
 import { ToolRegistry } from './tools/registry.js';
 import { Agent, AgentBusyError } from './agent.js';
@@ -65,6 +65,7 @@ import { buildSkillInvokeTool } from './skills.js';
 import { createTaskTool } from './tools/task.js';
 import { createExitPlanModeTool } from './tools/plan-gate.js';
 import { createNotebookEditTool } from './tools/notebook.js';
+import { createChatClient, isDirectOnly, primaryEndpoint } from './llm-client.js';
 
 const VERSION = '0.3.0';
 
@@ -151,9 +152,9 @@ async function main() {
     await modelManager.discover();
     profiler.mark('models discovered');
   } catch (err) {
-    console.error(chalk.red(`Failed to connect to proxy at ${config.proxyUrl}`));
+    console.error(chalk.red(`Failed to connect to the model server at ${primaryEndpoint(config)}`));
     console.error(chalk.dim((err as Error).message));
-    await diagnoseConnection(config.proxyUrl);
+    await diagnoseConnection(config);
     console.error(chalk.hex('#85C7F2')('Running the setup wizard to configure your connection...'));
     console.error('');
     await runWizard();
@@ -162,8 +163,8 @@ async function main() {
     try {
       await modelManager.discover();
     } catch {
-      console.error(chalk.red(`Still cannot connect to proxy at ${config.proxyUrl}`));
-      console.error(chalk.dim('Check that Ollama is running and the URL is correct.'));
+      console.error(chalk.red(`Still cannot connect to the model server at ${primaryEndpoint(config)}`));
+      console.error(chalk.dim('Check that the server is running and the URL is correct.'));
       process.exit(1);
     }
   }
@@ -270,8 +271,8 @@ async function main() {
 
   const allModels = modelManager.getAllModels();
   if (allModels.length === 0) {
-    console.error(chalk.red('No models found on the proxy. Is Ollama running?'));
-    await diagnoseConnection(config.proxyUrl);
+    console.error(chalk.red(`No models found at ${primaryEndpoint(config)}. Is the server running?`));
+    await diagnoseConnection(config);
     console.error(chalk.hex('#85C7F2')('Running the setup wizard to reconfigure...'));
     console.error('');
     await runWizard();
@@ -285,7 +286,9 @@ async function main() {
     }
     const retryModels = modelManager.getAllModels();
     if (retryModels.length === 0) {
-      console.error(chalk.red('No models found. Load models with: ollama pull <model>'));
+      console.error(chalk.red(isDirectOnly(config)
+        ? `No models served at ${primaryEndpoint(config)}.`
+        : 'No models found. Load models with: ollama pull <model>'));
       process.exit(1);
     }
   }
@@ -1172,10 +1175,11 @@ async function main() {
   // Lock mode: no benchmark, no roster — the locked model is the one and only.
   // Skip the first-launch benchmark that would otherwise fire against every
   // model on the proxy (wasteful; ranking is meaningless with one candidate).
-  const benchmarker = config.lockModel ? null : new Benchmarker(config.proxyUrl, config.fleet);
+  // Same with no gateway: the benchmarker speaks the Ollama API only.
+  const benchmarker = config.lockModel || isDirectOnly(config) ? null : new Benchmarker(config.proxyUrl, config.fleet);
   const existingRoster = benchmarker ? await benchmarker.loadRoster() : null;
-  if (config.lockModel) {
-    // Locked — skip benchmark silently. Status bar already shows "locked".
+  if (config.lockModel || isDirectOnly(config)) {
+    // Locked, or direct-only — skip benchmark silently.
   } else if (!existingRoster) {
     tui.showInfo(`${theme.accent('⚡ First launch')} — testing all your models to find the best for each role.`);
     tui.showInfo(theme.dim('Phase 1: Quick responsiveness check on all models'));
@@ -1695,10 +1699,15 @@ async function main() {
 
 // ─── Connection Diagnostics ───────────────────────────────────────────────────
 
-async function diagnoseConnection(proxyUrl: string): Promise<void> {
-  const url = new URL(proxyUrl);
+async function diagnoseConnection(config: Config): Promise<void> {
+  const direct = isDirectOnly(config);
+  const base = primaryEndpoint(config).replace(/\/+$/, '').replace(/\/v1$/, '');
+  const url = new URL(base);
   const host = url.hostname;
-  const tagsUrl = `${proxyUrl}/api/tags`;
+  // Probe the route vcode actually reads its model list from.
+  const tagsUrl = direct ? `${base}/v1/models` : `${base}/api/tags`;
+  const apiName = direct ? 'OpenAI-compatible API' : 'Ollama API';
+  const countModels = (data: { models?: unknown[]; data?: unknown[] }) => (direct ? data.data : data.models)?.length || 0;
 
   console.error(chalk.hex('#85C7F2')('\nRunning connection diagnostics...\n'));
 
@@ -1715,18 +1724,17 @@ async function diagnoseConnection(proxyUrl: string): Promise<void> {
   // Test 2: Port reachability (curl)
   try {
     execSync(`curl -s --connect-timeout 3 ${tagsUrl} > /dev/null`, { stdio: 'pipe', timeout: 5000 });
-    console.error(chalk.green(`  ✓ Ollama API responds (curl)`));
+    console.error(chalk.green(`  ✓ ${apiName} responds (curl)`));
   } catch {
-    console.error(chalk.red(`  ✗ Ollama API not responding at ${tagsUrl}`));
-    console.error(chalk.dim(`    Host is reachable but port ${url.port || 80} is not — is Ollama running?`));
+    console.error(chalk.red(`  ✗ ${apiName} not responding at ${tagsUrl}`));
+    console.error(chalk.dim(`    Host is reachable but port ${url.port || 80} is not — is the server running?`));
     return;
   }
 
   // Test 3: Node.js fetch (the actual method vcode uses)
   try {
     const res = await fetch(tagsUrl, { signal: AbortSignal.timeout(5000) });
-    const data = await res.json() as { models?: unknown[] };
-    const count = data.models?.length || 0;
+    const count = countModels(await res.json() as { models?: unknown[]; data?: unknown[] });
     console.error(chalk.green(`  ✓ Node.js fetch works (${count} models)`));
   } catch (err: any) {
     console.error(chalk.red(`  ✗ Node.js fetch failed: ${err.message}`));
@@ -1737,8 +1745,7 @@ async function diagnoseConnection(proxyUrl: string): Promise<void> {
     try {
       setDefaultResultOrder('ipv4first');
       const res = await fetch(tagsUrl, { signal: AbortSignal.timeout(5000) });
-      const data = await res.json() as { models?: unknown[] };
-      const count = data.models?.length || 0;
+      const count = countModels(await res.json() as { models?: unknown[]; data?: unknown[] });
       console.error(chalk.yellow(`  ⚠ Works with IPv4 forced (${count} models) — IPv6 issue detected`));
       console.error(chalk.dim('    This has been auto-fixed for this session.'));
       // Already set ipv4first at top of file, so this is informational
@@ -2071,8 +2078,7 @@ async function handleCommand(
       const allMsgs = ctx.getAllMessages();
 
       try {
-        const { Ollama: OllamaClient } = await import('ollama');
-        const ollamaCompact = new OllamaClient({ host: config.proxyUrl });
+        const ollamaCompact = createChatClient(config);
         const summaryResp = await ollamaCompact.chat({
           model: modelManager.getCurrentModel(),
           messages: [
@@ -2315,6 +2321,12 @@ async function handleCommand(
         } else {
           tui.showInfo(Benchmarker.formatSummary(results));
         }
+        return false;
+      }
+
+      // Results and summary only read files; running needs the Ollama API.
+      if (isDirectOnly(config)) {
+        tui.showInfo('Benchmarks run through an Ollama gateway, and none is configured (direct server only).');
         return false;
       }
 
@@ -3109,8 +3121,7 @@ async function handleCommand(
       tui.showInfo(theme.dim(`  Gathered ${gathered.length} sections. Asking model to synthesize...`));
 
       // ── Phase 2: Ask model to produce VEEPEE.md content (no tools needed) ──
-      const { Ollama } = await import('ollama');
-      const ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
+      const ollama = createChatClient(config);
 
       const synthesisPrompt = `Based on the project data below, write the content of a VEEPEE.md file (~150 lines). This file is loaded into an AI coding assistant's system prompt, so it must be specific and actionable.
 

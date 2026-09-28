@@ -1,4 +1,4 @@
-import { Ollama } from 'ollama';
+import type { Ollama } from 'ollama';
 import { nonStreamingAnswer } from './llm-answer.js';
 import type { PermissionManager } from './permissions.js';
 import type { Message, ToolCall } from 'ollama';
@@ -6,6 +6,7 @@ import type { Config } from './config.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { ModelRoster } from './benchmark.js';
 import { generationLimiter } from './generation-limit.js';
+import { createChatClient } from './llm-client.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -84,7 +85,7 @@ export class SubAgent {
   }
 
   constructor(config: Config, registry: ToolRegistry, roster: ModelRoster | null, role: LegacyRole) {
-    this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
+    this.ollama = createChatClient(config);
     this.registry = registry;
     this.role = role;
     this.maxTurns = role === 'search' ? 3 : 5;
@@ -265,7 +266,7 @@ class GenericSubAgent {
     maxTurns: number,
     permissions: PermissionManager | null = null,
   ) {
-    this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
+    this.ollama = createChatClient(config);
     this.registry = registry;
     this.model = model;
     this.allowedTools = allowedTools ? new Set(allowedTools) : null;

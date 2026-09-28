@@ -42,6 +42,7 @@ function joinPath(u: URL, suffix: string): string {
   return base ? base + suffix : suffix;
 }
 import { URL } from 'node:url';
+import { isDirectOnly } from '../llm-client.js';
 
 /** Quick liveness probe via /api/version. Returns null on failure. */
 async function probeOllama(url: string, timeoutMs = 3000): Promise<{ version?: string; latencyMs: number } | null> {
@@ -84,6 +85,7 @@ function whichBin(name: string): string | null {
 /** ─── Proxy / fleet ──────────────────────────────────────────────────── */
 
 function checkProxyReachable(config: Config): Check {
+  if (isDirectOnly(config)) return checkDirectServer(config);
   return {
     id: 'proxy-reachable',
     category: 'Network',
@@ -94,6 +96,31 @@ function checkProxyReachable(config: Config): Check {
         return { severity: 'error', message: `Proxy unreachable at ${config.proxyUrl}`, detail: 'No model calls will work. Check the proxy is running and the URL is correct.' };
       }
       return { severity: 'ok', message: `Proxy reachable (${r.latencyMs}ms${r.version ? `, ollama ${r.version}` : ''})` };
+    },
+  };
+}
+
+/** No gateway configured: the direct OpenAI-compatible server is the one
+ *  dependency, so it gets the "no model calls will work" check instead. */
+function checkDirectServer(config: Config): Check {
+  const base = config.openaiBaseUrl!.replace(/\/+$/, '').replace(/\/v1$/, '');
+  return {
+    id: 'proxy-reachable',
+    category: 'Network',
+    description: `Model server at ${base} (no gateway)`,
+    async run(): Promise<CheckResult> {
+      const started = Date.now();
+      try {
+        const headers: Record<string, string> = config.openaiApiKey ? { authorization: `Bearer ${config.openaiApiKey}` } : {};
+        const res = await fetch(`${base}/v1/models`, { headers, signal: AbortSignal.timeout(5000) });
+        if (!res.ok) {
+          return { severity: 'error', message: `HTTP ${res.status} from ${base}/v1/models`, detail: 'No model calls will work. Check the server URL and API key.' };
+        }
+        const data = await res.json() as { data?: unknown[] };
+        return { severity: 'ok', message: `Model server reachable (${Date.now() - started}ms, ${data.data?.length ?? 0} models)` };
+      } catch {
+        return { severity: 'error', message: `Model server unreachable at ${base}`, detail: 'No model calls will work. Check the server is running and the URL is correct.' };
+      }
     },
   };
 }
@@ -370,7 +397,7 @@ function checkMcpStdioBinaries(config: Config): Check {
 export async function defaultChecks(config: Config): Promise<Check[]> {
   // Take a single proxy-state snapshot up front so all fleet checks read
   // the same /api/ps output. Awaited here (~1 RTT) rather than per-check.
-  const probe = await probeOllama(config.proxyUrl, 3000);
+  const probe = isDirectOnly(config) ? null : await probeOllama(config.proxyUrl, 3000);
   const proxyOk = probe !== null;
   const psSnapshot = proxyOk ? await fetchProxyPs(config.proxyUrl) : null;
 

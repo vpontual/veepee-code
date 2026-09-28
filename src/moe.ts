@@ -1,8 +1,9 @@
-import { Ollama } from 'ollama';
+import type { Ollama } from 'ollama';
 import type { Message } from 'ollama';
 import type { Config } from './config.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { ModelRoster } from './benchmark.js';
+import { createChatClient } from './llm-client.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -61,7 +62,7 @@ export class MoeEngine {
   private models: MoeModel[] = [];
 
   constructor(config: Config, roster: ModelRoster | null) {
-    this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
+    this.ollama = createChatClient(config);
 
     // Build the 3-model panel from roster or defaults
     // Each should ideally route to different hardware via the proxy

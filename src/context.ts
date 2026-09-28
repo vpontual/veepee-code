@@ -1,4 +1,4 @@
-import type { Message } from 'ollama';
+import type { Message, Ollama } from 'ollama';
 import { nonStreamingAnswer } from './llm-answer.js';
 import { activeSystemPromptSections } from './extras/manager.js';
 import type { ConversationSignals } from './models.js';
@@ -9,6 +9,16 @@ import { getOutputStyle } from './output-styles.js';
 import { getRecentShellHistory, formatShellHistoryBlock } from './shellhistory.js';
 import { readdirSync, readFileSync, statSync, existsSync, realpathSync } from 'fs';
 import { join, relative, resolve } from 'path';
+
+/** Where compaction sends its summarizer call: a gateway host, or a ready
+ *  client (the direct OpenAI-compatible server, when there is no gateway). */
+export type ChatTarget = string | Pick<Ollama, 'chat'>;
+
+async function chatClientFor(target: ChatTarget): Promise<Pick<Ollama, 'chat'>> {
+  if (typeof target !== 'string') return target;
+  const { Ollama: OllamaClient } = await import('ollama');
+  return new OllamaClient({ host: target });
+}
 
 // ─── Model Knowledge Cutoffs ────────────────────────────────────────────────
 
@@ -1145,7 +1155,7 @@ Modified: ${renderList(writes)}
    * possible — it produces a synthetic summary message that the model sees
    * on the very next turn.
    */
-  compact(ollamaHost?: string, model?: string): boolean {
+  compact(ollamaHost?: ChatTarget, model?: string): boolean {
     const windowMessages = this.getMessages();
     if (this.messages.length <= windowMessages.length + 4) return false;
 
@@ -1179,7 +1189,7 @@ Modified: ${renderList(writes)}
    * @returns true when at least the drop happened.
    */
   async compactAsync(
-    ollamaHost: string,
+    ollamaHost: ChatTarget,
     mainModel: string,
     summarizerModel?: string | null,
     timeoutMs = 60_000,
@@ -1244,7 +1254,7 @@ Modified: ${renderList(writes)}
    * the context is in — better than throwing.
    */
   async compactWithRetry(
-    ollamaHost: string,
+    ollamaHost: ChatTarget,
     mainModel: string,
     summarizerModel?: string | null,
     options?: {
@@ -1289,12 +1299,11 @@ Modified: ${renderList(writes)}
    * Returns null if the model produces nothing usable.
    */
   private async summarizeForCompaction(
-    host: string,
+    host: ChatTarget,
     model: string,
     messages: Message[],
   ): Promise<string | null> {
-    const { Ollama: OllamaClient } = await import('ollama');
-    const client = new OllamaClient({ host });
+    const client = await chatClientFor(host);
     const ks = this.knowledgeState;
     const currentState = ks.serialize();
     const msgSummary = messages.map((m) => `[${m.role}] ${(m.content || '').slice(0, 400)}`).join('\n');
@@ -1401,9 +1410,8 @@ NEXT: <the single next action, concretely>`;
   }
 
   /** Best-effort fire-and-forget KS update (used by sync compact path). */
-  private async summarizeIntoKnowledge(host: string, model: string, messages: Message[]): Promise<void> {
-    const { Ollama: OllamaClient } = await import('ollama');
-    const client = new OllamaClient({ host });
+  private async summarizeIntoKnowledge(host: ChatTarget, model: string, messages: Message[]): Promise<void> {
+    const client = await chatClientFor(host);
     const currentState = this.knowledgeState.serialize();
     const msgSummary = messages.map((m) => `[${m.role}] ${(m.content || '').slice(0, 200)}`).join('\n');
 

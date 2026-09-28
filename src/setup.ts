@@ -1,5 +1,6 @@
 import type { Config } from './config.js';
 import { theme, icons } from './tui/theme.js';
+import { isDirectOnly } from './llm-client.js';
 
 export interface IntegrationStatus {
   name: string;
@@ -102,8 +103,26 @@ export async function validateIntegrations(config: Config): Promise<IntegrationS
     });
   }
 
+  // ─── Model server (direct, no gateway) ────────────────────────────
+  if (isDirectOnly(config)) {
+    const base = config.openaiBaseUrl!.replace(/\/+$/, '').replace(/\/v1$/, '');
+    const entry = { name: 'Model Server', category: 'Core', tools: [] as string[], requiredEnvVars: ['VEEPEE_CODE_OPENAI_BASE_URL'] };
+    try {
+      const headers: Record<string, string> = config.openaiApiKey ? { authorization: `Bearer ${config.openaiApiKey}` } : {};
+      const res = await fetch(`${base}/v1/models`, { headers, signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const data = await res.json() as { data?: unknown[] };
+        results.push({ ...entry, status: 'active', message: `Connected (direct, no gateway) — ${data.data?.length ?? 0} models` });
+      } else {
+        results.push({ ...entry, status: 'error', message: `HTTP ${res.status} — check the server URL` });
+      }
+    } catch {
+      results.push({ ...entry, status: 'error', message: `Cannot connect to ${base}` });
+    }
+  }
+
   // ─── Proxy connection ─────────────────────────────────────────────
-  try {
+  if (!isDirectOnly(config)) try {
     const res = await fetch(`${config.proxyUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
     if (res.ok) {
       const data = await res.json() as { models: unknown[] };

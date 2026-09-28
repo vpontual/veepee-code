@@ -53,7 +53,7 @@ npm link
 vcode
 ```
 
-A setup wizard runs on first launch — just enter your Ollama URL and you're ready. Everything else is optional.
+A setup wizard runs on first launch. Point it at an Ollama server or gateway, at an OpenAI-compatible server such as vLLM (no gateway needed), or at both. Everything else is optional.
 
 ## Usage
 
@@ -135,7 +135,7 @@ Key settings:
 
 | Setting | Description |
 |---------|-------------|
-| `proxyUrl` | Ollama API endpoint |
+| `proxyUrl` | Ollama API endpoint (gateway). `""` = none: with `llmBackend: "openai"` everything goes to `openaiBaseUrl` |
 | `llmBackend` | `"ollama"` (default, `/api/chat` via `proxyUrl`) or `"openai"` (direct to a vLLM `/v1` server) |
 | `openaiBaseUrl` | Base URL for the `openai` backend (e.g. `http://host:8000`); `/v1` auto-appended |
 | `model` | Force a specific model (null = auto) |

@@ -45,6 +45,10 @@ interface ChatParams {
   messages: unknown[];
   tools?: unknown[];
   think?: boolean;
+  /** Same contract as the Ollama client: a stream only when `true`, otherwise
+   *  one collected response. The agent loop always passes `true`; subagents,
+   *  compaction and one-shot prompts do not, and used to get the gateway. */
+  stream?: boolean;
   /** Abort signal from the agent's run controller. Wired to the underlying
    *  fetch so a stall-timeout / user interrupt cancels the HTTP request
    *  immediately (a stalled stream never delivers a chunk, so the consumer's
@@ -62,6 +66,35 @@ interface ChatParams {
     num_predict?: number;
     seed?: number;
   };
+}
+
+/** The non-streaming Ollama response shape (`message` plus final counters). */
+export interface OllamaResponse {
+  message: { role: 'assistant'; content: string; thinking?: string; tool_calls?: NonNullable<OllamaChunk['message']['tool_calls']> };
+  done: true;
+  eval_count?: number;
+  prompt_eval_count?: number;
+  eval_duration?: number;
+}
+
+/** Fold a chunk stream into one response, the way Ollama answers `stream: false`. */
+async function collectResponse(stream: AsyncIterable<OllamaChunk>): Promise<OllamaResponse> {
+  let content = '';
+  let thinking = '';
+  const toolCalls: NonNullable<OllamaChunk['message']['tool_calls']> = [];
+  const out: OllamaResponse = { message: { role: 'assistant', content: '' }, done: true };
+  for await (const chunk of stream) {
+    content += chunk.message.content ?? '';
+    thinking += chunk.message.thinking ?? '';
+    if (chunk.message.tool_calls) toolCalls.push(...chunk.message.tool_calls);
+    if (chunk.eval_count !== undefined) out.eval_count = chunk.eval_count;
+    if (chunk.prompt_eval_count !== undefined) out.prompt_eval_count = chunk.prompt_eval_count;
+    if (chunk.eval_duration !== undefined) out.eval_duration = chunk.eval_duration;
+  }
+  out.message.content = content;
+  if (thinking) out.message.thinking = thinking;
+  if (toolCalls.length > 0) out.message.tool_calls = toolCalls;
+  return out;
 }
 
 /**
@@ -130,7 +163,9 @@ export class OpenAIChatClient {
     this.apiKey = apiKey;
   }
 
-  async chat(params: ChatParams): Promise<AsyncIterable<OllamaChunk>> {
+  async chat(params: ChatParams & { stream: true }): Promise<AsyncIterable<OllamaChunk>>;
+  async chat(params: ChatParams): Promise<OllamaResponse>;
+  async chat(params: ChatParams): Promise<AsyncIterable<OllamaChunk> | OllamaResponse> {
     const o = params.options || {};
     const body: Record<string, unknown> = {
       model: params.model,
@@ -178,7 +213,8 @@ export class OpenAIChatClient {
       throw new Error(`OpenAI /v1 backend HTTP ${res.status}: ${text.slice(0, 300)}`);
     }
 
-    return this.parse(res.body, controller, startedAt);
+    const stream = this.parse(res.body, controller, startedAt);
+    return params.stream === true ? stream : collectResponse(stream);
   }
 
   private async *parse(body: ReadableStream<Uint8Array>, controller: AbortController, startedAt: number): AsyncGenerator<OllamaChunk> {

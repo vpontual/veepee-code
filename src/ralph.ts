@@ -12,6 +12,7 @@ import { writeFile, mkdir, readdir, readFile, rename, unlink } from 'fs/promises
 import { resolve, join } from 'path';
 import type { Config } from './config.js';
 import type { ModelRoster } from './benchmark.js';
+import { createChatClient } from './llm-client.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -197,8 +198,7 @@ export class RalphEngine {
   }
 
   private async *streamModel(model: string, prompt: string): AsyncGenerator<string> {
-    const { Ollama } = await import('ollama');
-    const ollama = new Ollama({ host: this.config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
+    const ollama = createChatClient(this.config);
     const stream = await ollama.chat({
       model,
       messages: [{ role: 'user', content: prompt }],
