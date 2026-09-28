@@ -201,7 +201,7 @@ list_files path="src/tools" recursive=true
 
 | Tool | What it does |
 |------|--------------|
-| `todo_write` | The model's own task list (content + pending / in_progress / completed). Shown back to it every turn; one reminder if a turn ends with items open. |
+| `todo_write` | The model's own task list (content + pending / in_progress / completed). Shown back to it every turn; one reminder if a turn ends with items open. Lenient about shape (`description`/`task`/`title` for the step, words like `todo`/`doing`/`done` for status; a second in-progress item is set to pending), and an unchanged resend answers "no change — do the step now", because small models otherwise loop on it. |
 | `bash` with `run_in_background: true` | Starts a dev server, watcher or long build and returns an id at once. A command ending in a single `&` is treated the same way; processes a normal `bash` call leaves running are tracked too. |
 | `bash_output` | New output from a background command since the last read, and whether it is still running. Optional line filter; no id lists them all. |
 | `kill_shell` | Stops a background command and everything it started. Everything still running is stopped when vcode exits. |
