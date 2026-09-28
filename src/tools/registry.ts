@@ -120,6 +120,24 @@ const DEFAULT_TOOL_TIMEOUT_MS = 10 * 60_000;
 
 export class ToolRegistry {
   private tools = new Map<string, ToolDef>();
+  /** Registered but not sent to the model until tool_search activates them
+   *  (see tool-search.ts). Still callable by name. */
+  private deferred = new Set<string>();
+
+  defer(names: string[]): void {
+    for (const n of names) if (this.tools.has(n)) this.deferred.add(n);
+  }
+
+  /** Make deferred tools part of what the model is offered. Returns those activated. */
+  activate(names: string[]): string[] {
+    const done: string[] = [];
+    for (const n of names) if (this.deferred.delete(n)) done.push(n);
+    return done;
+  }
+
+  deferredTools(): ToolDef[] {
+    return [...this.deferred].map(n => this.tools.get(n)).filter((t): t is ToolDef => !!t);
+  }
 
   register(tool: ToolDef): void {
     this.tools.set(tool.name, tool);
@@ -201,7 +219,7 @@ export class ToolRegistry {
 
   /** Get all tools in Ollama tool-calling format */
   toOllamaTools(): OllamaTool[] {
-    return this.list().map(toOllamaTool);
+    return this.list().filter(t => !this.deferred.has(t.name)).map(toOllamaTool);
   }
 
   /** Execute a tool by name with given arguments */

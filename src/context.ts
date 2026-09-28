@@ -215,9 +215,23 @@ const PINKY_BUDGET_CHARS = 16_000;
  * `PINKY.md` is an INDEX: 14.7 KB describing where things live, exactly the kind
  * of thing to look up on demand. It becomes a pointer; the model has `read_file`.
  */
+/**
+ * Where the Pinky brain lives on this machine, by Pinky's own contract:
+ * $PINKY_ROOT, then a clone marked with `.this-host`, then ~/pinky, then
+ * ~/Nextcloud/pinky. Hard-coding the last one meant vcode on archman (where
+ * the brain is ~/pinky) never saw the operator's rules at all.
+ */
+export function findPinkyRoot(home: string = process.env.HOME || '~'): string | null {
+  if (process.env.PINKY_ROOT && existsSync(join(process.env.PINKY_ROOT, 'PINKY.md'))) return process.env.PINKY_ROOT;
+  const candidates = [join(home, 'pinky'), join(home, 'Nextcloud', 'pinky')];
+  const marked = candidates.find(c => existsSync(join(c, '.this-host')) && existsSync(join(c, 'PINKY.md')));
+  if (marked) return marked;
+  return candidates.find(c => existsSync(join(c, 'PINKY.md'))) ?? null;
+}
+
 function loadPinky(): string {
-  const root = join(process.env.HOME || '~', 'Nextcloud', 'pinky');
-  if (!existsSync(root)) return '';
+  const root = findPinkyRoot();
+  if (!root) return '';
 
   const files: Array<{ label: string; path: string }> = [
     { label: 'identity/rules.md', path: join(root, 'identity', 'rules.md') },
@@ -268,6 +282,13 @@ function loadPinky(): string {
     ...(deferred.length
       ? ['', 'Not loaded here — read these files when you need them:', ...deferred.map(d => `- ${d}`)]
       : []),
+    '',
+    '### Shared memory',
+    '',
+    'If the `mcp__pinky__*` tools are available, they are the shared memory every agent uses:',
+    '- At the start of a task, `pinky_recall` the people, systems, projects and past corrections it involves.',
+    '- Recall before storing, so an existing fact is corrected with `pinky_update` (its id) rather than restated.',
+    '- `pinky_remember` only durable facts and decisions — never scratch work.',
     '',
   ].join('\n');
 }

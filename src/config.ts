@@ -36,6 +36,9 @@ export interface Config {
   /** Models to continue on, in order, when the current one cannot be reached
    *  or drops the connection mid-reply. Empty = no fallback. */
   fallbackModels: string[];
+  /** When connected MCP servers add more tools than this, they are loaded on
+   *  demand via tool_search instead of sent with every request. */
+  mcpDeferAbove: number;
   maxModelSize: number;  // max parameter count in billions (default 40)
   minModelSize: number;  // min for act mode — skip tiny models (default 12)
   apiPort: number;
@@ -165,6 +168,7 @@ export interface ConfigFile {
   autoSwitch?: boolean;
   numCtx?: number | null;
   fallbackModels?: string[];
+  mcpDeferAbove?: number;
   maxModelSize?: number;
   minModelSize?: number;
   apiPort?: number;
@@ -205,6 +209,7 @@ const DEFAULTS: Config = {
   autoSwitch: true,
   numCtx: null,
   fallbackModels: [],
+  mcpDeferAbove: 12,
   maxModelSize: 40,
   minModelSize: 12,
   apiPort: 8484,
@@ -649,6 +654,7 @@ export function loadConfig(configPath?: string): Config {
     summarizerModel: merged.summarizerModel ?? DEFAULTS.summarizerModel,
     autoSwitch: merged.autoSwitch ?? DEFAULTS.autoSwitch,
     numCtx: merged.numCtx ?? DEFAULTS.numCtx,
+    mcpDeferAbove: typeof merged.mcpDeferAbove === 'number' ? merged.mcpDeferAbove : DEFAULTS.mcpDeferAbove,
     fallbackModels: Array.isArray(merged.fallbackModels) ? merged.fallbackModels.filter((m): m is string => typeof m === 'string' && !!m) : DEFAULTS.fallbackModels,
     maxModelSize: merged.maxModelSize ?? DEFAULTS.maxModelSize,
     minModelSize: merged.minModelSize ?? DEFAULTS.minModelSize,

@@ -68,6 +68,7 @@ import { createExitPlanModeTool } from './tools/plan-gate.js';
 import { createNotebookEditTool } from './tools/notebook.js';
 import { createChatClient, isDirectOnly, primaryEndpoint } from './llm-client.js';
 import { enableOsSandbox, disableOsSandbox } from './tools/os-sandbox.js';
+import { buildToolSearchTool } from './tools/tool-search.js';
 
 const VERSION = '0.3.0';
 
@@ -373,6 +374,13 @@ async function main() {
       const result = registry.registerBatch(mcpTools);
       if (result.registered.length > 0) {
         console.error(chalk.dim(`  ${result.registered.length} MCP tools loaded across ${clients.length} server${clients.length === 1 ? '' : 's'}`));
+      }
+      // Past the threshold, offer the tools on demand (tool_search) instead of
+      // sending every schema on every request.
+      if (result.registered.length > config.mcpDeferAbove) {
+        registry.defer(result.registered);
+        registry.register(buildToolSearchTool(registry));
+        console.error(chalk.dim(`  (${result.registered.length} MCP tools load on demand via tool_search)`));
       }
       if (result.skipped.length > 0) {
         console.error(chalk.dim(`  (${result.skipped.length} MCP tools skipped due to name collision)`));
