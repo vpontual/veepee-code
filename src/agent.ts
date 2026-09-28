@@ -402,6 +402,15 @@ export class Agent {
   /** Models that just failed at the transport level, and until when to skip
    *  them (see pickModel). */
   private modelDownUntil = new Map<string, number>();
+  /** The direct server's connection failed: route everything via the gateway until then. */
+  private directDownUntil = 0;
+  /** Models that produced a response this session, in first-use order. */
+  private modelsUsed = new Set<string>();
+  /** Human-readable record of every fallback taken (for -p callers' reports). */
+  private fallbackNotes: string[] = [];
+
+  getModelsUsed(): string[] { return [...this.modelsUsed]; }
+  getFallbackNotes(): string[] { return [...this.fallbackNotes]; }
   /** This agent's task list (todo_write) — see todo.ts. */
   readonly todos = new TodoList();
   private readonly todoTool = buildTodoTool(this.todos);
@@ -792,6 +801,12 @@ export class Agent {
     return primary;
   }
 
+  /** Is `model` going to the direct server, with a gateway that could serve it instead? */
+  private canRouteDirectToGateway(model: string): boolean {
+    return this.openaiBackend && !!this.config.proxyUrl && !isDirectOnly(this.config)
+      && this.directModels.has(model) && this.directDownUntil <= Date.now();
+  }
+
   /** Is there a fallback other than `failing` that is not itself marked down? */
   private hasUsableFallback(failing: string): boolean {
     const now = Date.now();
@@ -992,7 +1007,10 @@ export class Agent {
    */
   private clientFor(model: string): { client: Ollama; isAdapter: boolean } {
     // With no gateway there is nowhere else to go: every model is direct.
-    if (!this.openaiBackend || this.directModels.has(model) || isDirectOnly(this.config)) {
+    // Once the direct server's connection has failed, the gateway (which routes
+    // around a dead box) serves everything until it is tried again.
+    const directDown = this.directDownUntil > Date.now() && !!this.config.proxyUrl;
+    if (!this.openaiBackend || isDirectOnly(this.config) || (this.directModels.has(model) && !directDown)) {
       return { client: this.ollama, isAdapter: this.openaiBackend };
     }
     if (!this.gatewayClient) {
@@ -1455,7 +1473,7 @@ export class Agent {
               // With a fallback available, stop waiting on a server that cannot
               // be reached after two attempts (~1 min) instead of up to ten
               // minutes; the turn continues on the next model.
-              if (attempt >= FALLBACK_AFTER_ATTEMPTS && isTransportFailure(err) && this.hasUsableFallback(currentModel)) throw err;
+              if (attempt >= FALLBACK_AFTER_ATTEMPTS && isTransportFailure(err) && (this.canRouteDirectToGateway(currentModel) || this.hasUsableFallback(currentModel))) throw err;
               const decision = retryDecision(err, attempt);
               if (!decision.retry) throw err;
               await new Promise(r => setTimeout(r, decision.delayMs));
@@ -1591,6 +1609,8 @@ export class Agent {
         if (inThinking && thinkingBuffer) {
           yield { type: 'thinking', content: thinkingBuffer.trim() };
         }
+        // This model completed a reply: it did (some of) the work.
+        this.modelsUsed.add(currentModel);
       } catch (err) {
         if (stallTimer) clearTimeout(stallTimer);
         // Whatever the gate was holding is part of the answer; do not lose it.
@@ -1606,8 +1626,19 @@ export class Agent {
         // (a Jetson resetting under load did exactly this and killed the run).
         // Nothing from this attempt reached the context — tool calls only run
         // after the stream — so redo the step on the next model.
+        if (isTransportFailure(err) && this.canRouteDirectToGateway(currentModel)) {
+          // The direct server died; the gateway may still serve this model elsewhere.
+          this.directDownUntil = Date.now() + MODEL_DOWN_MS;
+          const note = `direct server ${this.config.openaiBaseUrl} failed (${describeError(err).slice(0, 100)}); ${currentModel} retried via the gateway`;
+          this.fallbackNotes.push(note);
+          yield { type: 'reset_stream' };
+          yield { type: 'info', content: note };
+          continue;
+        }
         if (isTransportFailure(err) && this.hasUsableFallback(currentModel)) {
           this.modelDownUntil.set(currentModel, Date.now() + MODEL_DOWN_MS);
+          const note = `${currentModel} failed (${describeError(err).slice(0, 100)}); continued on a fallback model`;
+          this.fallbackNotes.push(note);
           yield { type: 'reset_stream' };
           yield { type: 'info', content: `${currentModel} failed (${describeError(err).slice(0, 120)}) — retrying this step on the next fallback model` };
           continue;

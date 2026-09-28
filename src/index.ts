@@ -148,6 +148,13 @@ async function main() {
   }
 
   let config = loadConfig();
+  // --model <name>: this run only, overriding lockModel/model. Lets a caller
+  // (e.g. a scheduled job that knows the usual model's box is down) pick one.
+  const modelFlag = process.argv.indexOf('--model');
+  if (modelFlag >= 0 && process.argv[modelFlag + 1] && !process.argv[modelFlag + 1].startsWith('-')) {
+    const m = process.argv[modelFlag + 1];
+    config = { ...config, lockModel: m, model: m };
+  }
   profiler.mark('config loaded');
 
   // Check for -p / --print mode (non-interactive, output to stdout)
@@ -756,6 +763,10 @@ async function main() {
         process.stderr.write(`Error: ${errStr}\n`);
       }
     }
+    // Machine-readable: which model(s) did the work, and any fallback. Callers
+    // such as the Nightly Engineer read this from stderr to say so in reports.
+    process.stderr.write(`[vcode] models used: ${agent.getModelsUsed().join(', ') || 'none'}\n`);
+    for (const note of agent.getFallbackNotes()) process.stderr.write(`[vcode] fallback: ${note}\n`);
 
       // ─── Print-mode: run tests, self-repair if they fail ────────────────
       if (!process.env.VCODE_NO_REPAIR) {
