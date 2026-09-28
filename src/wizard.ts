@@ -8,7 +8,6 @@
 
 import { resolve } from 'path';
 import { existsSync } from 'fs';
-import { execSync, spawn } from 'child_process';
 import { readGlobalConfig, updateGlobalConfig, type ConfigFile } from './config.js';
 import chalk from 'chalk';
 import { theme, box, icons } from './tui/theme.js';
@@ -567,145 +566,6 @@ function renderFooter(canGoBack: boolean): void {
   process.stdout.write(theme.dim(parts.join('  |  ')));
 }
 
-// ─── GitHub Auth ────────────────────────────────────────────────────────────
-
-async function runGitHubAuth(): Promise<void> {
-  const { cols } = getSize();
-  clearScreen();
-  hideCursor();
-
-  // Header
-  moveTo(1, 1);
-  process.stdout.write(theme.brandBold(`  ${icons.llama} VEEPEE Code Setup`));
-  moveTo(1, cols - 'GitHub Authentication'.length - 1);
-  process.stdout.write(theme.accent('GitHub Authentication'));
-  moveTo(2, 1);
-  process.stdout.write(theme.dim(box.h.repeat(cols)));
-
-  moveTo(4, 3);
-  process.stdout.write(theme.textBold('GitHub Authentication'));
-
-  moveTo(6, 5);
-  process.stdout.write(theme.dim('VEEPEE Code needs GitHub access to pull updates.'));
-  moveTo(7, 5);
-  process.stdout.write(theme.dim('This step runs `gh auth login` and configures git credentials.'));
-
-  moveTo(9, 5);
-  process.stdout.write(theme.muted('Checking GitHub CLI...'));
-
-  // Check if gh is installed
-  try {
-    execSync('which gh', { stdio: 'ignore' });
-  } catch {
-    moveTo(9, 5);
-    clearLine();
-    process.stdout.write(theme.error(`${icons.cross} GitHub CLI (gh) is not installed.`));
-    moveTo(11, 5);
-    process.stdout.write(theme.dim('Install it first:'));
-    moveTo(12, 7);
-    process.stdout.write(theme.accent('brew install gh') + theme.dim('          # macOS'));
-    moveTo(13, 7);
-    process.stdout.write(theme.accent('sudo apt install gh') + theme.dim('      # Debian/Ubuntu'));
-    moveTo(14, 7);
-    process.stdout.write(theme.accent('sudo dnf install gh') + theme.dim('      # Fedora'));
-    moveTo(15, 7);
-    process.stdout.write(theme.accent('https://cli.github.com') + theme.dim('   # Other'));
-    moveTo(17, 5);
-    process.stdout.write(theme.dim('Press any key to skip this step...'));
-    await waitForKey();
-    return;
-  }
-
-  // Check if already authenticated
-  try {
-    execSync('gh auth status', { stdio: 'ignore' });
-    moveTo(9, 5);
-    clearLine();
-    process.stdout.write(theme.success(`${icons.check} Already authenticated with GitHub`));
-
-    // Ensure git is wired up
-    try {
-      execSync('gh auth setup-git', { stdio: 'ignore' });
-      moveTo(10, 5);
-      process.stdout.write(theme.success(`${icons.check} Git credentials configured`));
-    } catch {
-      // Non-fatal
-    }
-
-    moveTo(12, 5);
-    process.stdout.write(theme.dim('Press any key to continue...'));
-    await waitForKey();
-    return;
-  } catch {
-    // Not authenticated — run gh auth login
-  }
-
-  moveTo(9, 5);
-  clearLine();
-  process.stdout.write(theme.warning(`${icons.warn} Not authenticated — launching GitHub login...`));
-  moveTo(11, 5);
-  process.stdout.write(theme.dim('Follow the prompts in your terminal.'));
-  moveTo(12, 5);
-  process.stdout.write(theme.dim('The wizard will resume automatically after login completes.'));
-
-  // Temporarily exit alt screen so gh auth login can interact with the user
-  exitAltScreen();
-  showCursor();
-  process.stdin.setRawMode?.(false);
-  process.stdin.pause();
-
-  // Run gh auth login interactively
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn('gh', ['auth', 'login'], {
-        stdio: 'inherit',
-      });
-      child.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`gh auth login exited with code ${code}`));
-      });
-      child.on('error', reject);
-    });
-  } catch {
-    // User may have cancelled — continue anyway
-  }
-
-  // Set up git credentials
-  try {
-    execSync('gh auth setup-git', { stdio: 'ignore' });
-  } catch {
-    // Non-fatal
-  }
-
-  // Re-enter alt screen
-  process.stdin.resume();
-  process.stdin.setRawMode?.(true);
-  enterAltScreen();
-  hideCursor();
-
-  const { cols: cols2 } = getSize();
-  moveTo(1, 1);
-  process.stdout.write(theme.brandBold(`  ${icons.llama} VEEPEE Code Setup`));
-  moveTo(2, 1);
-  process.stdout.write(theme.dim(box.h.repeat(cols2)));
-
-  // Check result
-  try {
-    execSync('gh auth status', { stdio: 'ignore' });
-    moveTo(4, 5);
-    process.stdout.write(theme.success(`${icons.check} GitHub authentication complete`));
-    moveTo(5, 5);
-    process.stdout.write(theme.success(`${icons.check} Git credentials configured`));
-  } catch {
-    moveTo(4, 5);
-    process.stdout.write(theme.warning(`${icons.warn} GitHub authentication skipped — you can set it up later`));
-  }
-
-  moveTo(7, 5);
-  process.stdout.write(theme.dim('Press any key to continue...'));
-  await waitForKey();
-}
-
 // ─── Config Helpers ─────────────────────────────────────────────────────────
 
 /** Load existing config values in the wizard's env-var-key shape, from the
@@ -1220,9 +1080,6 @@ export async function runWizard(): Promise<void> {
 
     await waitForKey();
   }
-
-  // ─── GitHub Auth Step ──────────────────────────────────────────────
-  await runGitHubAuth();
 
   // ─── Walk Through Steps (with back navigation) ────────────────────
   let i = 0;
