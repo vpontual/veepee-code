@@ -48,6 +48,14 @@ export class TodoList {
   }
 }
 
+/** What a model meant by its status word. */
+function normalizeStatus(v: unknown): TodoStatus {
+  const s = String(v ?? '').toLowerCase().replace(/[\s-]+/g, '_');
+  if (['completed', 'complete', 'done', 'finished', 'fixed', 'ok'].includes(s)) return 'completed';
+  if (['in_progress', 'inprogress', 'doing', 'active', 'started', 'working', 'current'].includes(s)) return 'in_progress';
+  return 'pending';
+}
+
 export function buildTodoTool(list: TodoList): ToolDef {
   return {
     name: 'todo_write',
@@ -57,17 +65,38 @@ export function buildTodoTool(list: TodoList): ToolDef {
       'Skip it for single-step or conversational requests.',
     schema: z.object({
       todos: z.array(z.object({
-        content: z.string().min(1).describe('The step, as a short imperative ("Fix the off-by-one in range.ts")'),
-        status: z.enum(['pending', 'in_progress', 'completed']),
-      })).describe('The complete task list'),
+        content: z.string().optional().describe('The step, as a short imperative ("Fix the off-by-one in range.ts")'),
+        status: z.string().optional().describe('pending, in_progress or completed'),
+      }).passthrough()).describe('The complete task list'),
     }),
     source: 'local',
     timeoutMs: 5_000,
     execute: async (params) => {
-      const todos = (Array.isArray(params.todos) ? params.todos : []) as TodoItem[];
-      const active = todos.filter(t => t.status === 'in_progress').length;
-      if (active > 1) {
-        return fail(`${active} items are in_progress; keep exactly one in progress at a time and resend the list.`);
+      // Lenient on purpose. A task list is a crutch; it must never be what sinks
+      // a run. gemma4 (AGX) writes `description` for the step and statuses like
+      // "todo"; rejected, it resent the same call until the loop guard ended the
+      // job — twice in one Nightly Engineer night. Normalize what it meant.
+      const raw = (Array.isArray(params.todos) ? params.todos : []) as Array<Record<string, unknown>>;
+      const todos: TodoItem[] = [];
+      for (const r of raw) {
+        const content = [r.content, r.description, r.task, r.title, r.text, r.step].find(v => typeof v === 'string' && v.trim()) as string | undefined;
+        if (!content) continue;
+        todos.push({ content, status: normalizeStatus(r.status) });
+      }
+      if (raw.length > 0 && todos.length === 0) {
+        return fail('Each item needs its text in "content" (e.g. {"content": "Fix the bug", "status": "in_progress"}).');
+      }
+      const notes: string[] = [];
+      let seenActive = false;
+      for (const t of todos) {
+        if (t.status !== 'in_progress') continue;
+        if (seenActive) { t.status = 'pending'; notes.push(`"${t.content}" set to pending: only one item is in progress at a time.`); }
+        seenActive = true;
+      }
+      // Resending the unchanged list is how small models spin: say so plainly.
+      if (todos.length > 0 && JSON.stringify(todos) === JSON.stringify(list.all())) {
+        const current = todos.find(t => t.status === 'in_progress') ?? todos.find(t => t.status === 'pending');
+        return ok(`No change — the list is already this. ${current ? `Do "${current.content}" now with your other tools, and ` : ''}call todo_write again only when a step's status changes.`);
       }
       list.set(todos);
       const open = list.open().length;
@@ -76,7 +105,7 @@ export function buildTodoTool(list: TodoList): ToolDef {
         : open === 0
           ? 'All items completed.'
           : `${open} item${open === 1 ? '' : 's'} left.`;
-      return ok(`${list.render()}\n\n${tail}`);
+      return ok(`${list.render()}\n\n${tail}${notes.length ? `\n${notes.join('\n')}` : ''}`);
     },
   };
 }
