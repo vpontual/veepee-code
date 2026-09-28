@@ -257,6 +257,11 @@ export class PermissionManager {
     'weather',
     'system_info',
     'news',
+    // Touch only vcode's own state: its task list, and background commands it
+    // started itself (starting one goes through bash's own checks).
+    'todo_write',
+    'bash_output',
+    'kill_shell',
   ]);
 
   /** Git subcommands with no write form — auto-allowed so routine inspection

@@ -23,6 +23,7 @@ import type { LspManager } from '../lsp/manager.js';
 import { notifyLSPs } from '../lsp/manager.js';
 import { formatDiagnostics } from '../lsp/diagnostics.js';
 import { pathToFileUri } from '../lsp/uri.js';
+import { startBackground, adoptBackground, processGroupAlive, buildBashOutputTool, buildKillShellTool } from './background.js';
 
 /** Structured-format extensions we validate at write time. */
 const STRUCTURED_JSON_EXT = new Set(['.json']);
@@ -180,6 +181,8 @@ export function registerCodingTools(ignoreManager?: IgnoreManager, fileTracker?:
     createGlobTool(ignoreManager),
     createGrepTool(ignoreManager),
     createBashTool(fileTracker),
+    buildBashOutputTool(),
+    buildKillShellTool(),
     createGitTool(),
     createGithubTool(),
     createListFilesTool(),
@@ -1242,13 +1245,24 @@ function createGrepTool(ignoreManager?: IgnoreManager): ToolDef {
 function createBashTool(fileTracker?: FileTracker): ToolDef {
   return {
     name: 'bash',
-    description: 'Execute a shell command and return its output. Use for running builds, tests, package managers, system commands, or any operation that needs shell access.',
+    description: 'Execute a shell command and return its output. Use for running builds, tests, package managers, system commands, or any operation that needs shell access. For a dev server, watcher or anything long-running, set run_in_background: true, then use bash_output to read it and kill_shell to stop it.',
     schema: z.object({
       command: z.string().describe('The shell command to execute'),
       cwd: z.string().optional().describe('Working directory for the command'),
       timeout: z.number().optional().describe('Timeout in milliseconds (default 120000)'),
+      run_in_background: z.boolean().optional().describe('Start it and return immediately (dev servers, watchers, long builds). Read it with bash_output.'),
     }),
     execute: async (params) => {
+      // A command that ends in a single `&` means "run this in the background".
+      // Run it that way, tracked, instead of orphaning it: models then hunt the
+      // PID with `pgrep -f`, which also matches their own shell.
+      if (params.run_in_background !== true && /(^|[^&])&\s*$/.test(String(params.command ?? ''))) {
+        params = { ...params, run_in_background: true };
+      }
+      if (params.run_in_background === true) {
+        if (fileTracker) forgetReferencedPaths(fileTracker, params.command as string, resolve((params.cwd as string) || process.cwd()));
+        return startBackground(params.command as string, params.cwd as string | undefined);
+      }
       return new Promise<ToolResult>((res) => {
         const cwd = resolve((params.cwd as string) || process.cwd());
         const timeout = (params.timeout as number) || 120_000;
@@ -1292,10 +1306,22 @@ function createBashTool(fileTracker?: FileTracker): ToolDef {
         child.stdin.end();
 
         let settled = false;
+        let killedByUs = false;
         let graceTimer: ReturnType<typeof setTimeout> | null = null;
         const finish = (result: ToolResult) => {
           if (settled) return;
           settled = true;
+          // Processes the command started with `&` share its process group and
+          // outlive it. Track them, so kill_shell and exit cleanup can reach
+          // them — untracked, the model hunted them with `pgrep -f` and once
+          // left a server running.
+          if (!killedByUs && child.pid !== undefined && processGroupAlive(child.pid)) {
+            const id = adoptBackground(command, cwd, child.pid);
+            const note = `\n[note] Processes this command started are still running, now tracked as ${id}: stop them with kill_shell(id: "${id}").`;
+            result = result.success
+              ? { ...result, output: result.output + note }
+              : { ...result, error: (result.error ?? '') + note };
+          }
           liveBashChildren.delete(killTree);
           clearTimeout(hardTimer);
           if (graceTimer) clearTimeout(graceTimer);
@@ -1304,14 +1330,20 @@ function createBashTool(fileTracker?: FileTracker): ToolDef {
           child.stderr.destroy();
           res(result);
         };
+        // A process backgrounded with `&` mid-command outlives this call and is
+        // tracked by nothing; say how to do it properly.
+        const bgHint = /(^|[^&>|])&(?![&>])/.test(command.replace(/&>|>&|2>&1/g, ''))
+          ? '\n[note] This command started a process with `&`. For servers and watchers use bash with run_in_background: true, then bash_output to read it and kill_shell to stop it — do not look for it with `pgrep -f`, which also matches your own shell.'
+          : '';
         const compose = () => {
           const out = stdoutBuf.text();
           const err = stderrBuf.text();
-          return out + (err ? `\n[stderr]\n${err}` : '');
+          return out + (err ? `\n[stderr]\n${err}` : '') + bgHint;
         };
 
         // Kill the whole process group. Negative pid = the group led by `child`.
         const killTree = (signal: NodeJS.Signals) => {
+          killedByUs = true;
           try {
             if (child.pid !== undefined) process.kill(-child.pid, signal);
           } catch {
