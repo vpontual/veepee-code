@@ -6,21 +6,57 @@ weight: 3
 
 # Configuration
 
-VEEPEE Code stores its configuration in `~/.veepee-code/vcode.config.json`. (Earlier versions used `~/.veepee-code/.env`; on first launch, any existing `.env` is automatically migrated to JSON and renamed to `.env.backup`.) It also supports project-specific instruction files (VEEPEE.md) and stores persistent state in the `~/.veepee-code/` directory.
+VEEPEE Code keeps its global configuration in two files in `~/.veepee-code/`, and every setting lives in exactly one of them:
 
-The setup wizard (`vcode --wizard`) is the easiest way to configure everything interactively. You can also edit the JSON file directly.
+| File | Holds |
+|------|-------|
+| `.env` | Where the models are and every credential: backend, gateway URL, direct server URL, API keys and tokens, search and remote endpoints. Written `0600`. |
+| `settings.json` | Everything structured: model choice (`lockModel`, `model`), size limits, `fleet`, `mcpServers`, `hooks`, `lsp`, `remote.allow`, `rc`, and the rest. |
 
-## Config File Location
+The setup wizard (`vcode --wizard`) writes both; `/setup wizard <step>` edits one step. You can also edit either file by hand: vcode reads them on every start.
 
+Project overrides live in `<project>/.veepee/settings.json` (committed) and `<project>/.veepee/settings.local.json` (gitignored). See [Precedence Summary](#precedence-summary).
+
+## The .env file
+
+`~/.veepee-code/.env` is standard dotenv: `KEY=value`, `#` comments, optional quotes. Only this file is read — a `.env` in your project or in the vcode checkout is not.
+
+| Variable | Setting | Notes |
+|----------|---------|-------|
+| `VEEPEE_CODE_LLM_BACKEND` | `llmBackend` | `ollama` or `openai` |
+| `VEEPEE_CODE_PROXY_URL` | `proxyUrl` | Ollama API / gateway. **Empty** (`VEEPEE_CODE_PROXY_URL=`) means no gateway; absent means `http://localhost:11434`. |
+| `VEEPEE_CODE_OPENAI_BASE_URL` | `openaiBaseUrl` | OpenAI-compatible server (vLLM etc.) |
+| `VEEPEE_CODE_OPENAI_API_KEY` | `openaiApiKey` | Only if the server was started with `--api-key` |
+| `VEEPEE_CODE_DASHBOARD_URL` | `dashboardUrl` | Fleet Manager dashboard |
+| `VEEPEE_CODE_API_TOKEN` | `apiToken` | Bearer token for the local API and Remote Connect |
+| `SEARXNG_URL` | `searxngUrl` | Enables `web_search` |
+| `AGENTLENS_URL` | `agentlensUrl` | Page reader for `web_fetch` |
+| `VEEPEE_CODE_REMOTE_URL`, `VEEPEE_CODE_REMOTE_API_KEY` | `remote.url`, `remote.apiKey` | `remote.allow` stays in settings.json |
+| `VEEPEE_CODE_SYNC_URL`, `_USER`, `_PASS` | `sync.url`, `.user`, `.pass` | `sync.auto` stays in settings.json |
+| `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_HOST` | `langfuse.*` | |
+
+The same variables set in the process environment override the file for one run: `VEEPEE_CODE_PROXY_URL=http://other:11434 vcode`.
+
+A vLLM-only machine, no gateway:
+
+```bash
+VEEPEE_CODE_LLM_BACKEND=openai
+VEEPEE_CODE_OPENAI_BASE_URL=http://your-gpu-box:8000
+VEEPEE_CODE_PROXY_URL=
 ```
-~/.veepee-code/vcode.config.json
+
+An Ollama machine:
+
+```bash
+VEEPEE_CODE_LLM_BACKEND=ollama
+VEEPEE_CODE_PROXY_URL=http://localhost:11434
 ```
 
-A starter file lives in the repo at `vcode.config.example.json`. Project-local overrides are not currently supported in the JSON-based config — settings live in one place per machine.
+The repo ships a commented template at `.env.example`.
 
 ## Configuration Fields
 
-All fields below live in `~/.veepee-code/vcode.config.json`. Run `vcode --wizard` to set them interactively, or edit the file directly.
+Each field below is its `settings.json` name. Fields listed in [The .env file](#the-env-file) are set there instead, under their variable name.
 
 ### Core (Required)
 
@@ -124,7 +160,7 @@ What you give up without a gateway: models the server does not serve (a `reviewM
 | `progressBar` | `true` | Show the bouncing progress bar animation while the agent is working. Toggleable at runtime via `/settings progress-bar`. |
 | `shellHistoryContext` | `true` | Capture the last 20 unique commands from `~/.zsh_history` or `~/.bash_history` once on startup and inject them into the system prompt. Set to `false` to disable. |
 
-## Example .env File
+## Example settings.json
 
 The repo ships an example config at `vcode.config.example.json`:
 
@@ -197,16 +233,13 @@ A fuller config with the optional fields might look like:
 }
 ```
 
-## Migration from .env
+## Migration
 
-Earlier VEEPEE Code versions used `~/.veepee-code/.env`. On first launch, `loadConfig()` calls `migrateEnvToJson()` which:
+Older installs are converted on the first start of a newer vcode, once:
 
-1. Checks for `~/.veepee-code/.env`
-2. Parses the env vars (`VEEPEE_CODE_PROXY_URL`, `VEEPEE_CODE_DASHBOARD_URL`, `VEEPEE_CODE_MODEL`, `VEEPEE_CODE_AUTO_SWITCH`, `VEEPEE_CODE_MAX_MODEL_SIZE`, `VEEPEE_CODE_MIN_MODEL_SIZE`, `VEEPEE_CODE_API_PORT`, `VEEPEE_CODE_API_HOST`, `VEEPEE_CODE_API_TOKEN`, `VEEPEE_CODE_API_EXECUTE`, `SEARXNG_URL`, `VEEPEE_CODE_SYNC_*`, `VEEPEE_CODE_RC_ENABLED`, `VEEPEE_CODE_REMOTE_*`)
-3. Writes them to `vcode.config.json` in the new structured format
-4. Renames the old `.env` to `.env.backup`
-
-This is a one-time migration. New installs go straight to JSON.
+- **`vcode.config.json` → `settings.json`**: renamed; the old file is kept as `vcode.config.json.bak`.
+- **Endpoints and secrets out of `settings.json`**: every setting in the [.env table](#the-env-file) moves into `.env` (a value already in `.env` wins), and the rest of `settings.json` is rewritten without them. A copy is kept as `settings.json.bak-envsplit-<timestamp>`. Installs that relied on the old built-in SearXNG and agentlens addresses get them written into `.env`, since those are no longer defaults.
+- **An old all-in-one `.env`** (model, size limits, API port): those settings move to `settings.json`; the endpoints stay in `.env`. The `.env` is no longer renamed away.
 
 ## Directory Structure
 
@@ -216,8 +249,8 @@ The home directory stores persistent state:
 
 ```
 ~/.veepee-code/
-├── vcode.config.json       # Main configuration
-├── .env.backup             # (only if migrated from older versions)
+├── .env                    # Endpoints and secrets (0600)
+├── settings.json           # Everything else
 ├── VEEPEE.md               # Optional global project instructions (loaded for all projects)
 ├── .veepeignore            # Optional global ignore patterns
 ├── permissions.json        # Persisted permissions: alwaysAllowed + projectAllowed
@@ -253,7 +286,7 @@ your-project/
 
 | Setting | Precedence |
 |---------|------------|
-| `vcode.config.json` | Single file at `~/.veepee-code/vcode.config.json`. CLI flags (`--host`, `--port`) override the corresponding fields at runtime. |
+| Settings | Lowest to highest: `~/.veepee-code/settings.json` < `~/.veepee-code/.env` < `.veepee/settings.json` < `.veepee/settings.local.json` < process environment. CLI flags (`--host`, `--port`) override the corresponding fields at runtime. |
 | `VEEPEE.md` | Workspace > Parent directories (up to 5 levels) > Global (`~/.veepee-code/VEEPEE.md`) — all included with source annotations |
 | `.veepeignore` | Project `.veepeignore` is processed after global `~/.veepee-code/.veepeignore`. Default protected patterns (`.env`, `*.pem`, `*.key`, etc.) are always loaded first. Negation with `!pattern` re-allows. |
 | Permissions | Dangerous patterns (always prompt) → safe-tool allowlist (auto) → project-scoped (`tool:cwd`) → persisted always-allow → session grants → prompt |

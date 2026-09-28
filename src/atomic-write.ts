@@ -15,10 +15,11 @@ import { writeFileSync, renameSync, unlinkSync } from 'fs';
  *
  * Caller is responsible for the parent directory existing, as with writeFileSync.
  */
-export function writeFileAtomicSync(path: string, data: string): void {
+export function writeFileAtomicSync(path: string, data: string, mode?: number): void {
   const tmp = `${path}.tmp-${process.pid}`;
   try {
-    writeFileSync(tmp, data);
+    // `mode` applies at creation, so a secrets file is never briefly world-readable.
+    writeFileSync(tmp, data, mode === undefined ? undefined : { mode });
     renameSync(tmp, path);
   } catch (err) {
     try { unlinkSync(tmp); } catch { /* nothing to clean up */ }

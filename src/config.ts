@@ -2,6 +2,7 @@ import { resolve, join } from 'path';
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'fs';
 import type { LspServerConfig } from './lsp/config.js';
 import { writeFileAtomicSync } from './atomic-write.js';
+import { readEnvFile, updateEnvFile } from './env-file.js';
 
 export interface Config {
   proxyUrl: string;
@@ -199,8 +200,11 @@ const DEFAULTS: Config = {
   apiHost: '127.0.0.1',
   apiToken: null,
   apiExecute: false,
-  searxngUrl: 'http://10.0.153.99:8888',
-  agentlensUrl: 'http://10.0.153.99:7001',
+  // No baked-in addresses: a fresh install on someone else's network must not
+  // quietly call ours. Existing installs that relied on these got them written
+  // into their .env by migrateToEnvFile().
+  searxngUrl: null,
+  agentlensUrl: null,
   progressBar: true,
   modelStick: false,
   sync: null,
@@ -275,60 +279,223 @@ export function getSettingsPath(layer: SettingsLayer, cwd: string = process.cwd(
 
 // ─── Migrations ────────────────────────────────────────────────────────
 
-/** Migrate legacy .env to settings.json. Returns true if migration occurred. */
-export function migrateEnvToJson(): boolean {
-  const configDir = getConfigDir();
-  const envPath = resolve(configDir, '.env');
-  const newPath = getGlobalSettingsPath();
-  const legacyPath = getLegacyGlobalSettingsPath();
+// ─── .env: endpoints and secrets ──────────────────────────────────────
+//
+// ~/.veepee-code/.env holds where the models are and every credential;
+// settings.json holds the structured rest. Each setting lives in exactly one
+// of the two — a value in both would be two answers to one question.
+//
+// Precedence, lowest to highest: settings.json < .env < project settings <
+// local settings < the process environment (VEEPEE_CODE_PROXY_URL=… vcode).
 
-  if (!existsSync(envPath) || existsSync(newPath) || existsSync(legacyPath)) return false;
+export function getEnvFilePath(): string {
+  return resolve(getConfigDir(), '.env');
+}
 
-  const content = readFileSync(envPath, 'utf-8');
-  const env: Record<string, string> = {};
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx > 0) {
-      const key = trimmed.slice(0, eqIdx).trim();
-      const val = trimmed.slice(eqIdx + 1).trim();
-      if (val) env[key] = val;
+type EnvKeyPath = readonly [keyof ConfigFile] | readonly ['remote' | 'sync' | 'langfuse', string];
+
+/** Every setting that lives in .env, and where it lands in the config. */
+export const ENV_KEYS: ReadonlyArray<{ env: string; path: EnvKeyPath; secret?: boolean }> = [
+  { env: 'VEEPEE_CODE_LLM_BACKEND', path: ['llmBackend'] },
+  { env: 'VEEPEE_CODE_PROXY_URL', path: ['proxyUrl'] },
+  { env: 'VEEPEE_CODE_OPENAI_BASE_URL', path: ['openaiBaseUrl'] },
+  { env: 'VEEPEE_CODE_OPENAI_API_KEY', path: ['openaiApiKey'], secret: true },
+  { env: 'VEEPEE_CODE_DASHBOARD_URL', path: ['dashboardUrl'] },
+  { env: 'VEEPEE_CODE_API_TOKEN', path: ['apiToken'], secret: true },
+  { env: 'SEARXNG_URL', path: ['searxngUrl'] },
+  { env: 'AGENTLENS_URL', path: ['agentlensUrl'] },
+  { env: 'VEEPEE_CODE_REMOTE_URL', path: ['remote', 'url'] },
+  { env: 'VEEPEE_CODE_REMOTE_API_KEY', path: ['remote', 'apiKey'], secret: true },
+  { env: 'VEEPEE_CODE_SYNC_URL', path: ['sync', 'url'] },
+  { env: 'VEEPEE_CODE_SYNC_USER', path: ['sync', 'user'] },
+  { env: 'VEEPEE_CODE_SYNC_PASS', path: ['sync', 'pass'], secret: true },
+  { env: 'LANGFUSE_SECRET_KEY', path: ['langfuse', 'secretKey'], secret: true },
+  { env: 'LANGFUSE_PUBLIC_KEY', path: ['langfuse', 'publicKey'] },
+  { env: 'LANGFUSE_HOST', path: ['langfuse', 'host'] },
+];
+
+const NESTED = ['remote', 'sync', 'langfuse'] as const;
+
+/** Turn env vars into a config layer. Only keys that are present count. */
+export function envToConfig(vars: Map<string, string> | Record<string, string | undefined>): ConfigFile {
+  const get = (k: string) => (vars instanceof Map ? vars.get(k) : vars[k]);
+  const out: Record<string, unknown> = {};
+  for (const { env, path } of ENV_KEYS) {
+    const raw = get(env);
+    if (raw === undefined) continue;
+    if (path.length === 1) {
+      const key = path[0];
+      if (key === 'proxyUrl') out.proxyUrl = raw; // "" = no gateway
+      else if (key === 'llmBackend') { if (raw === 'ollama' || raw === 'openai') out.llmBackend = raw; }
+      else out[key] = raw === '' ? null : raw;
+    } else if (raw !== '') {
+      const [obj, field] = path;
+      out[obj] = { ...(out[obj] as object | undefined), [field]: raw };
     }
   }
+  return out as ConfigFile;
+}
 
-  const config: ConfigFile = {
-    proxyUrl: env.VEEPEE_CODE_PROXY_URL || DEFAULTS.proxyUrl,
-    dashboardUrl: env.VEEPEE_CODE_DASHBOARD_URL || DEFAULTS.dashboardUrl,
-    model: env.VEEPEE_CODE_MODEL || null,
-    autoSwitch: env.VEEPEE_CODE_AUTO_SWITCH !== 'false',
-    maxModelSize: parseFloat(env.VEEPEE_CODE_MAX_MODEL_SIZE || '40'),
-    minModelSize: parseFloat(env.VEEPEE_CODE_MIN_MODEL_SIZE || '12'),
-    apiPort: parseInt(env.VEEPEE_CODE_API_PORT || '8484', 10),
-    apiHost: env.VEEPEE_CODE_API_HOST || '127.0.0.1',
-    apiToken: env.VEEPEE_CODE_API_TOKEN || null,
-    apiExecute: env.VEEPEE_CODE_API_EXECUTE === '1' || env.VEEPEE_CODE_API_EXECUTE === 'true',
-    searxngUrl: env.SEARXNG_URL || DEFAULTS.searxngUrl,
-    agentlensUrl: env.AGENTLENS_URL || DEFAULTS.agentlensUrl,
-  };
+/** Split a config into its .env part (as env vars; null = remove) and the rest. */
+export function splitEnvKeys(config: ConfigFile): { env: Record<string, string | null>; rest: ConfigFile } {
+  const rest: Record<string, unknown> = { ...config };
+  const env: Record<string, string | null> = {};
+  for (const { env: name, path } of ENV_KEYS) {
+    if (path.length === 1) {
+      if (!(path[0] in config)) continue;
+      const v = (config as Record<string, unknown>)[path[0]];
+      delete rest[path[0]];
+      if (v === undefined) continue;
+      env[name] = v === null ? (path[0] === 'proxyUrl' ? '' : null) : String(v);
+    } else {
+      const [obj, field] = path;
+      if (!(obj in config)) continue;
+      const v = (config as Record<string, unknown>)[obj];
+      if (v === null) { env[name] = null; continue; } // the whole block cleared
+      if (v && typeof v === 'object' && field in v) {
+        const fv = (v as Record<string, unknown>)[field];
+        env[name] = fv === null || fv === undefined || fv === '' ? null : String(fv);
+      }
+    }
+  }
+  // What remains of a nested block once its env fields are taken out.
+  for (const obj of NESTED) {
+    const v = rest[obj];
+    if (!v || typeof v !== 'object') continue;
+    const fields = ENV_KEYS.filter(k => k.path[0] === obj).map(k => k.path[1] as string);
+    const left = Object.fromEntries(Object.entries(v).filter(([k]) => !fields.includes(k)));
+    if (Object.keys(left).length > 0) rest[obj] = left;
+    else delete rest[obj];
+  }
+  return { env, rest: rest as ConfigFile };
+}
 
-  if (env.VEEPEE_CODE_SYNC_URL && env.VEEPEE_CODE_SYNC_USER && env.VEEPEE_CODE_SYNC_PASS) {
-    config.sync = {
-      url: env.VEEPEE_CODE_SYNC_URL,
-      user: env.VEEPEE_CODE_SYNC_USER,
-      pass: env.VEEPEE_CODE_SYNC_PASS,
-      auto: env.VEEPEE_CODE_SYNC_AUTO === 'true' || env.VEEPEE_CODE_SYNC_AUTO === '1',
-    };
+/** Lay an env-derived layer over a config: nested blocks merge field by field,
+ *  so VEEPEE_CODE_REMOTE_URL does not erase `remote.allow` from settings.json. */
+function overlayEnv(base: ConfigFile, envLayer: ConfigFile): ConfigFile {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(envLayer)) {
+    if ((NESTED as readonly string[]).includes(k) && v && typeof v === 'object') {
+      const prev = out[k];
+      out[k] = { ...(prev && typeof prev === 'object' ? prev : {}), ...v };
+    } else {
+      out[k] = v;
+    }
   }
-  if (env.VEEPEE_CODE_RC_ENABLED === '1' || env.VEEPEE_CODE_RC_ENABLED === 'true') {
-    config.rc = { enabled: true };
+  return out as ConfigFile;
+}
+
+/** The global layer as one config: settings.json with .env laid over it. */
+export function readGlobalConfig(): ConfigFile {
+  const settings = readConfigFileSafe(getGlobalSettingsPath());
+  const global = Object.keys(settings).length > 0 ? settings : readConfigFileSafe(getLegacyGlobalSettingsPath());
+  return overlayEnv(global, envToConfig(readEnvFile(getEnvFilePath())));
+}
+
+/**
+ * Change global settings. Each key goes to its one file: endpoints and secrets
+ * to .env, the rest to settings.json. `undefined` leaves a key alone, `null`
+ * clears it.
+ *
+ * Pass only what changes. Callers used to spread a full loadConfig() into
+ * saveConfigFile(), which wrote every default AND the project's local
+ * overrides into the global file — run /model inside a repo with its own
+ * proxyUrl and that proxy became everyone's.
+ */
+export function updateGlobalConfig(patch: ConfigFile): void {
+  const { env, rest } = splitEnvKeys(patch);
+  mkdirSync(getConfigDir(), { recursive: true });
+  if (Object.keys(env).length > 0) updateEnvFile(getEnvFilePath(), env);
+
+  const path = getGlobalSettingsPath();
+  const current = readConfigFileSafeStrict(path);
+  const next: Record<string, unknown> = { ...splitEnvKeys(current).rest };
+  for (const [k, v] of Object.entries(rest)) {
+    if (v === undefined) continue;
+    if (v === null) { delete next[k]; continue; }
+    const prev = next[k];
+    next[k] = (NESTED as readonly string[]).includes(k) && prev && typeof prev === 'object' && typeof v === 'object'
+      ? { ...prev, ...v }
+      : v;
   }
-  if (env.VEEPEE_CODE_REMOTE_URL && env.VEEPEE_CODE_REMOTE_API_KEY) {
-    config.remote = { url: env.VEEPEE_CODE_REMOTE_URL, apiKey: env.VEEPEE_CODE_REMOTE_API_KEY };
+  // A nested block cleared in the patch (remote: null) is cleared here too.
+  for (const obj of NESTED) if ((patch as Record<string, unknown>)[obj] === null) delete next[obj];
+  writeFileAtomicSync(path, JSON.stringify(next, null, 2) + '\n');
+}
+
+/** Old installs kept only a .env, including settings that are not endpoints. */
+const LEGACY_ENV_SETTINGS: Record<string, (v: string) => [keyof ConfigFile, unknown]> = {
+  VEEPEE_CODE_MODEL: (v) => ['model', v],
+  VEEPEE_CODE_AUTO_SWITCH: (v) => ['autoSwitch', v !== 'false'],
+  VEEPEE_CODE_MAX_MODEL_SIZE: (v) => ['maxModelSize', parseFloat(v)],
+  VEEPEE_CODE_MIN_MODEL_SIZE: (v) => ['minModelSize', parseFloat(v)],
+  VEEPEE_CODE_API_PORT: (v) => ['apiPort', parseInt(v, 10)],
+  VEEPEE_CODE_API_HOST: (v) => ['apiHost', v],
+  VEEPEE_CODE_API_EXECUTE: (v) => ['apiExecute', v === '1' || v === 'true'],
+  VEEPEE_CODE_RC_ENABLED: (v) => ['rc', v === '1' || v === 'true' ? { enabled: true } : null],
+};
+
+/** The addresses DEFAULTS used to carry, kept for installs that relied on them. */
+const FORMER_DEFAULTS: Record<string, string> = {
+  SEARXNG_URL: 'http://10.0.153.99:8888',
+  AGENTLENS_URL: 'http://10.0.153.99:7001',
+};
+
+/**
+ * One-time split into the two files. Returns true when it changed anything.
+ *
+ * - settings.json holding endpoints/secrets (every install before this) → they
+ *   move to .env; settings.json is backed up first. A key already in .env wins.
+ * - a .env holding non-endpoint settings (the oldest installs) → those move to
+ *   settings.json. The .env itself is never renamed away any more.
+ */
+export function migrateToEnvFile(): boolean {
+  const envPath = getEnvFilePath();
+  const settingsPath = getGlobalSettingsPath();
+  const hadEnvFile = existsSync(envPath);
+  const envVars = readEnvFile(envPath);
+  let changed = false;
+
+  const legacy = [...envVars.keys()].filter(k => k in LEGACY_ENV_SETTINGS);
+  if (legacy.length > 0) {
+    const moved: Record<string, unknown> = {};
+    for (const k of legacy) {
+      const [key, value] = LEGACY_ENV_SETTINGS[k](envVars.get(k)!);
+      moved[key] = value;
+    }
+    const current = readConfigFileSafe(settingsPath);
+    writeFileAtomicSync(settingsPath, JSON.stringify({ ...moved, ...current }, null, 2) + '\n');
+    updateEnvFile(envPath, Object.fromEntries(legacy.map(k => [k, null])));
+    changed = true;
   }
 
-  writeFileAtomicSync(newPath, JSON.stringify(config, null, 2) + '\n');
-  renameSync(envPath, resolve(configDir, '.env.backup'));
+  if (!existsSync(settingsPath)) return changed;
+  let settings: ConfigFile;
+  try {
+    settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+  } catch {
+    return changed; // never rewrite a file we cannot read
+  }
+  const { env, rest } = splitEnvKeys(settings);
+  const toWrite: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (v !== null && !envVars.has(k)) toWrite[k] = v;
+  }
+  if (!hadEnvFile) {
+    for (const [k, v] of Object.entries(FORMER_DEFAULTS)) {
+      if (!(k in env) && !envVars.has(k)) toWrite[k] = v;
+    }
+  }
+  if (Object.keys(env).length === 0 && Object.keys(toWrite).length === 0) return changed;
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  writeFileSync(`${settingsPath}.bak-envsplit-${stamp}`, readFileSync(settingsPath, 'utf-8'));
+  if (Object.keys(toWrite).length > 0) updateEnvFile(envPath, toWrite);
+  writeFileAtomicSync(settingsPath, JSON.stringify(rest, null, 2) + '\n');
+  process.stderr.write(
+    `\n  ▸ Config split: endpoints and secrets moved to ${envPath}\n` +
+    `    Everything else stays in ${settingsPath} (backup: settings.json.bak-envsplit-${stamp})\n\n`,
+  );
   return true;
 }
 
@@ -367,6 +534,17 @@ export function migrateLegacyConfig(): boolean {
   return true;
 }
 
+/** Startup must never fail on the split: a read-only config dir (a sandboxed
+ *  service) keeps working, because un-moved keys in settings.json are still
+ *  read — settings.json is the lowest layer, not an ignored one. */
+function migrateToEnvFileSafely(): void {
+  try {
+    migrateToEnvFile();
+  } catch (err) {
+    process.stderr.write(`[VEEPEE Code] warning: could not move endpoints and secrets to .env (${err instanceof Error ? err.message : String(err)}); settings.json is still used as-is.\n`);
+  }
+}
+
 // ─── Layered loading ───────────────────────────────────────────────────
 
 function readConfigFileSafe(path: string): ConfigFile {
@@ -378,6 +556,17 @@ function readConfigFileSafe(path: string): ConfigFile {
     // don't crash. Treat as empty layer; caller continues with other layers.
     process.stderr.write(`[VEEPEE Code] warning: could not parse ${path}: ${err instanceof Error ? err.message : String(err)}\n`);
     return {};
+  }
+}
+
+/** Like readConfigFileSafe, but refuses a corrupt file instead of treating it
+ *  as empty — a writer that read {} would overwrite every setting. */
+function readConfigFileSafeStrict(path: string): ConfigFile {
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8'));
+  } catch (err) {
+    throw new Error(`${path} is not valid JSON (${err instanceof Error ? err.message : String(err)}); fix it before changing settings`);
   }
 }
 
@@ -402,8 +591,8 @@ export interface LoadedConfig extends Config {
 export function loadConfig(configPath?: string): Config {
   // If no explicit path, run migrations first
   if (configPath === undefined) {
-    migrateEnvToJson();
     migrateLegacyConfig();
+    migrateToEnvFileSafely();
   }
 
   let merged: ConfigFile = {};
@@ -412,14 +601,9 @@ export function loadConfig(configPath?: string): Config {
     // Explicit path (used by tests). Empty string = skip file loading entirely.
     if (configPath) merged = readConfigFileSafe(configPath);
   } else {
-    const global = readConfigFileSafe(getGlobalSettingsPath());
-    // Fall back to legacy file if migration somehow didn't run (e.g. perms)
-    const globalEffective = Object.keys(global).length > 0
-      ? global
-      : readConfigFileSafe(getLegacyGlobalSettingsPath());
     const project = readConfigFileSafe(getProjectSettingsPath());
     const local = readConfigFileSafe(getLocalSettingsPath());
-    merged = mergeLayers(globalEffective, project, local);
+    merged = overlayEnv(mergeLayers(readGlobalConfig(), project, local), envToConfig(process.env));
   }
 
   return {
@@ -465,12 +649,9 @@ export function loadConfig(configPath?: string): Config {
 /** Load and return per-layer contents in addition to merged Config. Used by
  *  the /settings command to show provenance ("this value came from project"). */
 export function loadConfigLayered(cwd: string = process.cwd()): LoadedConfig {
-  migrateEnvToJson();
   migrateLegacyConfig();
-  const global = readConfigFileSafe(getGlobalSettingsPath());
-  const globalEffective = Object.keys(global).length > 0
-    ? global
-    : readConfigFileSafe(getLegacyGlobalSettingsPath());
+  migrateToEnvFileSafely();
+  const globalEffective = readGlobalConfig();
   const project = readConfigFileSafe(getProjectSettingsPath(cwd));
   const local = readConfigFileSafe(getLocalSettingsPath(cwd));
   const config = loadConfig() as LoadedConfig;
@@ -481,12 +662,18 @@ export function loadConfigLayered(cwd: string = process.cwd()): LoadedConfig {
 /** Save configuration. Defaults to the global layer (preserves existing
  *  behavior). Pass `layer` to write to project or local instead. */
 export function saveConfigFile(config: ConfigFile, layer: SettingsLayer = 'global'): void {
-  const path = getSettingsPath(layer);
-  // For project/local, ensure parent dir exists.
-  if (layer !== 'global') {
-    const dir = getProjectSettingsDir();
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  if (layer === 'global') {
+    // Endpoints and secrets belong in .env; never let them back into settings.json.
+    const { env, rest } = splitEnvKeys(config);
+    const present = Object.fromEntries(Object.entries(env).filter(([, v]) => v !== null)) as Record<string, string>;
+    if (Object.keys(present).length > 0) updateEnvFile(getEnvFilePath(), present);
+    writeFileAtomicSync(getGlobalSettingsPath(), JSON.stringify(rest, null, 2) + '\n');
+    return;
   }
+  const path = getSettingsPath(layer);
+  // Project/local: ensure the parent dir exists.
+  const dir = getProjectSettingsDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   // Atomic: a truncated settings.json loses apiToken/lockModel and the next
   // start silently falls back to defaults.
   writeFileAtomicSync(path, JSON.stringify(config, null, 2) + '\n');

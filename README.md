@@ -129,21 +129,21 @@ Connect a remote agent (via `/setup wizard remote` or `vcode.config.json`) to au
 
 ## Configuration
 
-All configuration lives in `~/.veepee-code/settings.json`. Run `/setup wizard` to configure interactively, or edit the file directly. Older `vcode.config.json` files are treated as migration input.
+Configuration lives in `~/.veepee-code/`: **`.env`** holds where the models are and every credential (backend, gateway URL, vLLM URL, API keys, tokens); **`settings.json`** holds everything structured. Each setting lives in exactly one of them. Run `/setup wizard` to configure interactively, or edit either file. Full reference: [docs/configuration.md](docs/configuration.md); template: `.env.example`.
 
 Key settings:
 
 | Setting | Description |
 |---------|-------------|
-| `proxyUrl` | Ollama API endpoint (gateway). `""` = none: with `llmBackend: "openai"` everything goes to `openaiBaseUrl` |
-| `llmBackend` | `"ollama"` (default, `/api/chat` via `proxyUrl`) or `"openai"` (direct to a vLLM `/v1` server) |
-| `openaiBaseUrl` | Base URL for the `openai` backend (e.g. `http://host:8000`); `/v1` auto-appended |
+| `VEEPEE_CODE_PROXY_URL` (.env) | Ollama API endpoint (gateway). Empty = none: with the `openai` backend everything goes to the direct server |
+| `VEEPEE_CODE_LLM_BACKEND` (.env) | `ollama` (default, `/api/chat` via the gateway) or `openai` (direct to a vLLM / OpenAI-compatible `/v1` server) |
+| `VEEPEE_CODE_OPENAI_BASE_URL` (.env) | Base URL for the `openai` backend (e.g. `http://host:8000`); `/v1` auto-appended |
 | `model` | Force a specific model (null = auto) |
 | `lockModel` | Pin to one model, disable discovery/auto-switch (set via `/setup wizard model` or edit directly) |
 | `reviewModel` | Different-family model for `/review <prompt>` — one-turn cross-family second opinion. Null = `/review` prints a hint to set it. |
 | `autoSwitch` | Auto-switch models by task complexity |
 | `modelStick` | Lock model across mode switches |
-| `searxngUrl` | SearXNG instance for web search |
+| `SEARXNG_URL` (.env) | SearXNG instance for web search |
 | `remote` | Remote agent bridge (`{ url, apiKey }`) |
 | `sync` | WebDAV sync (`{ url, user, pass, auto }`) |
 | `rc` | Remote Connect (`{ enabled }`) |

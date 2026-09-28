@@ -126,8 +126,10 @@ describe('loadConfig', () => {
     expect(config.apiHost).toBe('127.0.0.1');
     expect(config.apiToken).toBeNull();
     expect(config.apiExecute).toBe(false);
-    // Defaults to the LAN SearXNG instance (28b3c8c), overridable via SEARXNG_URL.
-    expect(config.searxngUrl).toBe('http://10.0.153.99:8888');
+    // No baked-in LAN addresses: a fresh install elsewhere must not call ours.
+    // Installs that relied on the old defaults get them written to .env.
+    expect(config.searxngUrl).toBeNull();
+    expect(config.agentlensUrl).toBeNull();
   });
 });
 

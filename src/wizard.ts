@@ -7,9 +7,9 @@
  */
 
 import { resolve } from 'path';
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { execSync, spawn } from 'child_process';
-import { writeFileAtomicSync } from './atomic-write.js';
+import { readGlobalConfig, updateGlobalConfig, type ConfigFile } from './config.js';
 import chalk from 'chalk';
 import { theme, box, icons } from './tui/theme.js';
 import {
@@ -708,76 +708,45 @@ async function runGitHubAuth(): Promise<void> {
 
 // ─── Config Helpers ─────────────────────────────────────────────────────────
 
-/** Load existing config values (from settings.json, legacy vcode.config.json,
- *  or even-more-legacy .env). Wizard works with the env-var-key shape, so we
- *  flatten the JSON config into that shape regardless of source file. */
+/** Load existing config values in the wizard's env-var-key shape, from the
+ *  global layer as vcode reads it: settings.json with .env over it. */
 function loadExistingConfig(): Record<string, string> {
-  const configDir = resolve(process.env.HOME || '~', '.veepee-code');
-  const newPath = resolve(configDir, 'settings.json');
-  const legacyPath = resolve(configDir, 'vcode.config.json');
-  const envPath = resolve(configDir, '.env');
-  const values: Record<string, string> = {};
-
-  const jsonPath = existsSync(newPath) ? newPath : (existsSync(legacyPath) ? legacyPath : null);
-  if (jsonPath) {
-    // Guarded: the wizard is what a user runs to FIX a broken settings.json,
-    // so throwing a raw SyntaxError here made the repair path the one path
-    // that could not survive the problem. Start from blank instead.
-    let config: Record<string, any>;
-    try {
-      config = JSON.parse(readFileSync(jsonPath, 'utf-8'));
-    } catch {
-      console.error(`Warning: ${jsonPath} is not valid JSON — starting the wizard from defaults.`);
-      config = {};
-    }
-    // Map JSON fields back to wizard env var keys
-    if (config.proxyUrl) values['VEEPEE_CODE_PROXY_URL'] = config.proxyUrl;
-    if (config.llmBackend) values['VEEPEE_CODE_LLM_BACKEND'] = config.llmBackend;
-    if (config.openaiBaseUrl) values['VEEPEE_CODE_OPENAI_BASE_URL'] = config.openaiBaseUrl;
-    if (config.dashboardUrl) values['VEEPEE_CODE_DASHBOARD_URL'] = config.dashboardUrl;
-    if (config.model) values['VEEPEE_CODE_MODEL'] = config.model;
-    if (config.lockModel) values['VEEPEE_CODE_LOCK_MODEL'] = config.lockModel;
-    if (config.autoSwitch !== undefined) values['VEEPEE_CODE_AUTO_SWITCH'] = String(config.autoSwitch);
-    if (config.maxModelSize !== undefined) values['VEEPEE_CODE_MAX_MODEL_SIZE'] = String(config.maxModelSize);
-    if (config.minModelSize !== undefined) values['VEEPEE_CODE_MIN_MODEL_SIZE'] = String(config.minModelSize);
-    if (config.apiPort !== undefined) values['VEEPEE_CODE_API_PORT'] = String(config.apiPort);
-    if (config.searxngUrl) values['SEARXNG_URL'] = config.searxngUrl;
-    if (config.remote?.url) values['VEEPEE_CODE_REMOTE_URL'] = config.remote.url;
-    if (config.remote?.apiKey) values['VEEPEE_CODE_REMOTE_API_KEY'] = config.remote.apiKey;
-  } else if (existsSync(envPath)) {
-    const content = readFileSync(envPath, 'utf-8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIdx = trimmed.indexOf('=');
-      if (eqIdx > 0) {
-        const key = trimmed.slice(0, eqIdx).trim();
-        const val = trimmed.slice(eqIdx + 1).trim();
-        if (val) values[key] = val;
-      }
-    }
+  let config: ConfigFile;
+  try {
+    config = readGlobalConfig();
+  } catch {
+    // The wizard is what a user runs to FIX broken config, so it must start.
+    console.error('Warning: could not read the existing config — starting the wizard from defaults.');
+    config = {};
   }
+  const values: Record<string, string> = {};
+  const set = (key: string, v: unknown) => { if (v !== undefined && v !== null) values[key] = String(v); };
+  set('VEEPEE_CODE_PROXY_URL', config.proxyUrl);
+  set('VEEPEE_CODE_LLM_BACKEND', config.llmBackend);
+  set('VEEPEE_CODE_OPENAI_BASE_URL', config.openaiBaseUrl);
+  set('VEEPEE_CODE_OPENAI_API_KEY', config.openaiApiKey);
+  set('VEEPEE_CODE_DASHBOARD_URL', config.dashboardUrl);
+  set('VEEPEE_CODE_MODEL', config.model);
+  set('VEEPEE_CODE_LOCK_MODEL', config.lockModel);
+  set('VEEPEE_CODE_AUTO_SWITCH', config.autoSwitch);
+  set('VEEPEE_CODE_MAX_MODEL_SIZE', config.maxModelSize);
+  set('VEEPEE_CODE_MIN_MODEL_SIZE', config.minModelSize);
+  set('VEEPEE_CODE_API_PORT', config.apiPort);
+  set('SEARXNG_URL', config.searxngUrl);
+  set('VEEPEE_CODE_REMOTE_URL', config.remote?.url);
+  set('VEEPEE_CODE_REMOTE_API_KEY', config.remote?.apiKey);
   return values;
 }
 
-/** Save config values to ~/.veepee-code/settings.json */
+/** Save the wizard's answers. Each goes to its one file — endpoints and
+ *  secrets to ~/.veepee-code/.env, the rest to settings.json — and every
+ *  setting the wizard does not ask about (fleet, mcpServers, hooks, lsp,
+ *  remote.allow) is left exactly as it was. Replacing settings.json with only
+ *  the wizard's keys used to erase them, and startup re-runs the wizard on its
+ *  own when it cannot reach a model server. */
 function saveConfig(values: Record<string, string>): void {
-  const configDir = resolve(process.env.HOME || '~', '.veepee-code');
-  mkdirSync(configDir, { recursive: true });
-
-  // MERGE onto the existing file. Writing only the wizard's keys erased every
-  // setting it does not ask about — llmBackend, openaiBaseUrl, fleet,
-  // mcpServers, hooks, lsp — and startup re-runs the wizard on its own when it
-  // cannot reach a model server, so one outage could wipe a working config.
-  const settingsPath = resolve(configDir, 'settings.json');
-  let existing: Record<string, unknown> = {};
-  try {
-    if (existsSync(settingsPath)) existing = JSON.parse(readFileSync(settingsPath, 'utf-8'));
-  } catch { /* unreadable: the wizard is how it gets repaired, so start clean */ }
-
   const direct = values['VEEPEE_CODE_LLM_BACKEND'] === 'openai' && !!values['VEEPEE_CODE_OPENAI_BASE_URL'];
-  const config: Record<string, unknown> = {
-    ...existing,
+  const patch: ConfigFile = {
     llmBackend: direct ? 'openai' : 'ollama',
     // "" = no gateway, which is only meaningful with a direct server.
     proxyUrl: values['VEEPEE_CODE_PROXY_URL'] || (direct ? '' : 'http://localhost:11434'),
@@ -787,36 +756,21 @@ function saveConfig(values: Record<string, string>): void {
     minModelSize: parseFloat(values['VEEPEE_CODE_MIN_MODEL_SIZE'] || '12'),
     apiPort: parseInt(values['VEEPEE_CODE_API_PORT'] || '8484', 10),
     searxngUrl: values['SEARXNG_URL'] || null,
+    // Lock takes precedence over default. Both written (including null) so
+    // re-running the wizard can clear a previous lock or default.
+    lockModel: values['VEEPEE_CODE_LOCK_MODEL'] || null,
+    model: values['VEEPEE_CODE_LOCK_MODEL'] ? null : (values['VEEPEE_CODE_MODEL'] || null),
   };
-
-  // Lock takes precedence over default. Writing both keys explicitly (including
-  // null) so re-running the wizard can clear a previous lock or default.
-  if (values['VEEPEE_CODE_LOCK_MODEL']) {
-    config.lockModel = values['VEEPEE_CODE_LOCK_MODEL'];
-    config.model = null;
-  } else {
-    config.lockModel = null;
-    config.model = values['VEEPEE_CODE_MODEL'] || null;
+  if (direct) {
+    patch.openaiBaseUrl = values['VEEPEE_CODE_OPENAI_BASE_URL'];
+    patch.openaiApiKey = values['VEEPEE_CODE_OPENAI_API_KEY'] || null;
   }
-
   // The URL is what makes a remote; the key is optional, and the step's own
-  // validator explicitly supports an unauthenticated bridge. Requiring both
-  // meant the user saw "Connected — N remote tools available" and then got no
-  // remote at all.
-  if (direct) config.openaiBaseUrl = values['VEEPEE_CODE_OPENAI_BASE_URL'];
-
-  if (!values['VEEPEE_CODE_REMOTE_URL']) {
-    // Explicit, now that the file is merged: blanking the URL must remove it.
-    config.remote = null;
-  } else {
-    config.remote = {
-      ...(existing.remote && typeof existing.remote === 'object' ? existing.remote : {}),
-      url: values['VEEPEE_CODE_REMOTE_URL'],
-      apiKey: values['VEEPEE_CODE_REMOTE_API_KEY'] || null,
-    };
-  }
-
-  writeFileAtomicSync(settingsPath, JSON.stringify(config, null, 2) + '\n');
+  // validator explicitly supports an unauthenticated bridge.
+  patch.remote = values['VEEPEE_CODE_REMOTE_URL']
+    ? { url: values['VEEPEE_CODE_REMOTE_URL'], apiKey: values['VEEPEE_CODE_REMOTE_API_KEY'] || '' }
+    : null;
+  updateGlobalConfig(patch);
 }
 
 // ─── Step Runner ────────────────────────────────────────────────────────────
@@ -950,11 +904,13 @@ const DIRECT_URL_STEP: WizardStep = {
   required: true,
   envVars: [
     { key: 'VEEPEE_CODE_OPENAI_BASE_URL', label: 'Server URL', default: 'http://localhost:8000', secret: false, hint: 'e.g., http://your-gpu-box:8000 (with or without /v1)' },
+    { key: 'VEEPEE_CODE_OPENAI_API_KEY', label: 'API key (Enter if none)', default: '', secret: true, hint: 'Only if the server was started with --api-key' },
   ],
   validate: async (values) => {
     const url = values['VEEPEE_CODE_OPENAI_BASE_URL'];
+    if (!url) return { ok: false, message: 'A server URL is required' };
     try {
-      const models = await fetchDirectModels(url);
+      const models = await fetchDirectModels(url, values['VEEPEE_CODE_OPENAI_API_KEY']);
       return { ok: true, message: `Connected — ${models.length} model${models.length === 1 ? '' : 's'} served` };
     } catch (err) {
       return { ok: false, message: `Cannot reach ${url}/v1/models — ${(err as Error).message}` };
@@ -1022,9 +978,10 @@ async function runModelServerStep(
 }
 
 /** `GET /v1/models` on an OpenAI-compatible server, as picker rows. */
-async function fetchDirectModels(baseUrl: string): Promise<TagsModel[]> {
+async function fetchDirectModels(baseUrl: string, apiKey?: string): Promise<TagsModel[]> {
   const base = baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
-  const res = await fetch(`${base}/v1/models`, { signal: AbortSignal.timeout(8000) });
+  const headers: Record<string, string> = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
+  const res = await fetch(`${base}/v1/models`, { headers, signal: AbortSignal.timeout(8000) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json() as { data?: Array<{ id?: string }> };
   return (data.data ?? []).filter(m => m && m.id).map(m => ({ name: m.id! }));
@@ -1130,7 +1087,9 @@ async function runModelStep(
   process.stdout.write(theme.muted(`Fetching model list from ${directUrl ? 'the server' : 'the gateway'}...`));
   let models: TagsModel[] = [];
   try {
-    models = directUrl ? await fetchDirectModels(directUrl) : await fetchProxyModels(proxyUrl);
+    models = directUrl
+      ? await fetchDirectModels(directUrl, values['VEEPEE_CODE_OPENAI_API_KEY'])
+      : await fetchProxyModels(proxyUrl);
   } catch (err) {
     moveTo(row, 5);
     clearLine();

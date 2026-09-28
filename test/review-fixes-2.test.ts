@@ -55,10 +55,14 @@ describe('writeFileAtomicSync', () => {
 
 describe('config and trust files are written atomically', () => {
   it('settings.json and trusted-projects.json use the atomic helper', () => {
-    for (const f of ['../src/config.ts', '../src/wizard.ts', '../src/hooks.ts']) {
+    for (const f of ['../src/config.ts', '../src/env-file.ts', '../src/hooks.ts']) {
       const src = read(new URL(f, import.meta.url), 'utf-8');
       expect(src, f).toContain('writeFileAtomicSync');
     }
+    // The wizard writes only through config.ts (updateGlobalConfig), never directly.
+    const wizard = read(new URL('../src/wizard.ts', import.meta.url), 'utf-8');
+    expect(wizard).toContain('updateGlobalConfig');
+    expect(wizard).not.toMatch(/writeFile(Atomic)?Sync\(/);
     // And no longer write those files directly.
     const cfg = read(new URL('../src/config.ts', import.meta.url), 'utf-8');
     expect(cfg).not.toMatch(/writeFileSync\(path, JSON\.stringify\(config/);

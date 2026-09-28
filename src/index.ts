@@ -2172,9 +2172,8 @@ async function handleCommand(
           modelManager.setAutoSwitch(false);
           tui.updateModel(result.name, profile?.parameterSize);
           // Persist to config file
-          const { getConfigPath, loadConfig, saveConfigFile } = await import('./config.js');
-          const currentConfig = loadConfig();
-          saveConfigFile({ ...currentConfig, model: result.name, autoSwitch: false });
+          const { getConfigPath, updateGlobalConfig } = await import('./config.js');
+          updateGlobalConfig({ model: result.name, autoSwitch: false });
           tui.showInfo(`${theme.accent(result.name)} set as default model`);
         } else {
           modelManager.setAutoSwitch(false);
@@ -2263,16 +2262,14 @@ async function handleCommand(
       if (settingName === 'progress-bar') {
         const newVal = !tui.getProgressBar();
         tui.setProgressBar(newVal);
-        const { getConfigPath, loadConfig, saveConfigFile } = await import('./config.js');
-        const currentConfig = loadConfig();
-        saveConfigFile({ ...currentConfig, progressBar: newVal });
+        const { getConfigPath, updateGlobalConfig } = await import('./config.js');
+        updateGlobalConfig({ progressBar: newVal });
         tui.showInfo(`Progress bar ${newVal ? theme.success('enabled') : theme.muted('disabled')}`);
       } else if (settingName === 'model_stick' || settingName === 'model-stick' || settingName === 'stick') {
         const newVal = !agent.getModelStick();
         agent.setModelStick(newVal);
-        const { loadConfig: reloadConfig, saveConfigFile } = await import('./config.js');
-        const currentConfig = reloadConfig();
-        saveConfigFile({ ...currentConfig, modelStick: newVal });
+        const { updateGlobalConfig } = await import('./config.js');
+        updateGlobalConfig({ modelStick: newVal });
         const currentModel = modelManager.getCurrentModel();
         tui.showInfo(newVal
           ? `Model stick ${theme.success('ON')} — locked to ${theme.accent(currentModel)}. Mode switches won't change the model.`
@@ -3903,12 +3900,11 @@ ${gathered.join('\n\n')}`;
 
         // Generate a token if none exists, or use the existing one
         const { generateRcToken } = await import('./rc.js');
-        const { loadConfig: reloadConfig, saveConfigFile } = await import('./config.js');
-        const currentConfig = reloadConfig();
-        const token = currentConfig.apiToken || generateRcToken();
+        const { loadConfig: reloadConfig, updateGlobalConfig } = await import('./config.js');
+        const token = reloadConfig().apiToken || generateRcToken();
 
-        // Enable RC and save token
-        saveConfigFile({ ...currentConfig, rc: { enabled: true }, apiToken: token });
+        // Enable RC and save token (the token lands in .env, rc in settings.json)
+        updateGlobalConfig({ rc: { enabled: true }, apiToken: token });
         config.rc = { enabled: true };
         config.apiToken = token;
 
