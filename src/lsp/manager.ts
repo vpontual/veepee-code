@@ -212,7 +212,8 @@ export async function notifyLSPs(manager: LspManager, filePath: string): Promise
     // openFile internally translates to didChange when the doc is already
     // known. Either way, the next publishDiagnostics carries the version
     // we just sent.
-    await client.waitForDiagnostics(uri, LSP_DEFAULT_DIAG_TIMEOUT_MS);
+    // No explicit timeout: the server's own diagnosticsTimeoutMs applies, else the default.
+    await client.waitForDiagnostics(uri);
     return { timedOut: client.diagnosticsTimedOut(uri) };
   } catch {
     // Server died mid-call or returned an error — the diagnostics map

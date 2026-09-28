@@ -36,7 +36,23 @@ import { pathToFileUri } from './uri.js';
 interface PendingWaiter {
   expectedVersion: number;
   resolve: (diags: Diagnostic[]) => void;
+  /** Overall deadline timer. */
+  _t?: NodeJS.Timeout;
+  /** Settle timer, armed when an EMPTY answer arrives (see EMPTY_SETTLE_MS). */
+  _settle?: NodeJS.Timeout;
 }
+
+/**
+ * How long an empty diagnostics answer waits for a follow-up publish.
+ *
+ * typescript-language-server publishes syntactic results first and semantic
+ * ones in a second notification, with no document version on either. On an
+ * idle machine its 50ms debounce merges them; under load it does not. Measured
+ * 2026-09-28 with 16 cores busy: `count=0` at +3065ms, then `count=3` at
+ * +3232ms. Taking the first publish reported a type error as a clean edit.
+ * A non-empty answer resolves at once — only "clean" has to wait to be sure.
+ */
+const EMPTY_SETTLE_MS = 400;
 
 /** File extension to LSP languageId. Servers key parsing behaviour off this,
  *  so `.tsx` must be `typescriptreact`, not `typescript`. Anything unlisted
@@ -295,8 +311,10 @@ export class LspClient {
       list.push(waiter);
       this.pendingDiagWaiters.set(uri, list);
 
-      const t = setTimeout(() => {
-        (this.timedOutWaits ??= new Set()).add(uri);
+      waiter._t = setTimeout(() => {
+        // An empty answer that was still settling WAS an answer — not a timeout.
+        if (!waiter._settle) (this.timedOutWaits ??= new Set()).add(uri);
+        if (waiter._settle) clearTimeout(waiter._settle);
         // Remove this waiter and resolve with whatever we have.
         const arr = this.pendingDiagWaiters.get(uri);
         if (arr) {
@@ -305,9 +323,6 @@ export class LspClient {
         }
         resolve(this.diagnostics.get(uri) ?? []);
       }, tmo);
-
-      // Tag the timeout onto the waiter so flushWaiters can clear it.
-      (waiter as PendingWaiter & { _t?: NodeJS.Timeout })._t = t;
     });
   }
 
@@ -317,11 +332,26 @@ export class LspClient {
     const remaining: PendingWaiter[] = [];
     const diags = this.diagnostics.get(uri) ?? [];
     for (const waiter of list) {
-      if (atOrAboveVersion >= waiter.expectedVersion) {
-        const t = (waiter as PendingWaiter & { _t?: NodeJS.Timeout })._t;
-        if (t) clearTimeout(t);
+      if (atOrAboveVersion < waiter.expectedVersion) {
+        remaining.push(waiter);
+      } else if (diags.length > 0) {
+        if (waiter._t) clearTimeout(waiter._t);
+        if (waiter._settle) clearTimeout(waiter._settle);
         waiter.resolve(diags);
       } else {
+        // Empty: give a second (semantic) publish EMPTY_SETTLE_MS to arrive.
+        // Each further empty publish restarts the window.
+        if (waiter._settle) clearTimeout(waiter._settle);
+        waiter._settle = setTimeout(() => {
+          if (waiter._t) clearTimeout(waiter._t);
+          const arr = this.pendingDiagWaiters.get(uri);
+          if (arr) {
+            const idx = arr.indexOf(waiter);
+            if (idx >= 0) arr.splice(idx, 1);
+            if (arr.length === 0) this.pendingDiagWaiters.delete(uri);
+          }
+          waiter.resolve(this.diagnostics.get(uri) ?? []);
+        }, EMPTY_SETTLE_MS);
         remaining.push(waiter);
       }
     }
@@ -333,8 +363,8 @@ export class LspClient {
     for (const [uri, list] of this.pendingDiagWaiters) {
       const diags = this.diagnostics.get(uri) ?? [];
       for (const waiter of list) {
-        const t = (waiter as PendingWaiter & { _t?: NodeJS.Timeout })._t;
-        if (t) clearTimeout(t);
+        if (waiter._t) clearTimeout(waiter._t);
+        if (waiter._settle) clearTimeout(waiter._settle);
         waiter.resolve(diags);
       }
     }
