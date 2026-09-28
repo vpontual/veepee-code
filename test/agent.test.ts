@@ -14,18 +14,6 @@ const PLAN_CONTENT_PATTERNS = [
   /(?:^|\n)(?:step|phase)\s+\d+[.:]/im,
 ];
 
-// Planning intent detection patterns — copied from PLAN_PATTERNS in agent.ts
-const PLAN_PATTERNS = [
-  /\bplan\b/i, /\bdesign\b/i, /\barchitect\b/i, /\bstrateg/i,
-  /\bthink\s+(about|through)\b/i, /\bbrainstorm\b/i, /\bapproach\b/i,
-  /\bhow\s+(should|would|could)\s+(we|i|you)\b/i,
-  /\bbefore\s+(we|i|you)\s+(start|begin|implement|code|build)\b/i,
-  /\bwhat('s|\s+is)\s+the\s+best\s+way\b/i,
-  /\bbreak\s+(this|it)\s+down\b/i, /\bstep\s+by\s+step\b/i,
-  /\bdeepen\b/i, /\belaborate\b/i, /\bexpand\s+on\b/i,
-  /\blet'?s\s+think\b/i, /\bconsider\b/i,
-];
-
 describe('Agent plan content patterns', () => {
   const matchesPlan = (text: string) =>
     PLAN_CONTENT_PATTERNS.some(p => p.test(text));
@@ -71,79 +59,6 @@ describe('Agent plan content patterns', () => {
     // The patterns themselves don't enforce length; agent.ts checks length >= 200
     // But a heading alone without numbered steps won't false-positive on random text
     expect(matchesPlan('Just a short note.')).toBe(false);
-  });
-});
-
-describe('Agent planning intent patterns', () => {
-  const detectsPlanningIntent = (message: string) =>
-    PLAN_PATTERNS.some(p => p.test(message));
-
-  it('detects "plan" keyword', () => {
-    expect(detectsPlanningIntent('Let me plan this feature')).toBe(true);
-  });
-
-  it('detects "design" keyword', () => {
-    expect(detectsPlanningIntent('Can you design the API?')).toBe(true);
-  });
-
-  it('detects "architect" keyword', () => {
-    expect(detectsPlanningIntent('Help me architect this system')).toBe(true);
-  });
-
-  it('detects "strategy" / "strategic"', () => {
-    expect(detectsPlanningIntent('What strategy should we use?')).toBe(true);
-    expect(detectsPlanningIntent('Take a strategic approach')).toBe(true);
-  });
-
-  it('detects "think about/through"', () => {
-    expect(detectsPlanningIntent('Think about the architecture')).toBe(true);
-    expect(detectsPlanningIntent('Let me think through this')).toBe(true);
-  });
-
-  it('detects "how should we"', () => {
-    expect(detectsPlanningIntent('How should we implement caching?')).toBe(true);
-  });
-
-  it('detects "how would you"', () => {
-    expect(detectsPlanningIntent('How would you approach this?')).toBe(true);
-  });
-
-  it('detects "before we start/begin/implement"', () => {
-    expect(detectsPlanningIntent('Before we start, let me outline this')).toBe(true);
-    expect(detectsPlanningIntent('Before I implement, let me think')).toBe(true);
-  });
-
-  it('detects "what is the best way"', () => {
-    expect(detectsPlanningIntent("What's the best way to handle errors?")).toBe(true);
-    expect(detectsPlanningIntent('What is the best way to test?')).toBe(true);
-  });
-
-  it('detects "break this/it down"', () => {
-    expect(detectsPlanningIntent('Break this down into steps')).toBe(true);
-    expect(detectsPlanningIntent('Break it down for me')).toBe(true);
-  });
-
-  it('detects "step by step"', () => {
-    expect(detectsPlanningIntent('Walk me through step by step')).toBe(true);
-  });
-
-  it('detects "brainstorm"', () => {
-    expect(detectsPlanningIntent('Let us brainstorm ideas')).toBe(true);
-  });
-
-  it('detects "elaborate" and "expand on"', () => {
-    expect(detectsPlanningIntent('Please elaborate on the design')).toBe(true);
-    expect(detectsPlanningIntent('Expand on the caching layer')).toBe(true);
-  });
-
-  it('detects "consider"', () => {
-    expect(detectsPlanningIntent('Consider the performance implications')).toBe(true);
-  });
-
-  it('does not match plain coding requests', () => {
-    expect(detectsPlanningIntent('Fix the bug in utils.ts')).toBe(false);
-    expect(detectsPlanningIntent('Add a new endpoint for users')).toBe(false);
-    expect(detectsPlanningIntent('Read the file and show me')).toBe(false);
   });
 });
 
@@ -753,6 +668,24 @@ describe('modes: Act 1, Act 2, Chat — and verify', () => {
     expect(none.agent.cycleMode().mode).toBe('chat');
   });
 
+  it('Act 1 comes back to a /model choice made in Act 1', async () => {
+    const { agent, mm } = await makeAgent({ secondModel: 'second-model' });
+    agent.cycleMode(); agent.cycleMode(); agent.cycleMode(); // back on Act 1
+    agent.setModel('picked-model');
+    mm.setAutoSwitch(false);
+    agent.setAct(2);
+    expect(agent.setAct(1)).toEqual({ model: 'picked-model' });
+    expect(mm.getAutoSwitch()).toBe(false);
+  });
+
+  it('/act on the slot you are already on changes nothing', async () => {
+    const { agent, mm } = await makeAgent({ secondModel: 'second-model' });
+    agent.setModel('picked-model');
+    mm.setAutoSwitch(false);
+    expect(agent.setAct(1)).toEqual({ model: 'picked-model' });
+    expect(mm.getAutoSwitch()).toBe(false);
+  });
+
   it('verify is independent of mode and model', async () => {
     const { agent, mm } = await makeAgent({ secondModel: 'second-model' });
     agent.setVerify(true);
@@ -803,10 +736,15 @@ describe('request_approval', () => {
     expect(agent.getVerify()).toBe(true);
   });
 
-  it('accepts `plan`, which models trained on exit_plan_mode send', async () => {
+  it('accepts `plan`, which models trained on exit_plan_mode send — through the registry', async () => {
     const { agent, tool } = await setup('y');
+    const { ToolRegistry } = await import('../src/tools/registry.js');
+    const reg = new ToolRegistry();
+    reg.register(tool);
     agent.setVerify(true);
-    expect((await tool.execute({ plan: 'do it' })).success).toBe(true);
+    // The registry validates against the schema before execute: the alias must be in it.
+    expect((await reg.execute('request_approval', { plan: 'do it' })).success).toBe(true);
+    expect(agent.getVerify()).toBe(false);
   });
 
   it('says so when verify is already off', async () => {

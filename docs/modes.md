@@ -18,7 +18,7 @@ There is no plan mode any more (retired 2026-09-28). It bundled three things —
 
 Act is where work happens: the agent reads, writes and runs things.
 
-- **Model:** your primary model (`lockModel` / `model`, or the one auto-selected at startup).
+- **Model:** your primary model (`lockModel` / `model`, or the one auto-selected at startup). A `/model` choice made in Act 1 is what Act 1 comes back to after Act 2 or Chat.
 - **Thinking:** ON — Qwen3.6 needs it for reliable tool use.
 - **Tools:** everything registered, under your `/permissions` setting.
 - **Behaviour:** execute first, explain after. The nudges (act-don't-narrate, verify-after-edit, finish-the-task-list) run here.
@@ -48,8 +48,8 @@ Off by default; toggled with `/verify` (or `/verify on|off`). It works in any mo
 
 While it is on:
 
-- Reading, searching, grep, web and the task list work normally.
-- Edits, shell commands and subagents are **refused with a reason the model can read** ("held: verify is on… call request_approval"). The tools stay visible: an older plan mode hid them, and the model — unable to see bash — rebuilt a script's output with ~50 read-only calls instead of saying it could not run it.
+- Only read-only tools run: reading, search, grep, LSP, web search/fetch, read-only git, GET requests and the task list.
+- Everything else — edits, shell (even a command that would normally just prompt, like `rm -rf`), git writes, GitHub, MCP tools and subagents, including ones already running in the background — is **refused with a reason the model can read** ("held: verify is on… call request_approval"). The tools stay visible: an older plan mode hid them, and the model — unable to see bash — rebuilt a script's output with ~50 read-only calls instead of saying it could not run it.
 - When it knows what to do, the model calls `request_approval` with a concrete proposal. You see it in the normal approval prompt. **Approve and verify turns off**; reject and it stays on for a revised proposal.
 - An "always" answer to that prompt is not remembered — every proposal is asked.
 

@@ -3,7 +3,7 @@
  *
  * Verify is vcode's read-only-until-approved hold (`/verify`, off by default).
  * While it is on, edits, shell and subagents are refused with a reason (see
- * VERIFY_REFUSED_TOOLS in permissions.ts). The model reads and explores, then
+ * VERIFY_ALLOWED_TOOLS in permissions.ts). The model reads and explores, then
  * calls `request_approval({ proposal })`. The proposal is shown through the
  * standard permission prompt; on approval verify turns off and the model
  * carries on in whatever mode and model the user was already in.
@@ -31,7 +31,10 @@ export function createRequestApprovalTool(
       'On rejection, verify stays on; revise the proposal and ask again.',
     ].join('\n'),
     schema: z.object({
-      proposal: z.string().describe('What you will change, as markdown: numbered steps, the files involved, and anything the user should decide. This is what they see when approving.'),
+      proposal: z.string().optional().describe('What you will change, as markdown: numbered steps, the files involved, and anything the user should decide. This is what they see when approving.'),
+      // Optional alias: models trained on exit_plan_mode send `plan`. It must be in
+      // the schema, or the registry rejects the call before execute runs.
+      plan: z.string().optional().describe('Deprecated alias of proposal. Send proposal.'),
     }),
     source: 'local',
     execute: async (params: Record<string, unknown>): Promise<ToolResult> => {

@@ -109,7 +109,8 @@ function loadUserBindings(): void {
     // Convert human-readable key names to raw codes
     for (const [key, action] of Object.entries(parsed)) {
       if (typeof action === 'string') {
-        userOverrides[key] = action as KeyAction;
+        // `cyclePosture` was Shift+Tab's action before modes took the key (2026-09-28).
+        userOverrides[key] = (action === 'cyclePosture' ? 'cycleMode' : action) as KeyAction;
       }
     }
   } catch { /* ignore bad config */ }

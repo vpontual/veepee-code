@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PermissionManager, VERIFY_REFUSED_TOOLS } from '../src/permissions.js';
+import { PermissionManager, verifyAllows } from '../src/permissions.js';
 import { readFileSync } from 'fs';
 
 /**
@@ -36,7 +36,12 @@ describe('subagents are not a way around the gate', () => {
   it('refuses `task` under verify', () => {
     // Spawning a subagent with tools:['bash'] reproduced everything the hold
     // exists to prevent, out of sight of the user.
-    expect(VERIFY_REFUSED_TOOLS.has('task')).toBe(true);
+    expect(verifyAllows('task', { prompt: 'x' })).toBe(false);
+  });
+
+  it('never lets a subagent ask for approval (it would lift the parent\'s verify)', () => {
+    const src = readFileSync(new URL('../src/subagent.ts', import.meta.url), 'utf-8');
+    expect((src.match(/toolName === 'request_approval'/g) || []).length).toBe(2);
   });
 
   it('checks permissions before executing a subagent tool call', () => {

@@ -50,11 +50,30 @@ export function nextPosture(current: PermissionPosture): PermissionPosture {
 /** Tools that change the workspace. */
 export const EDIT_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'notebook_edit']);
 
-/** Refused while verify is on, until the user approves — edits plus anything
- *  that can run. `task` is here because a subagent is a general-purpose
- *  executor: spawning one with `tools: ['bash']` reproduced everything the hold
- *  exists to prevent, and did it out of sight of the user. */
-export const VERIFY_REFUSED_TOOLS = new Set([...EDIT_TOOLS, 'bash', 'shell', 'docker', 'task']);
+/**
+ * What still runs while verify is on: tools that only read. Everything else —
+ * edits, shell, git writes, github, subagents, MCP and remote tools — is held
+ * until the user approves. An allowlist on purpose: a hold that names what it
+ * refuses lets through every tool nobody thought of (plan mode's did: git
+ * commit, github and MCP tools all ran under it).
+ */
+export const VERIFY_ALLOWED_TOOLS = new Set([
+  'read_file', 'list_files', 'glob', 'grep', 'repo_map', 'tool_search',
+  'lsp_definition', 'lsp_references', 'lsp_diagnostics', 'lsp_restart',
+  'web_search', 'web_fetch', 'system_info',
+  'todo_write', 'bash_output', 'task_output', 'ask_user', 'request_approval',
+]);
+
+/** True when verify lets this call through: a read-only tool, read-only git, or a GET. */
+export function verifyAllows(toolName: string, args: Record<string, unknown>): boolean {
+  if (VERIFY_ALLOWED_TOOLS.has(toolName)) return true;
+  if (toolName === 'git') return PermissionManager.isReadOnlyGit(args);
+  if (toolName === 'http_request') {
+    const method = String(args.method ?? 'GET').toUpperCase();
+    return method === 'GET' || method === 'HEAD';
+  }
+  return false;
+}
 
 /** Split on shell separators so `ls; rm -rf /` is inspected segment by segment. */
 function segments(command: string): string[] {
@@ -409,22 +428,28 @@ export class PermissionManager {
     toolName: string,
     args: Record<string, unknown>,
     preview?: string,
-    verify = false,
+    verify = this.verifyOn,
   ): Promise<PermissionDecision | { decision: 'deny'; reason: string }> {
-    const dangerous = PermissionManager.DANGEROUS_PATTERNS.find(
-      p => p.tool === toolName && p.check(args)
-    );
-    if (dangerous) return this.prompt(toolName, args, dangerous.reason, preview);
-
-    if (verify && VERIFY_REFUSED_TOOLS.has(toolName)) {
+    // Verify goes FIRST, before the dangerous patterns: those only prompt, and
+    // `rm -rf` must be held under verify, not offered as a yes/no.
+    if (verify && !verifyAllows(toolName, args)) {
       return {
         decision: 'deny',
         reason:
           `${toolName} is held: verify is on, so nothing changes until the user approves. ` +
           `Read, search and analyse freely, then call request_approval with exactly what you intend to change and why. ` +
+          (toolName === 'bash' || toolName === 'shell'
+            // Shell is held whole: guessing which commands only read is how a hold leaks.
+            ? `To inspect without approval, use the git tool (status, log, diff, show), read_file, grep or list_files. `
+            : '') +
           `Do NOT reproduce by hand what this tool would have told you.`,
       };
     }
+
+    const dangerous = PermissionManager.DANGEROUS_PATTERNS.find(
+      p => p.tool === toolName && p.check(args)
+    );
+    if (dangerous) return this.prompt(toolName, args, dangerous.reason, preview);
 
     if (posture === 'auto') return 'allow';
     if (posture === 'accept_edits' && EDIT_TOOLS.has(toolName)) return 'allow';
@@ -433,6 +458,8 @@ export class PermissionManager {
   }
 
   async check(toolName: string, args: Record<string, unknown>, preview?: string): Promise<PermissionDecision> {
+    // Subagents come through here, including ones started before verify went on.
+    if (this.verifyOn && !verifyAllows(toolName, args)) return 'deny';
     const dangerous = PermissionManager.DANGEROUS_PATTERNS.find(
       p => p.tool === toolName && p.check(args)
     );
@@ -521,6 +548,13 @@ export class PermissionManager {
     }
 
     return 'deny';
+  }
+
+  /** Verify: read-only until the user approves. Set by Agent.setVerify. */
+  private verifyOn = false;
+
+  setVerify(on: boolean): void {
+    this.verifyOn = on;
   }
 
   /**

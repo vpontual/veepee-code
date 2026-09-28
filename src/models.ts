@@ -393,6 +393,10 @@ export class ModelManager {
     return this.models.filter(m => m.tier === tier);
   }
 
+  getAutoSwitch(): boolean {
+    return this.autoSwitch;
+  }
+
   setAutoSwitch(enabled: boolean): void {
     this.autoSwitch = enabled;
   }

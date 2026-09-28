@@ -11,7 +11,7 @@
  * is to make each class of issue impossible to re-introduce silently.
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { resolve } from 'path';
 
 const ROOT = resolve(process.cwd());
@@ -205,38 +205,31 @@ try {
   // mcp.ts not present — skip.
 }
 
-// ─── Check 7: VERIFY_REFUSED_TOOLS contains real tool names ────────────
+// ─── Check 7: VERIFY_ALLOWED_TOOLS contains real tool names ────────────
 //
-// Verify refuses tools by name. A typo in VERIFY_REFUSED_TOOLS silently lets
-// the wrong tool through. Verify every entry appears as a `name: '<entry>'`
+// Verify lets tools through by name. A typo in VERIFY_ALLOWED_TOOLS silently
+// holds a read-only tool, or names one that no longer exists. Verify every entry appears as a `name: '<entry>'`
 // somewhere in the tools/ dir (remote/MCP names are dynamic and excluded).
 
 try {
   const perms = readFileSync(resolve(ROOT, 'src/permissions.ts'), 'utf-8');
-  const m = perms.match(/VERIFY_REFUSED_TOOLS\s*=\s*new\s+Set\(\[([\s\S]*?)\]\)/);
+  const m = perms.match(/VERIFY_ALLOWED_TOOLS\s*=\s*new\s+Set\(\[([\s\S]*?)\]\)/);
   if (!m) {
-    issues.push('permissions.ts: VERIFY_REFUSED_TOOLS not found — the verify hold has no list to check.');
+    issues.push('permissions.ts: VERIFY_ALLOWED_TOOLS not found — the verify hold has no list to check.');
   } else {
     const declared = [...m[1].matchAll(/'([a-z_]+)'/g)].map((mm) => mm[1]);
-    const codingFiles = [
-      'src/tools/coding.ts',
-      'src/tools/devops.ts',
-      'src/tools/web.ts',
-      'src/tools/task.ts',
-    ];
     const allNames = new Set();
-    for (const f of codingFiles) {
-      try {
-        const src = readFileSync(resolve(ROOT, f), 'utf-8');
-        for (const nm of src.matchAll(/name:\s*'([a-z_]+)'/g)) allNames.add(nm[1]);
-      } catch { /* file not present */ }
+    for (const f of [...readdirSync(resolve(ROOT, 'src/tools')).map((n) => `src/tools/${n}`), 'src/todo.ts']) {
+      if (!f.endsWith('.ts')) continue;
+      const src = readFileSync(resolve(ROOT, f), 'utf-8');
+      for (const nm of src.matchAll(/name:\s*'([a-z_]+)'/g)) allNames.add(nm[1]);
     }
     // 'shell' and 'docker' come from the remote bridge — not in tools/.
     const allowDynamic = new Set(['shell', 'docker']);
     const orphans = declared.filter((d) => !allNames.has(d) && !allowDynamic.has(d));
     if (orphans.length > 0) {
       issues.push(
-        'permissions.ts: VERIFY_REFUSED_TOOLS entries that don\'t match any registered tool name:\n' +
+        'permissions.ts: VERIFY_ALLOWED_TOOLS entries that don\'t match any registered tool name:\n' +
           orphans.map((n) => `  - '${n}'`).join('\n') +
           '\n  Either fix the typo or remove if the tool no longer exists.',
       );

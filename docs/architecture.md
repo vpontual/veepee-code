@@ -149,7 +149,7 @@ The core ReAct (Reasoning + Acting) loop with mode management and roster integra
 - `setAct(1)` runs on the primary model (captured the first time you leave it); `setAct(2)` on `config.secondModel`, else the first `fallbackModels` entry, switched to by name with no profile required
 - `cycleMode()` (Shift+Tab) goes Act 1 → Act 2 → Chat, skipping Act 2 when it has no model
 - `/chat` uses `roster.chat` model (fallback: fast standard-tier)
-- `verify` is a flag, not a mode: `PermissionManager.checkWithPosture(…, verify)` refuses `VERIFY_REFUSED_TOOLS` with a reason, and `request_approval` (offered to the model only while verify is on) turns it off on approval
+- `verify` is a flag, not a mode: `PermissionManager` holds it and lets only `VERIFY_ALLOWED_TOOLS` (read-only tools, read-only git, GET requests) through — every other tool, MCP included, is refused with a reason, before the dangerous-command prompt; subagents are held too and cannot call `request_approval`, and `request_approval` (offered to the model only while verify is on) turns it off on approval
 - No mode is ever inferred from the wording of a message
 
 **Loop structure:**

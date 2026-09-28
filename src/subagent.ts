@@ -259,6 +259,14 @@ export class SubAgent {
           // subagent with bash" was a complete bypass of both the dangerous-
           // command list and the read-only hold. The allowlist above stays (it is the
           // parent's intent); this is the safety layer underneath it.
+          // Only the main agent asks the user for approval: a subagent's approval
+          // would lift verify for the parent without the parent proposing anything.
+          if (toolName === 'request_approval') {
+            const errMsg = 'request_approval is not available to subagents.';
+            messages.push({ role: 'tool', content: errMsg });
+            toolCallResults.push({ name: toolName, args: toolArgs, result: errMsg });
+            continue;
+          }
           if (this.permissions) {
             const verdict = await this.permissions.check(toolName, toolArgs);
             if (verdict === 'deny') {
@@ -415,6 +423,14 @@ class GenericSubAgent {
           // subagent with bash" was a complete bypass of both the dangerous-
           // command list and the read-only hold. The allowlist stays (it is the parent's
           // intent); this is the safety layer underneath it.
+          // Only the main agent asks the user for approval: a subagent's approval
+          // would lift verify for the parent without the parent proposing anything.
+          if (toolName === 'request_approval') {
+            const errMsg = 'request_approval is not available to subagents.';
+            messages.push({ role: 'tool', content: errMsg });
+            toolCallResults.push({ name: toolName, args: toolArgs, result: errMsg });
+            continue;
+          }
           if (this.permissions) {
             const verdict = await this.permissions.check(toolName, toolArgs);
             if (verdict === 'deny') {

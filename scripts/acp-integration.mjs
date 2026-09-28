@@ -154,15 +154,15 @@ try {
   }
 
   // ── 4. session/set_config_option ──────────────────────────────────────────
-  process.stdout.write('session/set_config_option (mode=plan) ... ');
+  process.stdout.write('session/set_config_option (mode=chat) ... ');
   const configResult = await send('session/set_config_option', {
     sessionId,
     configId: 'mode',
-    value: 'plan',
+    value: 'chat',
   });
   assert(Array.isArray(configResult?.configOptions), 'missing configOptions in response');
   const modeOpt = configResult.configOptions.find((o) => o.id === 'mode');
-  assert(modeOpt?.currentValue === 'plan', `mode not updated to plan, got: ${modeOpt?.currentValue}`);
+  assert(modeOpt?.currentValue === 'chat', `mode not updated to chat, got: ${modeOpt?.currentValue}`);
   console.log('ok');
   ok(`mode now: ${modeOpt.currentValue}`);
 

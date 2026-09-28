@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { nextPosture, PERMISSION_POSTURES, PermissionManager, EDIT_TOOLS, VERIFY_REFUSED_TOOLS } from '../src/permissions.js';
+import { nextPosture, PERMISSION_POSTURES, PermissionManager, EDIT_TOOLS, verifyAllows } from '../src/permissions.js';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -47,18 +47,64 @@ describe('posture behaviour', () => {
     expect(asked).toBe(true);
   });
 
-  it('verify refuses mutations WITH a reason the model can read, in every posture', async () => {
+  // What must be HELD under verify: everything that is not read-only, including
+  // tools nobody listed (MCP), git writes, and commands that would normally only prompt.
+  const HELD: Array<[string, Record<string, unknown>]> = [
+    ...[...EDIT_TOOLS].map(t => [t, { path: 'a.ts' }] as [string, Record<string, unknown>]),
+    ['bash', { command: 'ls' }],
+    ['bash', { command: 'rm -rf build' }],
+    ['shell', { command: 'x' }],
+    ['docker', { action: 'ps' }],
+    ['task', { prompt: 'x' }],
+    ['git', { args: 'commit -am x' }],
+    ['git', { args: 'checkout -- .' }],
+    ['github', { action: 'pr_merge' }],
+    ['kill_shell', { id: '1' }],
+    ['update_memory', { text: 'x' }],
+    ['http_request', { url: 'http://x', method: 'POST' }],
+    ['mcp__pinky__pinky_remember', { text: 'x' }],
+  ];
+
+  it('verify refuses everything not read-only WITH a reason, in every posture, before any prompt', async () => {
     const perms = isolated();
+    let asked = false;
+    perms.setPromptHandler(async () => { asked = true; return 'y'; });
     for (const posture of PERMISSION_POSTURES) {
-      for (const t of VERIFY_REFUSED_TOOLS) {
-        const r = await perms.checkWithPosture(posture, t, { command: 'x', path: 'a.ts' }, undefined, true);
-        expect(typeof r).toBe('object');
+      for (const [t, args] of HELD) {
+        const r = await perms.checkWithPosture(posture, t, args, undefined, true);
+        expect(typeof r, `${posture} ${t} ${JSON.stringify(args)}`).toBe('object');
         expect((r as { decision: string }).decision).toBe('deny');
         expect((r as { reason: string }).reason).toMatch(/request_approval/);
         // The lesson from the drift incident: never silently substitute.
         expect((r as { reason: string }).reason).toMatch(/Do NOT reproduce by hand/);
       }
     }
+    expect(asked).toBe(false);
+  });
+
+  it('points a held shell command at the read-only tools', async () => {
+    const r = await isolated().checkWithPosture('manual', 'bash', { command: 'git log -1' }, undefined, true);
+    expect((r as { reason: string }).reason).toMatch(/use the git tool/);
+  });
+
+  it('verify lets read-only calls through', () => {
+    for (const [t, args] of [
+      ['read_file', {}], ['grep', {}], ['web_search', {}], ['lsp_references', {}],
+      ['git', { args: 'status' }], ['git', { args: 'log --oneline' }],
+      ['http_request', { url: 'http://x' }], ['request_approval', {}],
+    ] as Array<[string, Record<string, unknown>]>) {
+      expect(verifyAllows(t, args), t).toBe(true);
+    }
+  });
+
+  it('verify holds subagents too: plain check() denies while it is on', async () => {
+    const perms = isolated();
+    perms.setPromptHandler(async () => 'y');
+    perms.setVerify(true);
+    expect(await perms.check('bash', { command: 'ls' })).toBe('deny');
+    expect(await perms.check('read_file', { path: 'a' })).toBe('allow');
+    perms.setVerify(false);
+    expect(await perms.check('bash', { command: 'ls' })).toBe('allow');
   });
 
   it('verify still allows reading, and asking for approval', async () => {

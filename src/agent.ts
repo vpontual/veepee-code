@@ -370,8 +370,10 @@ export class Agent {
   private mode: AgentMode = 'act';
   /** Which model act mode runs on: 1 = the primary, 2 = the second model. */
   private actSlot: ActSlot = 1;
-  /** The slot-1 model, captured the first time the user leaves it. */
+  /** The slot-1 model and its auto-switch setting, recorded EVERY time Act 1
+   *  is left — so a /model choice made in Act 1 is what Act 1 returns to. */
   private primaryModel: string | null = null;
+  private primaryAutoSwitch: boolean | null = null;
   /** Read-only until approved: edits, shell and subagents are refused until the
    *  user approves a proposal via request_approval. Off by default. */
   private verify = false;
@@ -529,6 +531,7 @@ export class Agent {
 
   setVerify(on: boolean): void {
     this.verify = on;
+    this.permissions.setVerify(on); // subagents check through the manager too
     this.context.setVerify(on);
   }
 
@@ -547,25 +550,30 @@ export class Agent {
    * (see clientFor). Returns null when slot 2 has no model configured.
    */
   setAct(slot: ActSlot): { model: string } | null {
-    if (this.primaryModel === null) {
-      // Leaving the primary for the first time: remember it, from wherever we are.
-      this.primaryModel = this.mode === 'act' && this.actSlot === 1
-        ? this.modelManager.getCurrentModel()
-        : (this.previousModel ?? this.modelManager.getCurrentModel());
-    }
     const target = this.slotModel(slot);
     if (!target) return null;
+    // Already there: nothing to switch, and nothing to undo (a /model choice stays).
+    if (this.mode === 'act' && this.actSlot === slot) return { model: this.modelManager.getCurrentModel() };
+    this.leavingAct1();
     this.mode = 'act';
     this.actSlot = slot;
     this.previousModel = null;
     this.context.setMode('act');
     if (!this.modelStick) {
       this.modelManager.switchTo(target);
-      // Auto-switching would walk away from the model the user just picked.
-      this.modelManager.setAutoSwitch(slot === 1 && this.config.autoSwitch);
+      // Act 2 never auto-switches: it would walk away from the model just picked.
+      // Act 1 gets back whatever it had when it was left.
+      this.modelManager.setAutoSwitch(slot === 1 ? (this.primaryAutoSwitch ?? this.config.autoSwitch) : false);
     }
     this.context.setSystemPrompt(this.modelManager.getCurrentModel());
     return { model: this.modelManager.getCurrentModel() };
+  }
+
+  /** Record Act 1's model and auto-switch setting on the way out of it. */
+  private leavingAct1(): void {
+    if (this.mode !== 'act' || this.actSlot !== 1) return;
+    this.primaryModel = this.modelManager.getCurrentModel();
+    this.primaryAutoSwitch = this.modelManager.getAutoSwitch();
   }
 
   /** Shift+Tab: Act 1 -> Act 2 -> Chat -> Act 1. Act 2 is skipped when it has no model. */
@@ -582,7 +590,7 @@ export class Agent {
 
   /** Enter chat mode — web tools only, fastest conversational model from roster (unless model_stick is on) */
   enterChatMode(): { model: string } {
-    if (this.primaryModel === null && this.actSlot === 1) this.primaryModel = this.modelManager.getCurrentModel();
+    this.leavingAct1();
     this.mode = 'chat';
     this.previousModel = this.modelManager.getCurrentModel();
     this.context.setMode('chat');
