@@ -85,3 +85,31 @@ export function loadAgentDefinitions(cwd: string = process.cwd()): AgentDefiniti
   }
   return [...byName.values()];
 }
+
+/**
+ * Agents vcode supplies itself; a user or project agent of the same name wins.
+ *
+ * `reviewer` lets the model ask for the cross-family second opinion on its
+ * own. /review already did this, but only when the user typed it; the model
+ * finishing a change had no way to ask. Runs on `reviewModel` (a different
+ * model family on different hardware), read-only.
+ */
+export function withBuiltinAgents(defs: AgentDefinition[], reviewModel: string | null): AgentDefinition[] {
+  const out = [...defs];
+  if (reviewModel && !out.some(d => d.name === 'reviewer')) {
+    out.push({
+      name: 'reviewer',
+      description: `Independent code review on ${reviewModel}. Before calling a non-trivial change done, send it the diff (or the files) and what the change is meant to do.`,
+      tools: ['read_file', 'grep', 'glob', 'list_files', 'bash'],
+      model: reviewModel,
+      instructions: [
+        'You are an independent code reviewer from a different model family than the author.',
+        'Review the change you are given for real defects only: wrong logic, missed cases, broken error handling, security problems, tests that do not test the claim.',
+        'Read the surrounding code before judging. Run read-only commands (git diff, the tests) if useful; never edit anything.',
+        'Answer with a short list of findings, each with file:line and why it is wrong, most severe first — or say plainly that you found nothing wrong. No style nits, no praise.',
+      ].join(' '),
+      source: '(built in)',
+    });
+  }
+  return out;
+}

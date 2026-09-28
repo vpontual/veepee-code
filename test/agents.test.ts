@@ -34,3 +34,27 @@ describe('loadAgentDefinitions', () => {
     expect(loadAgentDefinitions(proj)[0]).toMatchObject({ name: 'helper', tools: undefined, instructions: 'Just instructions, no front matter.' });
   });
 });
+
+import { withBuiltinAgents } from '../src/agents.js';
+import { createTaskTool } from '../src/tools/task.js';
+
+describe('built-in reviewer and task lookup', () => {
+  it('adds a reviewer on reviewModel unless one is defined', () => {
+    const r = withBuiltinAgents([], 'gemma4:26b-a4b').find(a => a.name === 'reviewer')!;
+    expect(r.model).toBe('gemma4:26b-a4b');
+    expect(r.tools).not.toContain('edit_file');
+    expect(withBuiltinAgents([], null)).toEqual([]);
+    const mine = { name: 'reviewer', description: 'mine', instructions: 'x', source: 'f' };
+    expect(withBuiltinAgents([mine], 'gemma4:26b-a4b')).toEqual([mine]);
+  });
+
+  it('resolves an agent name the model copied with its label', async () => {
+    let got: Record<string, unknown> | null = null;
+    const mgr = { runTask: async (o: Record<string, unknown>) => { got = o; return { id: 'sa-1', result: { success: true, content: 'ok', model: 'm', elapsed: 1, toolCalls: [] } }; } };
+    const tool = createTaskTool(mgr as never, withBuiltinAgents([], 'gemma4:26b-a4b'));
+    const r = await tool.execute({ prompt: 'check', agent: 'reviewer [gemma4:26b-a4b]' });
+    expect(r.success).toBe(true);
+    expect(got!.model).toBe('gemma4:26b-a4b');
+    expect(tool.description).toContain('reviewer — ');
+  });
+});

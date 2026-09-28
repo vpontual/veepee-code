@@ -322,6 +322,7 @@ When modifying code, follow this sequence:
    - Python: \`bash("python -m py_compile <file>")\` for syntax check
    - If tests exist, run them to confirm nothing broke
 5. **Fix:** If verification fails, read the error output carefully and fix before declaring done.
+6. **Review:** For a non-trivial change, if the task tool lists a \`reviewer\` agent, run \`task(agent: "reviewer")\` with the diff and what the change is for, and address real findings before declaring done.
 
 **edit_file tips for accuracy:**
 - The old_string must be an EXACT match including whitespace/indentation

@@ -20,7 +20,7 @@ export function createTaskTool(subagentMgr: SubAgentManager, agents: AgentDefini
   const roster = agents.length === 0 ? [] : [
     '',
     'Named agents (pass `agent`; its instructions, tools and model become the defaults):',
-    ...agents.map(a => `  • ${a.name}${a.model ? ` [${a.model}]` : ''} — ${a.description.split(/(?<=\.)\s/)[0].slice(0, 160)}`),
+    ...agents.map(a => `  • ${a.name} — ${a.description.split(/(?<=\.)\s/)[0].slice(0, 160)}${a.model ? ` (runs on ${a.model})` : ''}`),
   ];
   return {
     name: 'task',
@@ -54,8 +54,10 @@ export function createTaskTool(subagentMgr: SubAgentManager, agents: AgentDefini
     }),
     source: 'local',
     execute: async (params: Record<string, unknown>): Promise<ToolResult> => {
-      const def = typeof params.agent === 'string' ? byName.get(params.agent) : undefined;
-      if (typeof params.agent === 'string' && !def) {
+      // Models copy labels: accept "reviewer [gemma4:26b-a4b]" or "reviewer (…)" as "reviewer".
+      const agentName = typeof params.agent === 'string' ? params.agent.replace(/\s*[[(].*$/, '').trim() : undefined;
+      const def = agentName ? byName.get(agentName) : undefined;
+      if (agentName && !def) {
         return { success: false, output: '', error: `No agent named "${params.agent}". Available: ${[...byName.keys()].join(', ') || '(none)'}` };
       }
       const { id, result } = await subagentMgr.runTask({
