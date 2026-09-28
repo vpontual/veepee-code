@@ -23,6 +23,49 @@ fail() { echo -e "  ${RED}✗${NC} $1"; }
 info() { echo -e "  ${BLUE}▸${NC} $1"; }
 warn() { echo -e "  ${YELLOW}⚠${NC} $1"; }
 
+# Run a slow step with its output in a log and a running timer, so it never
+# looks frozen: `npm ci` printed nothing for minutes and read as a hang (and
+# once really was one — see NPM_FLAGS). On failure the log's tail is shown
+# instead of being thrown away. Usage: run_step "Label" command args...
+run_step() {
+  local label="$1"; shift
+  local log start pid rc
+  log="$(mktemp)"
+  start=$SECONDS
+  "$@" >"$log" 2>&1 &
+  pid=$!
+  if [ -t 1 ]; then
+    while kill -0 "$pid" 2>/dev/null; do
+      printf "\r  ${BLUE}▸${NC} %s ${DIM}%ss${NC} " "$label" "$((SECONDS - start))"
+      sleep 1
+    done
+    printf "\r\033[K"
+  else
+    info "$label"
+  fi
+  if wait "$pid"; then rc=0; else rc=$?; fi
+  if [ "$rc" -eq 0 ]; then
+    ok "${label%...} ${DIM}($((SECONDS - start))s)${NC}"
+  else
+    fail "${label%...} failed after $((SECONDS - start))s:"
+    tail -n 20 "$log" | sed 's/^/      /'
+  fi
+  rm -f "$log"
+  return "$rc"
+}
+
+# A fingerprint of a lock file, to skip reinstalling unchanged dependencies.
+lock_sum() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1
+}
+
+# --no-audit / --no-fund: the audit is a POST to the registry after the install,
+# and a stale connection left one hanging for 10+ minutes with every package
+# already in place. Nothing here needs it. A fetch timeout turns any other dead
+# connection into a retry instead of a hang.
+NPM_FLAGS=(--ignore-scripts --no-audit --no-fund --fetch-timeout=60000 --fetch-retries=2)
+install_deps() { npm ci "${NPM_FLAGS[@]}" || npm install "${NPM_FLAGS[@]}"; }
+
 # ─── Full Install ────────────────────────────────────────────────────────────
 
 echo ""
@@ -111,12 +154,18 @@ ok "Source ready"
 
 # ─── Step 4: Build ───────────────────────────────────────────────────────────
 
-info "Installing dependencies..."
-npm ci --ignore-scripts 2>/dev/null || npm install --ignore-scripts
+# npm ci wipes node_modules and reinstalls everything, which is minutes of work
+# when nothing changed. The stamp lives inside node_modules, so any real
+# reinstall (or a deleted node_modules) clears it.
+DEPS_STAMP="node_modules/.vcode-lock-sha"
+if [ -f "$DEPS_STAMP" ] && [ "$(cat "$DEPS_STAMP")" = "$(lock_sum package-lock.json)" ]; then
+  ok "Dependencies unchanged"
+else
+  run_step "Installing dependencies..." install_deps
+  lock_sum package-lock.json > "$DEPS_STAMP"
+fi
 
-info "Building..."
-npm run build
-ok "Build complete"
+run_step "Building..." npm run build
 
 # The Remote Connect web UI is a separate Vite app that builds into dist/web.
 #
@@ -127,10 +176,14 @@ ok "Build complete"
 #
 # Skipped entirely with VEEPEE_SKIP_WEB=1.
 if [ "${VEEPEE_SKIP_WEB:-0}" != "1" ] && [ -d web ]; then
-  info "Building the web UI..."
-  if (cd web && { npm ci --silent 2>/dev/null || npm install --silent; } && npm run build --silent) >/dev/null 2>&1; then
-    ok "Web UI built"
-  else
+  build_web() {
+    cd web || return 1
+    if ! { [ -f node_modules/.vcode-lock-sha ] && [ "$(cat node_modules/.vcode-lock-sha)" = "$(lock_sum package-lock.json)" ]; }; then
+      install_deps && lock_sum package-lock.json > node_modules/.vcode-lock-sha || return 1
+    fi
+    npm run build
+  }
+  if ! run_step "Building the web UI..." build_web; then
     warn "Web UI build failed — /rc will serve the legacy page. Build it later with: (cd web && npm install && npm run build)"
   fi
 fi
@@ -139,7 +192,7 @@ fi
 
 # Prefer npm link (uses nvm's bin dir, no sudo needed)
 info "Linking vcode command..."
-npm link 2>/dev/null && {
+npm link --no-audit --no-fund >/dev/null 2>&1 && {
   ok "vcode linked via npm"
 } || {
   # Fallback: manual symlink
