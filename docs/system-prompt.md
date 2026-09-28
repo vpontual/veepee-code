@@ -145,6 +145,18 @@ tsconfig.json
 
 If the tree exceeds 150 entries, it is truncated with a note directing the model to use `glob` or `list_files` for deeper exploration.
 
+## Operator Context (Pinky)
+
+When the operator keeps a Pinky brain — a folder of markdown with their rules, profile, voice and a cross-machine index — vcode puts it in the prompt as `## Operator Context (Pinky)`.
+
+- **Where it is read from:** `$PINKY_ROOT`, a clone marked with `.this-host`, `~/pinky`, `~/Nextcloud/pinky`, and otherwise a mirror in `~/.veepee-code/cache/pinky/`.
+- **The mirror:** a machine needs no clone of its own. At startup, with no local clone, vcode calls `pinky_context` on a connected MCP server (the Pinky MCP returns `PINKY.md` and `identity/*.md` from its host's canonical clone) and writes the files there. It is refreshed on every start that reaches the server and used as-is when it cannot; a real clone always wins.
+- **Budget:** 16,000 characters. `identity/rules.md` goes in first because it changes behaviour; `PINKY.md`, an index, becomes a pointer the model can `read_file`.
+- **Shared memory:** when the `mcp__pinky__*` tools are connected, the prompt tells the model to recall at the start of a task and to correct facts with `pinky_update` rather than restate them.
+- **Subagents** get the rules in short form (`pinkyShortRules`): each rule's bold lead and first sentence, under its heading, with a pointer to the full file (~4.6k characters).
+
+Without Pinky, none of this is added.
+
 ## VEEPEE.md Injection
 
 Project instructions from VEEPEE.md files are loaded hierarchically and injected into the prompt. See the [VEEPEE.md documentation](veepee-md.md) for details.

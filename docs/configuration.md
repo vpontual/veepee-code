@@ -296,7 +296,7 @@ In goal mode (`vcode --goal`, `/goal`) and `--improve`, vcode approves ordinary 
 Older installs are converted on the first start of a newer vcode, once:
 
 - **`vcode.config.json` → `settings.json`**: renamed; the old file is kept as `vcode.config.json.bak`.
-- **Endpoints and secrets out of `settings.json`**: every setting in the [.env table](#the-env-file) moves into `.env` (a value already in `.env` wins), and the rest of `settings.json` is rewritten without them. A copy is kept as `settings.json.bak-envsplit-<timestamp>`. Installs that relied on the old built-in SearXNG and agentlens addresses get them written into `.env`, since those are no longer defaults.
+- **Endpoints and secrets out of `settings.json`**: every setting in the [.env table](#the-env-file) moves into `.env` (a value already in `.env` wins), and the rest of `settings.json` is rewritten without them. A copy is kept as `settings.json.bak-envsplit-<timestamp>`. It runs only when something actually moves: a cleared block such as `"sync": null` stays where it is. Installs that relied on the old built-in SearXNG and agentlens addresses get them written into `.env`, since those are no longer defaults.
 - **An old all-in-one `.env`** (model, size limits, API port): those settings move to `settings.json`; the endpoints stay in `.env`. The `.env` is no longer renamed away.
 
 ## Directory Structure
@@ -311,6 +311,8 @@ The home directory stores persistent state:
 ├── settings.json           # Everything else
 ├── VEEPEE.md               # Optional global project instructions (loaded for all projects)
 ├── .veepeignore            # Optional global ignore patterns
+├── cache/pinky/            # Mirror of the operator's Pinky files (no local clone; see system-prompt.md)
+├── logs/mcp-<name>.log     # MCP servers' stderr (only error lines reach the terminal)
 ├── permissions.json        # Persisted permissions: alwaysAllowed + projectAllowed
 ├── capabilities.json       # Cached tool-calling probe results per model
 ├── keybindings.json        # Optional user keybinding overrides
