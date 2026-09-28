@@ -7,7 +7,7 @@ import { parseTextToolCalls, TextToolCallGate } from './text-tool-calls.js';
 import { ollamaNumCtx } from './ollama-context.js';
 import { TodoList, buildTodoTool } from './todo.js';
 import type { ToolResult } from './tools/types.js';
-import { retryDecision } from './retry.js';
+import { retryDecision, isTransportFailure, describeError } from './retry.js';
 import { killRunningBashCommands } from './tools/coding.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { PermissionManager } from './permissions.js';
@@ -348,6 +348,12 @@ export function shouldForceVerify(opts: {
  * before committing any response headers.
  */
 
+
+/** After this many failed attempts on an unreachable model, move to a fallback. */
+const FALLBACK_AFTER_ATTEMPTS = 2;
+/** How long a model that failed is skipped before being tried again. */
+const MODEL_DOWN_MS = 2 * 60_000;
+
 export class AgentBusyError extends Error {
   readonly code = 'AGENT_BUSY';
   constructor(message = 'agent busy — a run is already in progress') {
@@ -392,6 +398,9 @@ export class Agent {
   /** Models the direct (openai-backend) endpoint actually serves. Empty when
    *  the gateway is the primary transport, since it fronts the whole fleet. */
   private directModels = new Set<string>();
+  /** Models that just failed at the transport level, and until when to skip
+   *  them (see pickModel). */
+  private modelDownUntil = new Map<string, number>();
   /** This agent's task list (todo_write) — see todo.ts. */
   readonly todos = new TodoList();
   private readonly todoTool = buildTodoTool(this.todos);
@@ -770,6 +779,23 @@ export class Agent {
       const ids = (((await res.json()) as { data?: Array<{ id?: string }> }).data ?? []).map(m => m.id).filter((x): x is string => !!x);
       if (ids.length > 0) this.directModels = new Set(ids);
     } catch { /* keep the primary assumption */ }
+  }
+
+  /** The model to use now: the primary, unless it failed recently, in which
+   *  case the first fallback that has not. All down = try the primary again. */
+  private pickModel(primary: string): string {
+    const now = Date.now();
+    for (const m of [primary, ...this.config.fallbackModels]) {
+      if ((this.modelDownUntil.get(m) ?? 0) <= now) return m;
+    }
+    return primary;
+  }
+
+  /** Is there a fallback other than `failing` that is not itself marked down? */
+  private hasUsableFallback(failing: string): boolean {
+    const now = Date.now();
+    return [this.modelManager.getCurrentModel(), ...this.config.fallbackModels]
+      .some(m => m !== failing && (this.modelDownUntil.get(m) ?? 0) <= now);
   }
 
   /** Tools this agent handles itself (its own task list); the rest go to the registry. */
@@ -1201,6 +1227,7 @@ export class Agent {
     // Tier 3 #1: force-act guard — track whether the model has taken ANY action this
     // message, and whether we've already nudged it to stop narrating and act.
     let hasActedThisMessage = false;
+    const announcedFallback = new Set<string>();
     this.todoNudged = false; // one task-list reminder per user message
     let forcedActCount = 0;
     // Daily-driver #1 (self-repair): true once code is edited, cleared when the model runs
@@ -1262,7 +1289,12 @@ export class Agent {
         }
       }
 
-      const currentModel = this.modelManager.getCurrentModel();
+      const primaryModel = this.modelManager.getCurrentModel();
+      const currentModel = this.pickModel(primaryModel);
+      if (currentModel !== primaryModel && !announcedFallback.has(currentModel)) {
+        announcedFallback.add(currentModel);
+        yield { type: 'info', content: `${primaryModel} is unreachable — continuing on ${currentModel}` };
+      }
 
       // Build messages with system prompt
       const contextMessages = this.context.getMessages();
@@ -1406,6 +1438,10 @@ export class Agent {
                 this.noThinkModels.add(currentModel);
                 continue; // same request without `think` (chatRequest reads the set)
               }
+              // With a fallback available, stop waiting on a server that cannot
+              // be reached after two attempts (~1 min) instead of up to ten
+              // minutes; the turn continues on the next model.
+              if (attempt >= FALLBACK_AFTER_ATTEMPTS && isTransportFailure(err) && this.hasUsableFallback(currentModel)) throw err;
               const decision = retryDecision(err, attempt);
               if (!decision.retry) throw err;
               await new Promise(r => setTimeout(r, decision.delayMs));
@@ -1551,6 +1587,16 @@ export class Agent {
         if (wasAborted) {
           yield { type: 'error', error: 'Response timed out or interrupted' };
           return;
+        }
+        // The server could not be reached, or dropped the connection mid-reply
+        // (a Jetson resetting under load did exactly this and killed the run).
+        // Nothing from this attempt reached the context — tool calls only run
+        // after the stream — so redo the step on the next model.
+        if (isTransportFailure(err) && this.hasUsableFallback(currentModel)) {
+          this.modelDownUntil.set(currentModel, Date.now() + MODEL_DOWN_MS);
+          yield { type: 'reset_stream' };
+          yield { type: 'info', content: `${currentModel} failed (${describeError(err).slice(0, 120)}) — retrying this step on the next fallback model` };
+          continue;
         }
         // Defense: the Ollama SDK's ResponseError class stringifies its
         // `message` arg via the Error constructor — so when vLLM returns an

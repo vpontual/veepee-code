@@ -33,6 +33,9 @@ export interface Config {
   /** Context window to request from Ollama (num_ctx). null = the model's own
    *  maximum, capped at 16384 (see ensureContextSize in agent.ts). */
   numCtx: number | null;
+  /** Models to continue on, in order, when the current one cannot be reached
+   *  or drops the connection mid-reply. Empty = no fallback. */
+  fallbackModels: string[];
   maxModelSize: number;  // max parameter count in billions (default 40)
   minModelSize: number;  // min for act mode — skip tiny models (default 12)
   apiPort: number;
@@ -161,6 +164,7 @@ export interface ConfigFile {
   summarizerModel?: string | null;
   autoSwitch?: boolean;
   numCtx?: number | null;
+  fallbackModels?: string[];
   maxModelSize?: number;
   minModelSize?: number;
   apiPort?: number;
@@ -200,6 +204,7 @@ const DEFAULTS: Config = {
   summarizerModel: null,
   autoSwitch: true,
   numCtx: null,
+  fallbackModels: [],
   maxModelSize: 40,
   minModelSize: 12,
   apiPort: 8484,
@@ -644,6 +649,7 @@ export function loadConfig(configPath?: string): Config {
     summarizerModel: merged.summarizerModel ?? DEFAULTS.summarizerModel,
     autoSwitch: merged.autoSwitch ?? DEFAULTS.autoSwitch,
     numCtx: merged.numCtx ?? DEFAULTS.numCtx,
+    fallbackModels: Array.isArray(merged.fallbackModels) ? merged.fallbackModels.filter((m): m is string => typeof m === 'string' && !!m) : DEFAULTS.fallbackModels,
     maxModelSize: merged.maxModelSize ?? DEFAULTS.maxModelSize,
     minModelSize: merged.minModelSize ?? DEFAULTS.minModelSize,
     apiPort: merged.apiPort ?? DEFAULTS.apiPort,

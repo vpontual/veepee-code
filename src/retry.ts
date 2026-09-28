@@ -165,3 +165,15 @@ export function retryDecision(
   const backoff = Math.min(RETRY_BASE_MS * 2 ** (attempt - 1), RETRY_CAP_MS);
   return { retry: true, delayMs: Math.round(backoff * jitter), reason: `backoff attempt ${attempt}` };
 }
+
+/**
+ * Did the request fail because the server could not be reached or dropped the
+ * connection — the failures another model can route around — rather than
+ * because of the request itself (bad arguments, context overflow)?
+ */
+export function isTransportFailure(err: unknown): boolean {
+  const text = describeError(err);
+  // The Ollama client's wording when a stream ends early because the server
+  // went away (a Jetson resetting under load produced exactly this).
+  return UNREACHABLE.test(text) || RETRYABLE.test(text) || /did not receive done or success response in stream/i.test(text);
+}
