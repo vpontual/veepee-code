@@ -399,6 +399,9 @@ export class Agent {
    *  the gateway is the primary transport, since it fronts the whole fleet. */
   private directModels = new Set<string>();
   private sessionStarted = false;
+  /** How many tokens the server's prompt count has exceeded our estimate by
+   *  (learned from an overflow error); added to every later estimate. */
+  private promptUndercount = 0;
   /** Models that just failed at the transport level, and until when to skip
    *  them (see pickModel). */
   private modelDownUntil = new Map<string, number>();
@@ -880,11 +883,15 @@ export class Agent {
    * floor exists because a request that can only produce 200 tokens is not worth
    * making — better to compact and try again with room to answer.
    */
-  private outputBudget(): { num_predict: number } {
+  private outputBudget(toolSchemaTokens = 0): { num_predict: number } {
     const ceiling = this.getEffortOptions().num_predict;
     const limit = this.context.getContextLimit();
-    const prompt = this.context.getLastPromptTokens() || this.context.projectedTokens();
-    const RESERVE = 2_048; // template overhead, tool schemas, our own estimate error
+    // The tool definitions are part of the prompt the server counts, and with
+    // ~30 tools they are several thousand tokens on their own — far more than a
+    // flat reserve covered. gemma4 (32k window) was asked for 15k of output on
+    // a prompt vLLM counted ~2k larger than our estimate, every attempt.
+    const prompt = (this.context.getLastPromptTokens() || this.context.projectedTokens()) + toolSchemaTokens + this.promptUndercount;
+    const RESERVE = 1_024; // chat template overhead and residual estimate error
     const room = limit - prompt - RESERVE;
     if (room >= ceiling) return { num_predict: ceiling };
     return { num_predict: Math.max(1_024, room) };
@@ -1263,7 +1270,7 @@ export class Agent {
     // message, and whether we've already nudged it to stop narrating and act.
     let hasActedThisMessage = false;
     const announcedFallback = new Set<string>();
-    let contextWindowRetried = false;
+    let contextWindowRetries = 0;
     this.todoNudged = false; // one task-list reminder per user message
     let forcedActCount = 0;
     // Daily-driver #1 (self-repair): true once code is edited, cleared when the model runs
@@ -1428,7 +1435,9 @@ export class Agent {
         }
         offeredTools = new Set(tools.map(t => t.function?.name || ''));
         gate = new TextToolCallGate(offeredTools.size > 0);
-        const effortOpts = this.outputBudget();
+        // ~3 characters per token for JSON schemas (dense punctuation and names).
+        const toolSchemaTokens = tools.length > 0 ? Math.ceil(JSON.stringify(tools).length / 3) : 0;
+        const effortOpts = this.outputBudget(toolSchemaTokens);
         // Sampling preset: chat mode → conversational/general; act/plan → coding.
         // Both Qwen-recommended; harmless on other Qwen3.x models, only wrong if
         // the user unlocks to a non-Qwen family (no current path does this).
@@ -1631,12 +1640,23 @@ export class Agent {
         // The server told us its real window ("maximum context length is N") —
         // we had assumed a bigger one. Adopt it, compact if the conversation no
         // longer fits, and redo the step once instead of failing the run.
-        const windowMatch = /maximum context length is (\d+)/i.exec(describeError(err));
-        if (windowMatch && !contextWindowRetried) {
-          contextWindowRetried = true;
+        const errText = describeError(err);
+        const windowMatch = /maximum context length is (\d+)/i.exec(errText);
+        if (windowMatch && contextWindowRetries < 2) {
+          contextWindowRetries++;
           const window = Number(windowMatch[1]);
           this.optimalContextSizes.set(currentModel, window);
           this.context.setContextLimit(window);
+          // vLLM also states the prompt's real size ("prompt contains at least N
+          // input tokens"). Learn how far our estimate was under, so this retry
+          // and every later request leave the right amount of room.
+          const counted = /prompt contains at least (\d+) input tokens/i.exec(errText);
+          const requested = /requested (\d+) output tokens/i.exec(errText);
+          if (counted && requested) {
+            const ourEstimate = window - Number(requested[1]) - 1_024;
+            const under = Number(counted[1]) - ourEstimate;
+            if (under > 0) this.promptUndercount += under + 256;
+          }
           yield { type: 'reset_stream' };
           yield { type: 'info', content: `${currentModel} has a ${window}-token window; resizing the request and retrying` };
           if (this.context.projectedTokens() > window * 0.85) {
