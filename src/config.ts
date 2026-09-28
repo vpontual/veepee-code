@@ -1,4 +1,5 @@
 import { resolve, join } from 'path';
+import { spawnSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'fs';
 import type { LspServerConfig } from './lsp/config.js';
 import { writeFileAtomicSync } from './atomic-write.js';
@@ -440,7 +441,10 @@ const LEGACY_ENV_SETTINGS: Record<string, (v: string) => [keyof ConfigFile, unkn
   VEEPEE_CODE_RC_ENABLED: (v) => ['rc', v === '1' || v === 'true' ? { enabled: true } : null],
 };
 
-/** The addresses DEFAULTS used to carry, kept for installs that relied on them. */
+/** The addresses DEFAULTS used to carry. An install that relied on one keeps
+ *  it only if that server answers from this machine: on the network it was
+ *  written for, behaviour is unchanged; anywhere else, a stranger's LAN
+ *  address is not written into their config. */
 const FORMER_DEFAULTS: Record<string, string> = {
   SEARXNG_URL: 'http://10.0.153.99:8888',
   AGENTLENS_URL: 'http://10.0.153.99:7001',
@@ -454,6 +458,21 @@ const FORMER_DEFAULTS: Record<string, string> = {
  * - a .env holding non-endpoint settings (the oldest installs) → those move to
  *   settings.json. The .env itself is never renamed away any more.
  */
+/** Does anything accept a TCP connection at this URL's host:port? Synchronous
+ *  because config loading is; runs at most once per install (the migration). */
+export function answers(url: string): boolean {
+  let host: string, port: string;
+  try {
+    const u = new URL(url);
+    host = u.hostname;
+    port = u.port || (u.protocol === 'https:' ? '443' : '80');
+  } catch {
+    return false;
+  }
+  const probe = `const s=require('net').connect(${JSON.stringify(Number(port))},${JSON.stringify(host)},()=>process.exit(0));s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),800)`;
+  return spawnSync(process.execPath, ['-e', probe], { timeout: 2_000, stdio: 'ignore' }).status === 0;
+}
+
 export function migrateToEnvFile(): boolean {
   const envPath = getEnvFilePath();
   const settingsPath = getGlobalSettingsPath();
@@ -488,7 +507,7 @@ export function migrateToEnvFile(): boolean {
   }
   if (!hadEnvFile) {
     for (const [k, v] of Object.entries(FORMER_DEFAULTS)) {
-      if (!(k in env) && !envVars.has(k)) toWrite[k] = v;
+      if (!(k in env) && !envVars.has(k) && answers(v)) toWrite[k] = v;
     }
   }
   if (Object.keys(env).length === 0 && Object.keys(toWrite).length === 0) return changed;

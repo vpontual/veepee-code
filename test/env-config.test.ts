@@ -7,7 +7,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statS
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { parseEnv, updateEnvFile } from '../src/env-file.js';
-import { loadConfig, migrateToEnvFile, updateGlobalConfig, readGlobalConfig } from '../src/config.js';
+import { loadConfig, migrateToEnvFile, updateGlobalConfig, readGlobalConfig, answers } from '../src/config.js';
+import { createServer } from 'net';
 
 let home: string;
 let cwd: string;
@@ -77,12 +78,13 @@ describe('migrateToEnvFile', () => {
     expect(c.lockModel).toBe('m');
   });
 
-  it('writes the former LAN defaults for an install that relied on them', () => {
+  it('writes a former default only if it is exactly the old address', () => {
     writeSettings({ lockModel: 'm' });
     migrateToEnvFile();
-    const c = loadConfig();
-    expect(c.searxngUrl).toBe('http://10.0.153.99:8888');
-    expect(c.agentlensUrl).toBe('http://10.0.153.99:7001');
+    // Present only when the old server answers from this machine (answers()).
+    const env = parseEnv(envText());
+    if (env.has('SEARXNG_URL')) expect(env.get('SEARXNG_URL')).toBe('http://10.0.153.99:8888');
+    if (env.has('AGENTLENS_URL')) expect(env.get('AGENTLENS_URL')).toBe('http://10.0.153.99:7001');
   });
 
   it('is a no-op the second time', () => {
@@ -164,5 +166,17 @@ describe('updateGlobalConfig', () => {
     writeFileSync(join(dir(), 'settings.json'), '{ broken');
     expect(() => updateGlobalConfig({ model: 'x' })).toThrow(/not valid JSON/);
     expect(readFileSync(join(dir(), 'settings.json'), 'utf-8')).toBe('{ broken');
+  });
+});
+
+describe('answers (former-default reachability)', () => {
+  it('is true for a listening port and false for a closed one', async () => {
+    const server = createServer().listen(0, '127.0.0.1');
+    await new Promise((r) => server.once('listening', r));
+    const port = (server.address() as { port: number }).port;
+    expect(answers(`http://127.0.0.1:${port}`)).toBe(true);
+    await new Promise((r) => server.close(r));
+    expect(answers(`http://127.0.0.1:${port}`)).toBe(false);
+    expect(answers('not a url')).toBe(false);
   });
 });
