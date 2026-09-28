@@ -390,6 +390,7 @@ export class Agent {
   /** Models the direct (openai-backend) endpoint actually serves. Empty when
    *  the gateway is the primary transport, since it fronts the whole fleet. */
   private directModels = new Set<string>();
+  private directModelsListed = false;
   /** Models whose server refused `think` ("does not support thinking"). A
    *  plain Ollama rejects the whole request rather than ignoring the flag, so
    *  every non-reasoning model failed on the first prompt. Learned on the
@@ -406,10 +407,9 @@ export class Agent {
     if (config.llmBackend === 'openai' && config.openaiBaseUrl) {
       this.ollama = new OpenAIChatClient(config.openaiBaseUrl, config.openaiApiKey ?? undefined) as unknown as Ollama;
       this.openaiBackend = true;
-      // The direct endpoint is a single vLLM server, so it serves exactly the
-      // model it was stood up for — the primary. Every other model in the
-      // fleet (reviewModel, subagent models) lives behind the gateway. See
-      // clientFor().
+      // Until the server's own list arrives (ensureDirectModels), assume it
+      // serves the primary. Every other model (reviewModel, subagent models)
+      // lives behind the gateway. See clientFor().
       const primary = config.lockModel ?? config.model;
       if (primary) this.directModels.add(primary);
     } else {
@@ -737,6 +737,29 @@ export class Agent {
   /** Get the optimal num_ctx for the current model */
   private getOptimalContext(model: string): number | undefined {
     return this.optimalContextSizes.get(model);
+  }
+
+  /**
+   * Learn which models the direct server really serves, once.
+   *
+   * Assuming "the primary" broke any primary the direct server does not have:
+   * locking to the AGX's gemma4:26b-a4b in a DGX-direct + gateway setup sent it
+   * to the DGX and got `404 The model gemma4:26b-a4b does not exist`, although
+   * the gateway serves it. Routing by the server's /v1/models list sends each
+   * model where it lives. If the list cannot be fetched, the assumption stands.
+   */
+  private async ensureDirectModels(): Promise<void> {
+    if (!this.openaiBackend || this.directModelsListed || !this.config.openaiBaseUrl) return;
+    this.directModelsListed = true;
+    if (isDirectOnly(this.config)) return; // no gateway: everything is direct anyway
+    try {
+      const base = this.config.openaiBaseUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
+      const headers: Record<string, string> = this.config.openaiApiKey ? { authorization: `Bearer ${this.config.openaiApiKey}` } : {};
+      const res = await fetch(`${base}/v1/models`, { headers, signal: AbortSignal.timeout(5_000) });
+      if (!res.ok) return;
+      const ids = (((await res.json()) as { data?: Array<{ id?: string }> }).data ?? []).map(m => m.id).filter((x): x is string => !!x);
+      if (ids.length > 0) this.directModels = new Set(ids);
+    } catch { /* keep the primary assumption */ }
   }
 
   /** Fill in an Ollama model's window when no benchmark did (see ollama-context.ts). */
@@ -1077,6 +1100,7 @@ export class Agent {
     this.context.addUser(expandedMessage);
 
     // Set context limit from benchmarks or model metadata
+    await this.ensureDirectModels();
     await this.ensureContextSize(this.modelManager.getCurrentModel());
     const ctxLimit = this.getOptimalContext(this.modelManager.getCurrentModel());
     if (ctxLimit) {
