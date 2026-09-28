@@ -17,7 +17,7 @@ veepee-code/
 │   ├── agent.ts           # ReAct agent loop, mode management, roster integration
 │   ├── models.ts          # Model discovery, ranking, auto-switching
 │   ├── context.ts         # System prompt builder, context manager
-│   ├── config.ts          # vcode.config.json loading, .env→JSON migration, Config interface
+│   ├── config.ts          # .env + settings.json loading, layering, migrations, Config interface
 │   ├── permissions.ts     # Permission system
 │   ├── agentstate.ts      # Publish idle/working/blocked/done (veeWM report-agent + terminal title)
 │   ├── api.ts             # OpenAI-compatible HTTP API server
@@ -100,10 +100,10 @@ index.ts
 
 ### Config (`config.ts`)
 
-Loads configuration from `~/.veepee-code/vcode.config.json`. Returns a typed `Config` object with nullable fields for optional integrations. On first load, `migrateEnvToJson()` automatically converts any legacy `.env` file to the new JSON format and renames the old file to `.env.backup`.
+Loads configuration from `~/.veepee-code/.env` (endpoints and secrets, `ENV_KEYS`) and `~/.veepee-code/settings.json` (everything structured), then project and local layers, then the process environment. Returns a typed `Config` object with nullable fields for optional integrations. `migrateToEnvFile()` moves any endpoint or secret found in settings.json into .env, so each setting lives in one file; writers use `updateGlobalConfig()`, which routes each key to its file.
 
 Key design decisions:
-- Single JSON config file at `~/.veepee-code/vcode.config.json`
+- Two global files: `.env` (0600) and `settings.json`; see docs/configuration.md
 - Null for unconfigured integrations (the `sync`, `rc`, `remote`, `langfuse` fields)
 - Default proxy URL is `http://localhost:11434`; dashboard URL defaults to empty (optional)
 - `maxModelSize` (default 40) and `minModelSize` (default 12) control model candidacy
@@ -404,7 +404,7 @@ A raw Node.js `http.createServer` (no Express, no framework). Endpoints:
 - `/v1/chat/completions` -- Consumes the agent's event stream, translating events to standard OpenAI format: non-streaming responses include a `tool_calls` array in the assistant message; streaming responses emit `tool_calls` deltas in standard OpenAI format. Legacy `veepee_code` extensions are still included for backwards compatibility. Incoming `tools` definitions in the request are honored and constrain the agent to the client's tool set.
 - `/v1/models` -- Maps `ModelProfile[]` to OpenAI model list format with custom fields
 - `/api/tools` -- Simple tool enumeration
-- `/api/execute` -- Direct tool execution (bypasses LLM), gated behind `"apiExecute": true` in `vcode.config.json`
+- `/api/execute` -- Direct tool execution (bypasses LLM), gated behind `"apiExecute": true` in `settings.json`
 - `/api/status` -- Session state snapshot
 - `/health` -- Liveness probe
 
@@ -528,4 +528,4 @@ Each agent turn:
 | `tsx` | TypeScript execution for development |
 | `typescript` | Compiler |
 
-The dependency footprint is intentionally small -- no Express (raw `http.createServer`), no Commander (manual argv parsing), no blessed, no dotenv (config has migrated to `vcode.config.json`).
+The dependency footprint is intentionally small -- no Express (raw `http.createServer`), no Commander (manual argv parsing), no blessed, no dotenv (`src/env-file.ts` is a small reader/editor that keeps comments).

@@ -37,6 +37,8 @@ Project overrides live in `<project>/.veepee/settings.json` (committed) and `<pr
 
 The same variables set in the process environment override the file for one run: `VEEPEE_CODE_PROXY_URL=http://other:11434 vcode`.
 
+If you put one of these settings in `settings.json` by hand, vcode moves it into `.env` on the next start, so it never lives in both files.
+
 A vLLM-only machine, no gateway:
 
 ```bash

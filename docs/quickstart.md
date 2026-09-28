@@ -77,36 +77,51 @@ vcode
 
 On first launch, VEEPEE Code will:
 
-1. **Run the setup wizard** -- A guided onboarding walks you through all configuration step-by-step: Ollama proxy connection, a "Default Model" step that lets you **lock to one model**, pick a default, or skip and let VEEPEE Code auto-pick; Fleet Manager dashboard, model preferences, API server, SearXNG web search, and the remote agent bridge. Each step explains what it does, which tools it enables, and whether it's required or optional. Optional steps can be skipped by pressing Enter. Each step with a validator tests the connection inline before moving on. To re-configure just the model choice later: `vcode --wizard-step model`.
-2. **Connect to the proxy** -- It contacts the Ollama proxy URL from your config.
-3. **Discover models** -- It queries the proxy for available models and (if configured) the Fleet Manager dashboard for loaded model status and capabilities.
+1. **Run the setup wizard** -- A guided onboarding walks you through all configuration step-by-step. It starts with **Model Server**: an Ollama server (or llm-gateway), an OpenAI-compatible server such as vLLM on its own, or both. Then a "Default Model" step that lets you **lock to one model**, pick a default, or skip and let VEEPEE Code auto-pick; Fleet Manager dashboard, model preferences, API server, SearXNG web search, and the remote agent bridge. Each step explains what it does, which tools it enables, and whether it's required or optional. Optional steps can be skipped by pressing Enter. Each step with a validator tests the connection inline before moving on. To re-configure just the model choice later: `vcode --wizard-step model`.
+2. **Connect to your model server** -- Ollama (`/api/tags`) or the OpenAI-compatible server (`/v1/models`).
+3. **Discover models** -- It lists the server's models and (if configured) asks the Fleet Manager dashboard for loaded model status and capabilities. On Ollama it also asks each model's context window (`/api/show`), because Ollama's default window is smaller than vcode's own prompt.
 5. **Select an initial model** -- The highest-scoring model with tool-calling support becomes the temporary default.
 6. **Register tools** -- The 14 native tools (+ `web_search` if SearXNG is configured) are registered. If a remote agent bridge is configured, VEEPEE Code fetches its tool catalog and registers each remote tool as native (with a `[remote]` description prefix).
 7. **Start the API server** -- An OpenAI-compatible API server starts on port 8484 (configurable).
 8. **Launch the TUI** -- The full-screen terminal interface appears with the VEEPEE CODE logo and input box.
-9. **Run the first-launch benchmark** -- Automatically inside the TUI with live progress:
+9. **Run the first-launch benchmark** (Ollama only, and skipped when a model is locked) -- Automatically inside the TUI with live progress:
    - **Phase 1:** Quick responsiveness check on all models with tool support. Sends a prompt, allows up to 60 seconds for cold-start model loading, then measures generation speed (tok/s). Models with <1 tok/s are filtered out.
    - **Phase 2:** Full benchmark on surviving models (tool calling, code generation, code editing, instruction following, reasoning, context probing). Note: context probing is optional and skipped on first launch to speed up initial setup.
    - **Phase 3:** Builds a **model roster** -- assigns the best model per role (act, plan, chat, code, search) based on benchmark scores and speed. The act model becomes the new default.
    - Results are saved to `~/.veepee-code/benchmarks/` and the roster to `roster.json`. Subsequent launches skip the benchmark and load the saved roster.
 
-## Configuring the Proxy URL
+## Configuring the Model Server
 
-The setup wizard configures this automatically on first launch. To change it later, either re-run the wizard (`vcode --wizard` or `/setup wizard`) or edit the config directly:
+The setup wizard configures this on first launch. To change it later, re-run the wizard (`vcode --wizard`, or `/setup wizard proxy` for just this step) or edit `~/.veepee-code/.env`, which holds every endpoint and secret:
 
 ```bash
-# Edit the global config
-nano ~/.veepee-code/vcode.config.json
+nano ~/.veepee-code/.env
 ```
 
-Set the proxy URL:
+An Ollama server:
 
-```json
-{
-  "proxyUrl": "http://your-server:11434",
-  "dashboardUrl": "http://your-server:3334"
-}
+```bash
+VEEPEE_CODE_LLM_BACKEND=ollama
+VEEPEE_CODE_PROXY_URL=http://your-server:11434
 ```
+
+A vLLM (or other OpenAI-compatible) server with no gateway:
+
+```bash
+VEEPEE_CODE_LLM_BACKEND=openai
+VEEPEE_CODE_OPENAI_BASE_URL=http://your-gpu-box:8000
+VEEPEE_CODE_PROXY_URL=
+```
+
+Everything structured (locked model, fleet, MCP servers, hooks) lives in `~/.veepee-code/settings.json`. See [Configuration](configuration.md) for every setting and `.env.example` for a template.
+
+## Updating
+
+```bash
+vcode --update
+```
+
+It updates the installation it is running from and rebuilds it. Your configuration is kept.
 
 `dashboardUrl` is only needed if you use the Ollama Fleet Manager. See the full [Configuration](configuration.md) reference for all fields.
 
@@ -209,7 +224,7 @@ Run the setup validation command to check which integrations are active:
 /setup wizard     # Re-run the guided setup wizard
 ```
 
-`/setup` tests connectivity to your Ollama proxy and SearXNG (if configured). Each integration shows its status (active, missing config, or error). Use `/setup wizard` to reconfigure, or `/setup wizard <step-id>` (proxy, dashboard, model-prefs, api, searxng, remote) to reconfigure a single step. Tools from the remote agent bridge are not validated here — run `/tools` to see what's actually loaded.
+`/setup` tests connectivity to your model server and SearXNG (if configured). Each integration shows its status (active, missing config, or error). Use `/setup wizard` to reconfigure, or `/setup wizard <step-id>` (proxy, model, dashboard, model-prefs, api, searxng, remote) to reconfigure a single step. Tools from the remote agent bridge are not validated here — run `/tools` to see what's actually loaded.
 
 ## Creating Project Instructions
 

@@ -283,7 +283,7 @@ Cross-platform: macOS uses `sysctl`, `vm_stat`, `sw_vers`; Linux uses `free`, `l
 
 The following tool categories are **not** built into VEEPEE Code. They live in a separate remote agent (such as [Llama Rider](https://github.com/vpontual/llama_rider)) and are exposed to VEEPEE Code via the bridge described in the [Configuration](configuration.md#remote-agent-bridge) docs.
 
-When you point `vcode.config.json` at a remote agent, VEEPEE Code fetches its tool catalog from `${remote.url}/dashboard/api/tools` on startup, builds Zod schemas from the JSON Schema parameters, and registers each remote tool as if it were native (with a `[remote]` prefix in the description). Execution is proxied via HTTP. Tools that already exist locally take priority — the local version always wins.
+When you point vcode at a remote agent (`VEEPEE_CODE_REMOTE_URL` / `VEEPEE_CODE_REMOTE_API_KEY` in `~/.veepee-code/.env`), VEEPEE Code fetches its tool catalog from `${remote.url}/dashboard/api/tools` on startup, builds Zod schemas from the JSON Schema parameters, and registers each remote tool as if it were native (with a `[remote]` prefix in the description). Execution is proxied via HTTP. Tools that already exist locally take priority — the local version always wins.
 
 Typical tools you'd surface this way:
 

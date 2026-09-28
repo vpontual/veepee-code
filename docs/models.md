@@ -10,13 +10,13 @@ VEEPEE Code discovers all models available on your Ollama fleet, scores them, as
 
 ## Lock Mode
 
-When `lockModel` is set in `vcode.config.json`, VEEPEE Code treats that model as the one and only option for the whole session:
+When `lockModel` is set in `settings.json`, VEEPEE Code treats that model as the one and only option for the whole session:
 
 - **No `/api/tags` call.** The model list is synthesized from `lockModel` alone.
 - **No capability probe.** The startup probe (which would otherwise fire a tool-call test at every new model) is skipped entirely.
 - **No first-launch benchmark.** The `Benchmarker` is never constructed; `benchmarks/roster.json` is neither read nor written.
 - **No auto-switch.** `autoSwitch` is forced to `false`.
-- **`/model <name>` and `/models` refuse to switch**, pointing users to `vcode --wizard-step model` or a manual edit of `~/.veepee-code/vcode.config.json`.
+- **`/model <name>` and `/models` refuse to switch**, pointing users to `vcode --wizard-step model` or a manual edit of `~/.veepee-code/settings.json`.
 
 This mode exists because a) many proxies now front single-model vLLM endpoints where the other "models" returned by `/api/tags` are not useful for the agent, and b) firing tool-call probes at unknown models with no `num_ctx` cap can allocate enormous KV caches and wedge shared GPU servers.
 
@@ -75,7 +75,7 @@ Models are sorted by score descending. Before the first benchmark runs, the high
 
 ## Size Limits
 
-Two fields in `vcode.config.json` control which models are considered:
+Two fields in `settings.json` control which models are considered:
 
 | Field | Default | Description |
 |----------|---------|-------------|
@@ -143,7 +143,7 @@ Legend:
 
 ## Automatic Model Switching
 
-When `autoSwitch: true` (the default in `vcode.config.json`), the agent monitors conversation signals and switches models when the task complexity changes. This only applies in act mode.
+When `autoSwitch: true` (the default in `settings.json`), the agent monitors conversation signals and switches models when the task complexity changes. This only applies in act mode.
 
 ### Evaluation Timing
 

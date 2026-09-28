@@ -30,7 +30,7 @@ Counterargument (which would flip the decision): **speed**. qwen3.5:35b is 20% f
 
 ## Rollback path
 
-Edit `~/.veepee-code/vcode.config.json`:
+Edit `~/.veepee-code/settings.json`:
 ```json
 "model": "qwen3.5:35b"
 ```

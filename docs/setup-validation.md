@@ -45,7 +45,7 @@ On first launch, `/setup` runs automatically as part of the onboarding flow. It 
     ● Ollama Proxy — Connected — 47 models available
     ● Web Search (SearXNG) [web_search] — Connected
 
-  14/15 tools active  |  Config: ~/.veepee-code/vcode.config.json
+  14/15 tools active  |  Config: ~/.veepee-code/.env + settings.json
 ```
 
 ### Status Categories
@@ -72,12 +72,12 @@ On first launch, `/setup` runs automatically as part of the onboarding flow. It 
 
 | Integration | Category | Tools | Required Field |
 |-------------|----------|-------|---------------|
-| Ollama Proxy | Core | *(model inference)* | `proxyUrl` in `vcode.config.json` |
-| Web Search | Web | `web_search` | `searxngUrl` |
+| Ollama Proxy / Model Server | Core | *(model inference)* | `VEEPEE_CODE_PROXY_URL` (Ollama) or `VEEPEE_CODE_OPENAI_BASE_URL` (direct server) in `.env` |
+| Web Search | Web | `web_search` | `SEARXNG_URL` in `.env` |
 
 ### Via Remote Agent Bridge
 
-When `remote: {url, apiKey}` is set in `vcode.config.json`, VEEPEE Code fetches the tool catalog from the remote agent on startup. The set of additional tools depends entirely on what the remote agent exposes (typically Home Assistant, Mastodon, Spotify, Gmail, Calendar, Drive, Docs, Sheets, Tasks, news, weather, timers, and more). These tools are **not** validated by `/setup` — run `/tools` to see what's actually loaded.
+When `VEEPEE_CODE_REMOTE_URL` is set in `.env`, VEEPEE Code fetches the tool catalog from the remote agent on startup. The set of additional tools depends entirely on what the remote agent exposes (typically Home Assistant, Mastodon, Spotify, Gmail, Calendar, Drive, Docs, Sheets, Tasks, news, weather, timers, and more). These tools are **not** validated by `/setup` — run `/tools` to see what's actually loaded.
 
 ## What Each Validation Tests
 

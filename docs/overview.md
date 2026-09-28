@@ -106,4 +106,4 @@ Copilot CLI focuses on shell command generation and explanation. VEEPEE Code is 
 └──────────────┘     └──────────────────┘
 ```
 
-The agent runs locally on your development machine. It sends inference requests to the Ollama proxy (or directly to Ollama at `localhost:11434`), which routes them to the appropriate GPU server based on model availability, server load, and affinity rules. Tool execution (file I/O, shell commands, API calls) happens locally on the machine where VEEPEE Code is running.
+The agent runs locally on your development machine. It sends inference requests to your model server: an Ollama instance (by default `localhost:11434`), an Ollama gateway that routes across several GPU servers, or an OpenAI-compatible server such as vLLM directly. Tool execution (file I/O, shell commands, API calls) happens locally on the machine where VEEPEE Code is running.

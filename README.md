@@ -125,7 +125,7 @@ Exact match first, then whitespace-tolerant matching — because a model rebuild
 
 ### Remote agent bridge
 
-Connect a remote agent (via `/setup wizard remote` or `vcode.config.json`) to auto-discover and use its tools as native VEEPEE Code tools. The bridge fetches the tool catalog on startup and proxies execution via HTTP.
+Connect a remote agent (via `/setup wizard remote` or `VEEPEE_CODE_REMOTE_URL` in `~/.veepee-code/.env`) to auto-discover and use its tools as native VEEPEE Code tools. The bridge fetches the tool catalog on startup and proxies execution via HTTP.
 
 ## Configuration
 
@@ -252,7 +252,7 @@ npx tsx scripts/benchmark.ts --server dgx-spark  # one server only
 npx tsx scripts/benchmark.ts --min-tps=0         # disable speed filter
 ```
 
-Configure fleet servers in `~/.veepee-code/vcode.config.json`:
+Configure fleet servers in `~/.veepee-code/settings.json`:
 
 ```json
 "fleet": [
