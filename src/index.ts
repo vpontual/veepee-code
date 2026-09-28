@@ -67,6 +67,7 @@ import { loadAgentDefinitions, withBuiltinAgents } from './agents.js';
 import { createExitPlanModeTool } from './tools/plan-gate.js';
 import { createNotebookEditTool } from './tools/notebook.js';
 import { createChatClient, isDirectOnly, primaryEndpoint } from './llm-client.js';
+import { enableOsSandbox, disableOsSandbox } from './tools/os-sandbox.js';
 
 const VERSION = '0.3.0';
 
@@ -556,6 +557,7 @@ async function main() {
     }
 
     permissions.setPromptHandler(PermissionManager.unattendedHandler());
+    enableOsSandbox(process.cwd());
     const run = await si.proposeImprovement(target, {
       repoRoot: process.cwd(),
       baseline,
@@ -622,6 +624,8 @@ async function main() {
 
     await checkpoints.init().catch(() => false);
     permissions.setPromptHandler(PermissionManager.unattendedHandler());
+    // Goal mode runs unattended for up to an hour: confine shell writes to the project.
+    enableOsSandbox(process.cwd());
     const engine = new GoalEngine(agent, checkpoints, process.cwd());
 
     const budget = {
@@ -718,6 +722,9 @@ async function main() {
 
     // Auto-allow all permissions in print mode
     permissions.setPromptHandler(PermissionManager.unattendedHandler());
+    // Print mode is also how scripts run one-off tasks that may legitimately
+    // write outside the project, so the sandbox is opt-in here.
+    if (process.env.VCODE_OS_SANDBOX === '1') enableOsSandbox(process.cwd());
     let output = '';
     for await (const event of agent.run(printQuery)) {
       if (event.type === 'text' && event.content) {
@@ -3488,6 +3495,8 @@ ${gathered.join('\n\n')}`;
       tui.setAbortHandler(() => engine.pause());
       const savedPromptHandler = permissions.getPromptHandler();
       permissions.setPromptHandler(PermissionManager.unattendedHandler());
+      const sandboxState = enableOsSandbox(process.cwd());
+      if (sandboxState === 'on') tui.showInfo(theme.dim('Shell commands in this goal run can write only inside the project, /tmp and package caches.'));
 
       tui.showInfo([
         `${theme.accent('Goal mode')} — ${args.goal || `resuming ${args.resume}`}`,
@@ -3540,6 +3549,7 @@ ${gathered.join('\n\n')}`;
       } finally {
         tui.setAbortHandler(() => agent.abort());
         if (savedPromptHandler) permissions.setPromptHandler(savedPromptHandler);
+        disableOsSandbox();
       }
       return;
     }

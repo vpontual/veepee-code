@@ -253,6 +253,14 @@ A fuller config with the optional fields might look like:
 }
 ```
 
+## Sandbox for unattended runs
+
+In goal mode (`vcode --goal`, `/goal`) and `--improve`, vcode approves ordinary work without asking. There, shell commands run inside [bubblewrap](https://github.com/containers/bubblewrap): everything stays readable, but only the project, `/tmp` and package-manager caches (`~/.npm`, `~/.cache`, …) are writable, so a wrong command cannot damage anything outside the work it was given. The file tools are already confined to the project. Network access is unchanged.
+
+- `vcode -p` does not sandbox by default (scripts use it for tasks that write elsewhere); set `VCODE_OS_SANDBOX=1` to turn it on.
+- `VCODE_NO_OS_SANDBOX=1` turns it off everywhere.
+- Linux only. Without bubblewrap, or where it cannot create namespaces, vcode warns once and runs commands unsandboxed.
+
 ## Migration
 
 Older installs are converted on the first start of a newer vcode, once:

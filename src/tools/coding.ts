@@ -24,6 +24,7 @@ import { notifyLSPs } from '../lsp/manager.js';
 import { formatDiagnostics } from '../lsp/diagnostics.js';
 import { pathToFileUri } from '../lsp/uri.js';
 import { startBackground, adoptBackground, processGroupAlive, buildBashOutputTool, buildKillShellTool } from './background.js';
+import { shellInvocation } from './os-sandbox.js';
 
 /** Structured-format extensions we validate at write time. */
 const STRUCTURED_JSON_EXT = new Set(['.json']);
@@ -1278,7 +1279,8 @@ function createBashTool(fileTracker?: FileTracker): ToolDef {
         // `detached` puts the command in its own process group so we can kill
         // the whole tree. Without it a timeout only reaps the `bash -c` child
         // and any grandchildren keep running — and keep the stdout pipe open.
-        const child = spawn('bash', ['-c', params.command as string], {
+        const sh = shellInvocation(params.command as string, cwd);
+        const child = spawn(sh.file, sh.args, {
           cwd,
           stdio: ['pipe', 'pipe', 'pipe'],
           detached: true,

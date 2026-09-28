@@ -18,6 +18,7 @@ import { resolve } from 'path';
 import { z } from 'zod';
 import type { ToolDef, ToolResult } from './types.js';
 import { ok, fail } from './types.js';
+import { shellInvocation } from './os-sandbox.js';
 
 /** Output kept per command; older output is dropped (and counted) past this. */
 const MAX_BUFFER = 256 * 1024;
@@ -116,7 +117,8 @@ export function startBackground(command: string, cwdParam?: string): ToolResult 
   // leaves the real process orphaned, so status reads "exited 0" while the
   // server runs on. This call already backgrounds the command.
   command = command.replace(/\s*&\s*$/, '');
-  const child = spawn('bash', ['-c', command], {
+  const sh = shellInvocation(command, cwd);
+  const child = spawn(sh.file, sh.args, {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
