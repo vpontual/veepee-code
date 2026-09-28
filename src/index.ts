@@ -115,8 +115,16 @@ async function main() {
   // Self-update: vcode --update
   if (process.argv.includes('--update')) {
     const { execSync } = await import('child_process');
+    const { installDirectory } = await import('./update.js');
+    // Pin the installer to the checkout that is running, so it updates and
+    // relinks THIS install, not whatever VEEPEE_CODE_DIR happens to say.
+    const dir = installDirectory();
+    console.error(chalk.dim(`Updating ${dir}`));
     try {
-      execSync('curl -fsSL https://raw.githubusercontent.com/vpontual/veepee-code/main/install.sh | bash', { stdio: 'inherit' });
+      execSync('curl -fsSL https://raw.githubusercontent.com/vpontual/veepee-code/main/install.sh | bash', {
+        stdio: 'inherit',
+        env: { ...process.env, VEEPEE_CODE_DIR: dir },
+      });
     } catch {
       console.error(chalk.red('Update failed. Run manually: curl -fsSL https://raw.githubusercontent.com/vpontual/veepee-code/main/install.sh | bash'));
     }

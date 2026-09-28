@@ -89,21 +89,23 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   info "Updating existing installation..."
   cd "$INSTALL_DIR"
   git pull --ff-only
+elif [ -d "$INSTALL_DIR" ]; then
+  # Directory exists but isn't a git repo. ~/.veepee-code is also the CONFIG
+  # dir (settings.json, sessions, skills, checkpoints), so it is adopted, never
+  # deleted: this used to `rm -rf` it after saving only vcode.config.json and
+  # .env. Clone beside it, move the .git in, and check out the tracked files;
+  # untracked files (all of the config) are left exactly as they were.
+  info "Adopting existing directory (config is kept)..."
+  CLONE_TMP="$(mktemp -d)"
+  git clone "$CLONE_URL" "$CLONE_TMP/repo"
+  mv "$CLONE_TMP/repo/.git" "$INSTALL_DIR/.git"
+  rm -rf "$CLONE_TMP"
+  cd "$INSTALL_DIR"
+  git reset --hard -q HEAD
 else
-  if [ -d "$INSTALL_DIR" ]; then
-    # Directory exists but isn't a git repo (e.g. just config files)
-    # Move config files aside, clone, restore
-    info "Backing up existing config..."
-    [ -f "$INSTALL_DIR/vcode.config.json" ] && cp "$INSTALL_DIR/vcode.config.json" /tmp/veepee-code-config-backup
-    [ -f "$INSTALL_DIR/.env" ] && cp "$INSTALL_DIR/.env" /tmp/veepee-code-env-backup
-    rm -rf "$INSTALL_DIR"
-  fi
   info "Cloning repository..."
   git clone "$CLONE_URL" "$INSTALL_DIR"
   cd "$INSTALL_DIR"
-  # Restore config if backed up (prefer vcode.config.json, keep .env for migration)
-  [ -f /tmp/veepee-code-config-backup ] && mv /tmp/veepee-code-config-backup "$INSTALL_DIR/vcode.config.json"
-  [ -f /tmp/veepee-code-env-backup ] && mv /tmp/veepee-code-env-backup "$INSTALL_DIR/.env"
 fi
 ok "Source ready"
 

@@ -1,5 +1,7 @@
 import { execSync, spawn } from 'child_process';
-import { resolve } from 'path';
+import { existsSync } from 'fs';
+import { dirname, join, resolve } from 'path';
+import { fileURLToPath } from 'url';
 
 export interface UpdateStatus {
   available: boolean;
@@ -8,12 +10,22 @@ export interface UpdateStatus {
   behind: number;
 }
 
-/** Where vcode is installed. install.sh honours VEEPEE_CODE_DIR, so hardcoding
- *  ~/.veepee-code meant any custom install never detected updates. */
-function installDirectory(): string {
-  return process.env.VEEPEE_CODE_DIR
-    ? resolve(process.env.VEEPEE_CODE_DIR)
-    : resolve(process.env.HOME || '~', '.veepee-code');
+/** Where vcode is installed: the checkout this code is running from.
+ *
+ *  install.sh honours VEEPEE_CODE_DIR, so hardcoding ~/.veepee-code meant a
+ *  custom install never detected updates. Relying on the variable alone was
+ *  the next trap: it lives in a shell rc file, so `vcode --update` run from
+ *  anywhere that did not load it (a launcher, a script) updated
+ *  ~/.veepee-code instead — a stale copy — and relinked `vcode` to it. The
+ *  running checkout is the one answer that cannot be wrong. The variable
+ *  still wins when set; ~/.veepee-code is the fallback for a build that is
+ *  not a git checkout. */
+export function installDirectory(): string {
+  if (process.env.VEEPEE_CODE_DIR) return resolve(process.env.VEEPEE_CODE_DIR);
+  // This file is <checkout>/dist/update.js.
+  const running = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  if (existsSync(join(running, '.git')) && existsSync(join(running, 'package.json'))) return running;
+  return resolve(process.env.HOME || '~', '.veepee-code');
 }
 
 /**
