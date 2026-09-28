@@ -32,7 +32,13 @@ export type HookEventName =
   | 'PostToolUse'
   | 'UserPromptSubmit'
   | 'Stop'
-  | 'Notification';
+  | 'Notification'
+  /** Once, before the first turn. Stdout is added to the model's context. */
+  | 'SessionStart'
+  /** Before the conversation is compacted. */
+  | 'PreCompact'
+  /** When a subagent finishes. Matcher applies to its status. */
+  | 'SubagentStop';
 
 /** All known event names — used by /hooks listing and lint. */
 export const HOOK_EVENTS: HookEventName[] = [
@@ -41,6 +47,9 @@ export const HOOK_EVENTS: HookEventName[] = [
   'UserPromptSubmit',
   'Stop',
   'Notification',
+  'SessionStart',
+  'PreCompact',
+  'SubagentStop',
 ];
 
 export interface HookExecResult {
@@ -188,7 +197,30 @@ function eventSubject(event: HookEventName, payload: EventPayload): string {
       return '';
     case 'Notification':
       return (payload as NotificationPayload).kind;
+    case 'SubagentStop':
+      return String((payload as { status?: unknown }).status ?? '');
+    default:
+      return '';
   }
+}
+
+/**
+ * Accept Claude Code's hook format as well as vcode's. Claude Code nests
+ * commands under the matcher — { matcher, hooks: [{ type: "command", command,
+ * timeout (seconds) }] } — so a config copied from it used to register nothing.
+ */
+function flattenHookEntry(entry: unknown): HookEntry[] {
+  if (!entry || typeof entry !== 'object') return [];
+  const e = entry as HookEntry & { hooks?: Array<{ type?: string; command?: string; timeout?: number }> };
+  if (!Array.isArray(e.hooks)) return typeof e.command === 'string' ? [e] : [];
+  return e.hooks
+    .filter(h => h && typeof h.command === 'string' && (!h.type || h.type === 'command'))
+    .map(h => ({
+      matcher: e.matcher,
+      command: h.command as string,
+      ...(typeof h.timeout === 'number' ? { timeoutMs: h.timeout * 1000 } : {}),
+      ...(e.enabled === false ? { enabled: false } : {}),
+    }));
 }
 
 // ─── Layered hook collection ───────────────────────────────────────────
@@ -211,7 +243,7 @@ export function collectHooks(
     const hooks: HooksConfig | null | undefined = cfg.hooks;
     const entries = hooks?.[event];
     if (!entries) continue;
-    for (const hook of entries) out.push({ hook, layer });
+    for (const entry of entries) for (const hook of flattenHookEntry(entry)) out.push({ hook, layer });
   }
   return out;
 }

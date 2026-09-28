@@ -132,6 +132,9 @@ export interface HooksConfig {
   UserPromptSubmit?: HookEntry[];
   Stop?: HookEntry[];
   Notification?: HookEntry[];
+  SessionStart?: HookEntry[];
+  PreCompact?: HookEntry[];
+  SubagentStop?: HookEntry[];
 }
 
 export interface HookEntry {

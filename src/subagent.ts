@@ -9,6 +9,7 @@ import { generationLimiter } from './generation-limit.js';
 import { createChatClient, isDirectOnly } from './llm-client.js';
 import { ollamaNumCtx } from './ollama-context.js';
 import { createWorktree, type WorktreeInfo } from './worktree.js';
+import { runHooks } from './hooks.js';
 import { execFileSync } from 'child_process';
 import { isAbsolute, relative, resolve } from 'path';
 
@@ -653,6 +654,8 @@ export class SubAgentManager {
         tracked.status = result.success ? 'completed' : 'failed';
       }
       try { this.onTransition?.(tracked); } catch { /* handler should not throw */ }
+      // SubagentStop hooks: informational, never block or fail the result.
+      runHooks('SubagentStop', { id, status: tracked.status, model: requestedModel, description, cwd: process.cwd() } as never).catch(() => undefined);
       return result;
     });
     tracked.promise = promise;

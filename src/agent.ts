@@ -16,7 +16,7 @@ import { ContextManager, CHAT_TOOLS } from './context.js';
 import { ModelManager } from './models.js';
 import type { ModelRoster } from './benchmark.js';
 import { SubAgentManager } from './subagent.js';
-import { runHooks, shouldBlock, type HookExecResult } from './hooks.js';
+import { runHooks, shouldBlock, type HookExecResult, type HookEventName } from './hooks.js';
 import { report as reportAgentState } from './agentstate.js';
 import { previewEdit, previewWrite } from './diff.js';
 
@@ -49,7 +49,7 @@ export interface AgentEvent {
   promptCachedCount?: number;
   promptCachedShare?: number;
   // Hook metadata (available on 'hook_output' events)
-  hookEvent?: 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'Stop' | 'Notification';
+  hookEvent?: HookEventName;
   hookLayer?: 'global' | 'project' | 'local';
   hookExitCode?: number;
   hookBlocked?: boolean;
@@ -398,6 +398,7 @@ export class Agent {
   /** Models the direct (openai-backend) endpoint actually serves. Empty when
    *  the gateway is the primary transport, since it fronts the whole fleet. */
   private directModels = new Set<string>();
+  private sessionStarted = false;
   /** Models that just failed at the transport level, and until when to skip
    *  them (see pickModel). */
   private modelDownUntil = new Map<string, number>();
@@ -1143,6 +1144,18 @@ export class Agent {
       yield { type: 'model_switch', content: `Entering plan mode (thinking enabled)`, from: this.previousModel || '', to: model };
     }
 
+    // SessionStart: once, before the first turn. Its output is context for the
+    // model (Claude Code's contract), e.g. memory recalled for this project.
+    if (!this.sessionStarted) {
+      this.sessionStarted = true;
+      const started = await runHooks('SessionStart', { cwd: process.cwd() } as never);
+      const context = started.filter(r => r.exitCode === 0 && r.stdout.trim()).map(r => r.stdout.trim()).join('\n\n');
+      if (context) {
+        this.context.addUser(`[SYSTEM] Session context from SessionStart hooks:\n${context}`);
+        yield { type: 'info', content: `SessionStart hooks added ${context.length} characters of context` };
+      }
+    }
+
     this.context.addUser(expandedMessage);
 
     // Set context limit from benchmarks or model metadata
@@ -1194,6 +1207,7 @@ export class Agent {
         }
       }
       const retryEvents: Array<{ attempt: number; projected: number; limit: number }> = [];
+      yield* this._fireHooks('PreCompact', { cwd: process.cwd(), messageCount: this.context.messageCount() });
       const compacted = await this.context.compactWithRetry(
         createChatClient(this.config),
         this.modelManager.getCurrentModel(),
@@ -2022,6 +2036,7 @@ export class Agent {
       // Proactive compaction check after tool results (context grows most here)
       if (this.context.needsCompaction()) {
         const retryEvents: Array<{ attempt: number; projected: number; limit: number }> = [];
+        yield* this._fireHooks('PreCompact', { cwd: process.cwd(), messageCount: this.context.messageCount() });
         const compacted = await this.context.compactWithRetry(
           createChatClient(this.config),
           this.modelManager.getCurrentModel(),
@@ -2123,7 +2138,7 @@ export class Agent {
    *  Use `yield* this._fireHooks(event, payload)` from the calling generator.
    */
   private async *_fireHooks(
-    event: 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'Stop' | 'Notification',
+    event: HookEventName,
     payload: Record<string, unknown>,
   ): AsyncGenerator<AgentEvent, { blocked: boolean; reason?: string }> {
     const results: HookExecResult[] = await runHooks(event, payload as never);

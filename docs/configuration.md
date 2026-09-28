@@ -254,6 +254,31 @@ A fuller config with the optional fields might look like:
 }
 ```
 
+## Hooks
+
+Shell commands that run on events, configured under `hooks` in `settings.json` (global, project or local). Each receives the event as JSON on stdin; a non-zero exit from a `PreToolUse` hook blocks the tool call.
+
+| Event | When | Matcher applies to |
+|---|---|---|
+| `PreToolUse` / `PostToolUse` | around each tool call | tool name |
+| `UserPromptSubmit` | each user message | prompt text |
+| `Stop` | a turn ends | — |
+| `Notification` | vcode needs attention | kind |
+| `SessionStart` | once, before the first turn — **stdout is added to the model's context** | — |
+| `PreCompact` | before the conversation is compacted | — |
+| `SubagentStop` | a subagent finishes | its status |
+
+Both vcode's flat form and Claude Code's nested form work, so hook config copied from Claude Code runs unchanged:
+
+```json
+{ "hooks": {
+  "PreToolUse": [{ "matcher": "bash", "command": "./check.sh" }],
+  "SessionStart": [{ "hooks": [{ "type": "command", "command": "cat .notes/today.md", "timeout": 5 }] }]
+} }
+```
+
+Hooks from a project's own `.veepee/` settings run only after you trust that project.
+
 ## Sandbox for unattended runs
 
 In goal mode (`vcode --goal`, `/goal`) and `--improve`, vcode approves ordinary work without asking. There, shell commands run inside [bubblewrap](https://github.com/containers/bubblewrap): everything stays readable, but only the project, `/tmp` and package-manager caches (`~/.npm`, `~/.cache`, …) are writable, so a wrong command cannot damage anything outside the work it was given. The file tools are already confined to the project. Network access is unchanged.
