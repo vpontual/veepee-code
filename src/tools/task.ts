@@ -13,8 +13,15 @@
 import { z } from 'zod';
 import type { ToolDef, ToolResult } from './types.js';
 import type { SubAgentManager } from '../subagent.js';
+import { loadAgentDefinitions, type AgentDefinition } from '../agents.js';
 
-export function createTaskTool(subagentMgr: SubAgentManager): ToolDef {
+export function createTaskTool(subagentMgr: SubAgentManager, agents: AgentDefinition[] = loadAgentDefinitions()): ToolDef {
+  const byName = new Map(agents.map(a => [a.name, a]));
+  const roster = agents.length === 0 ? [] : [
+    '',
+    'Named agents (pass `agent`; its instructions, tools and model become the defaults):',
+    ...agents.map(a => `  • ${a.name}${a.model ? ` [${a.model}]` : ''} — ${a.description.split(/(?<=\.)\s/)[0].slice(0, 160)}`),
+  ];
   return {
     name: 'task',
     // Spawns its own agent loop; can legitimately run for many minutes.
@@ -32,9 +39,11 @@ export function createTaskTool(subagentMgr: SubAgentManager): ToolDef {
       '  • You\'d otherwise burn turns reading many files just to extract a few facts.',
       '',
       'Subagents return their final answer as the tool result. Default tool allowlist is read-only + web. Mutating tools must be opted in via the `tools` parameter.',
+      ...roster,
     ].join('\n'),
     schema: z.object({
       prompt: z.string().describe('The full task description. Be specific and self-contained — the subagent has no access to your conversation.'),
+      agent: z.string().optional().describe('Name of a named agent to run as (see the list above). Explicit model/tools override its defaults.'),
       model: z.string().optional().describe('Model name to run on. The proxy routes by name (e.g., "gemma4:26b-a4b" → AGX server, "qwen3:8b" → small Nano). Default: parent\'s primary model.'),
       tools: z.array(z.string()).optional().describe('Tool name allowlist. Default: read_file, glob, grep, list_files, web_search, web_fetch, http_request. Add edit_file/write_file/bash only when the subagent needs to mutate.'),
       description: z.string().optional().describe('Short one-line label for /agents listing (≤60 chars). Defaults to the first 60 chars of the prompt.'),
@@ -43,11 +52,16 @@ export function createTaskTool(subagentMgr: SubAgentManager): ToolDef {
     }),
     source: 'local',
     execute: async (params: Record<string, unknown>): Promise<ToolResult> => {
+      const def = typeof params.agent === 'string' ? byName.get(params.agent) : undefined;
+      if (typeof params.agent === 'string' && !def) {
+        return { success: false, output: '', error: `No agent named "${params.agent}". Available: ${[...byName.keys()].join(', ') || '(none)'}` };
+      }
       const { id, result } = await subagentMgr.runTask({
         prompt: String(params.prompt),
-        model: typeof params.model === 'string' ? params.model : undefined,
-        tools: Array.isArray(params.tools) ? params.tools.map(String) : undefined,
-        description: typeof params.description === 'string' ? params.description : undefined,
+        model: typeof params.model === 'string' ? params.model : def?.model,
+        tools: Array.isArray(params.tools) ? params.tools.map(String) : def?.tools,
+        instructions: def?.instructions,
+        description: typeof params.description === 'string' ? params.description : (def ? `${def.name}: ${String(params.prompt).slice(0, 48)}` : undefined),
         runInBackground: params.run_in_background === true,
         maxTurns: typeof params.max_turns === 'number' ? params.max_turns : undefined,
       });

@@ -61,6 +61,8 @@ export interface RunTaskOptions {
   /** When true, runTask returns immediately with the tracked-agent ID.
    *  Output retrievable via the manager. Phase 3 F8. */
   runInBackground?: boolean;
+  /** Role instructions from a named agent definition (agents.ts). */
+  instructions?: string;
 }
 
 // ─── Sub-Agent ───────────────────────────────────────────────────────────────
@@ -271,6 +273,7 @@ class GenericSubAgent {
     allowedTools: string[] | null,
     maxTurns: number,
     permissions: PermissionManager | null = null,
+    private readonly instructions: string = '',
   ) {
     this.ollama = createChatClient(config);
     // Ollama's default window truncates a subagent's prompt too (ollama-context.ts).
@@ -294,7 +297,8 @@ class GenericSubAgent {
           'You are a subagent spawned by a parent agent for a focused task. ' +
           'You have your own conversation context. Use the tools available to ' +
           'complete the task, then return a concise final answer. ' +
-          'Do not delegate further — finish the task yourself.',
+          'Do not delegate further — finish the task yourself.' +
+          (this.instructions ? `\n\n${this.instructions}` : ''),
       },
       { role: 'user', content: prompt },
     ];
@@ -559,6 +563,7 @@ export class SubAgentManager {
       opts.tools ?? null,
       opts.maxTurns ?? 8,
       this.permissions,
+      opts.instructions ?? '',
     );
 
     this.running.set(id, agent);

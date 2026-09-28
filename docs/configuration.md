@@ -56,6 +56,22 @@ VEEPEE_CODE_PROXY_URL=http://localhost:11434
 
 The repo ships a commented template at `.env.example`.
 
+## Named agents
+
+The `task` tool can run a named agent: a markdown file giving a role, its tools, optionally a model, and instructions. The format is Claude Code's, so agents written for Claude Code work unchanged. Searched in order, first name wins: `<project>/.veepee/agents/`, `~/.veepee-code/agents/`, `~/.claude/agents/`.
+
+```markdown
+---
+name: reviewer
+description: Reviews a diff for correctness bugs.
+tools: Read, Grep, Glob
+model: gemma4:26b-a4b
+---
+You review code changes. Report only real bugs, with file and line.
+```
+
+Claude Code tool names (`Read`, `Bash`, `WebFetch`…) map to vcode's; Claude model names (`opus`, `sonnet`, `inherit`) mean "the default subagent model". `tools: []` means no tools.
+
 ## Configuration Fields
 
 Each field below is its `settings.json` name. Fields listed in [The .env file](#the-env-file) are set there instead, under their variable name.
