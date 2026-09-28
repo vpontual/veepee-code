@@ -741,8 +741,11 @@ describe('the output ceiling is a budget, not a constant', () => {
     // prompt contains …`. The request is refused ENTIRELY — the turn produces
     // nothing, which is worse than a short answer.
     const src = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
-    expect(src).toContain('private outputBudget()');
-    expect(src).toContain('const effortOpts = this.outputBudget();');
+    expect(src).toContain('private outputBudget(toolSchemaTokens = 0)');
+    // The tool definitions are part of the counted prompt (a 32k gemma4 window
+    // overflowed by ~2k on them every attempt when only a flat reserve covered them).
+    expect(src).toContain('const effortOpts = this.outputBudget(toolSchemaTokens);');
+    expect(src).toMatch(/\+ toolSchemaTokens \+ this\.promptUndercount/);
     // Budgeted against the REMAINING room, with a reserve for template
     // overhead and our own estimate error.
     expect(src).toMatch(/const room = limit - prompt - RESERVE;/);
