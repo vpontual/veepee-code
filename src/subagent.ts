@@ -8,6 +8,50 @@ import type { ModelRoster } from './benchmark.js';
 import { generationLimiter } from './generation-limit.js';
 import { createChatClient, isDirectOnly } from './llm-client.js';
 import { ollamaNumCtx } from './ollama-context.js';
+import { createWorktree, type WorktreeInfo } from './worktree.js';
+import { execFileSync } from 'child_process';
+import { isAbsolute, relative, resolve } from 'path';
+
+/**
+ * Confine a worktree subagent's tool call to its worktree. The tools resolve
+ * paths from the process's single working directory, so without this a
+ * relative path, an argument-less search or a bash call would land in the
+ * MAIN tree — where parallel subagents would collide. Absolute paths into the
+ * main tree are mapped to the same place in the worktree.
+ */
+export function isolateArgs(tool: string, args: Record<string, unknown>, root: string, mainRoot: string = process.cwd()): Record<string, unknown> {
+  const out = { ...args };
+  const confine = (v: unknown): unknown => {
+    if (typeof v !== 'string' || !v) return v;
+    if (!isAbsolute(v)) return resolve(root, v);
+    const rel = relative(mainRoot, v);
+    const insideMain = !rel.startsWith('..') && !isAbsolute(rel);
+    const insideRoot = !relative(root, v).startsWith('..');
+    return insideMain && !insideRoot ? resolve(root, rel) : v;
+  };
+  for (const key of ['path', 'cwd'] as const) {
+    if (key in out) out[key] = confine(out[key]);
+  }
+  if (tool === 'bash' && !out.cwd) out.cwd = root;
+  if ((tool === 'glob' || tool === 'grep' || tool === 'list_files') && !out.path) out.path = root;
+  return out;
+}
+
+/** Commit what a worktree subagent changed, and describe it for the parent. */
+function finishWorktree(wt: WorktreeInfo, description: string): string {
+  const git = (...a: string[]) => execFileSync('git', a, { cwd: wt.path, encoding: 'utf-8', stdio: 'pipe' }).trim();
+  try {
+    if (git('status', '--porcelain')) {
+      git('add', '-A');
+      git('commit', '-q', '-m', `vcode subagent: ${description}`);
+    }
+    const stat = wt.baseBranch ? git('diff', '--stat', `${wt.baseBranch}...${wt.branch}`) : '';
+    if (!stat) return `[worktree ${wt.path}, branch ${wt.branch}: no changes]`;
+    return `[worktree ${wt.path}, branch ${wt.branch}]\n${stat}\nMerge with \`git merge ${wt.branch}\`, or discard with \`git worktree remove --force ${wt.path} && git branch -D ${wt.branch}\`.`;
+  } catch (err) {
+    return `[worktree ${wt.path}, branch ${wt.branch}: could not summarise changes — ${(err as Error).message.split('\n')[0]}]`;
+  }
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -63,6 +107,9 @@ export interface RunTaskOptions {
   runInBackground?: boolean;
   /** Role instructions from a named agent definition (agents.ts). */
   instructions?: string;
+  /** 'worktree': run in its own git worktree on its own branch, so parallel
+   *  subagents that edit files cannot collide with each other or the parent. */
+  isolation?: 'worktree';
 }
 
 // ─── Sub-Agent ───────────────────────────────────────────────────────────────
@@ -274,6 +321,8 @@ class GenericSubAgent {
     maxTurns: number,
     permissions: PermissionManager | null = null,
     private readonly instructions: string = '',
+    /** Worktree this subagent is confined to (see isolateArgs). */
+    private readonly rootDir: string | null = null,
   ) {
     this.ollama = createChatClient(config);
     // Ollama's default window truncates a subagent's prompt too (ollama-context.ts).
@@ -347,7 +396,10 @@ class GenericSubAgent {
 
         for (const call of toolCalls) {
           const toolName = call.function.name;
-          const toolArgs = (call.function.arguments || {}) as Record<string, unknown>;
+          const rawArgs = (call.function.arguments || {}) as Record<string, unknown>;
+          // Confine to the worktree BEFORE the permission check, so what is
+          // checked is exactly what runs.
+          const toolArgs = this.rootDir ? isolateArgs(toolName, rawArgs, this.rootDir) : rawArgs;
           // Subagent honors its own allowlist — block silently with a clear
           // tool result so the model can recover within its turn budget.
           if (!allowSet.has(toolName)) {
@@ -556,6 +608,18 @@ export class SubAgentManager {
 
     const id = this.assignId();
     const description = opts.description ?? opts.prompt.slice(0, 60);
+    let worktree: WorktreeInfo | null = null;
+    let instructions = opts.instructions ?? '';
+    if (opts.isolation === 'worktree') {
+      try {
+        worktree = createWorktree(description);
+      } catch (err) {
+        return { id, result: { role: 'task', success: false, content: '', error: `Could not create a worktree: ${(err as Error).message}`, model: requestedModel, elapsed: 0, toolCalls: [] } };
+      }
+      instructions += `\n\nYou are working in an isolated git worktree at ${worktree.path} on branch ${worktree.branch}, ` +
+        'created from the last commit (uncommitted changes in the main tree are not here). Relative paths resolve inside it. ' +
+        'Your changes are committed on that branch when you finish; say in your answer what you changed.';
+    }
     const agent = new GenericSubAgent(
       this.config,
       this.registry,
@@ -563,7 +627,8 @@ export class SubAgentManager {
       opts.tools ?? null,
       opts.maxTurns ?? 8,
       this.permissions,
-      opts.instructions ?? '',
+      instructions,
+      worktree?.path ?? null,
     );
 
     this.running.set(id, agent);
@@ -578,6 +643,7 @@ export class SubAgentManager {
     this.tracked.set(id, tracked);
 
     const promise = agent.run(opts.prompt).then((result) => {
+      if (worktree) result = { ...result, content: `${result.content ?? ''}\n\n${finishWorktree(worktree, description)}` };
       this.running.delete(id);
       tracked.completedAt = Date.now();
       tracked.result = result;

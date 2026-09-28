@@ -197,6 +197,17 @@ list_files
 list_files path="src/tools" recursive=true
 ```
 
+## Task list, background commands and subagents
+
+| Tool | What it does |
+|------|--------------|
+| `todo_write` | The model's own task list (content + pending / in_progress / completed). Shown back to it every turn; one reminder if a turn ends with items open. |
+| `bash` with `run_in_background: true` | Starts a dev server, watcher or long build and returns an id at once. A command ending in a single `&` is treated the same way; processes a normal `bash` call leaves running are tracked too. |
+| `bash_output` | New output from a background command since the last read, and whether it is still running. Optional line filter; no id lists them all. |
+| `kill_shell` | Stops a background command and everything it started. Everything still running is stopped when vcode exits. |
+| `task` | Runs a subagent. `agent: <name>` uses a named agent (see configuration.md). `isolation: "worktree"` gives it its own git worktree and branch (from the last commit); its changes are committed there and the branch is reported for merging. `run_in_background: true` returns an id at once. |
+| `task_output` | Collects a background subagent's result, waiting for it by default. No id lists all subagents. |
+
 ## Web Tools
 
 ### web_fetch (Always Available)

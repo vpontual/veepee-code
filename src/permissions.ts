@@ -262,6 +262,7 @@ export class PermissionManager {
     'todo_write',
     'bash_output',
     'kill_shell',
+    'task_output',
   ]);
 
   /** Git subcommands with no write form — auto-allowed so routine inspection

@@ -35,7 +35,7 @@ import { registerCodingTools } from './tools/coding.js';
 import { registerDevOpsTools } from './tools/devops.js';
 import { registerWebTools } from './tools/web.js';
 import { registerLspTools } from './tools/lsp.js';
-import { createTaskTool } from './tools/task.js';
+import { createTaskTool, createTaskOutputTool } from './tools/task.js';
 import { createExitPlanModeTool } from './tools/plan-gate.js';
 import { createNotebookEditTool } from './tools/notebook.js';
 import { buildAskUserTool } from './tools/interaction.js';
@@ -317,6 +317,7 @@ export function buildEvalAgent(config: Config, modelManager: ModelManager, cwd: 
   for (const tool of registerDevOpsTools()) registry.register(tool);
   for (const tool of registerLspTools(lspManager)) registry.register(tool);
   registry.register(createTaskTool(agent.getSubAgents()));
+  registry.register(createTaskOutputTool(agent.getSubAgents()));
   registry.register(createExitPlanModeTool(agent, permissions));
   registry.register(createNotebookEditTool(ignoreManager, fileTracker));
 

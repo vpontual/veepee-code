@@ -39,10 +39,12 @@ export function createTaskTool(subagentMgr: SubAgentManager, agents: AgentDefini
       '  • You\'d otherwise burn turns reading many files just to extract a few facts.',
       '',
       'Subagents return their final answer as the tool result. Default tool allowlist is read-only + web. Mutating tools must be opted in via the `tools` parameter.',
+      'With run_in_background: true you get an id back at once; collect the result with task_output(id), which waits for it. Start several, then collect each — they run in parallel.',
       ...roster,
     ].join('\n'),
     schema: z.object({
       prompt: z.string().describe('The full task description. Be specific and self-contained — the subagent has no access to your conversation.'),
+      isolation: z.enum(['worktree']).optional().describe('"worktree": run in its own git worktree on its own branch (from the last commit). Use when parallel subagents edit files; you get back the branch to merge.'),
       agent: z.string().optional().describe('Name of a named agent to run as (see the list above). Explicit model/tools override its defaults.'),
       model: z.string().optional().describe('Model name to run on. The proxy routes by name (e.g., "gemma4:26b-a4b" → AGX server, "qwen3:8b" → small Nano). Default: parent\'s primary model.'),
       tools: z.array(z.string()).optional().describe('Tool name allowlist. Default: read_file, glob, grep, list_files, web_search, web_fetch, http_request. Add edit_file/write_file/bash only when the subagent needs to mutate.'),
@@ -61,6 +63,7 @@ export function createTaskTool(subagentMgr: SubAgentManager, agents: AgentDefini
         model: typeof params.model === 'string' ? params.model : def?.model,
         tools: Array.isArray(params.tools) ? params.tools.map(String) : def?.tools,
         instructions: def?.instructions,
+        isolation: params.isolation === 'worktree' ? 'worktree' : undefined,
         description: typeof params.description === 'string' ? params.description : (def ? `${def.name}: ${String(params.prompt).slice(0, 48)}` : undefined),
         runInBackground: params.run_in_background === true,
         maxTurns: typeof params.max_turns === 'number' ? params.max_turns : undefined,
@@ -86,6 +89,51 @@ export function createTaskTool(subagentMgr: SubAgentManager, agents: AgentDefini
         success: true,
         output: `${meta}\n\n${result.content}`,
       };
+    },
+  };
+}
+
+/**
+ * `task_output` — collect a background subagent's result.
+ *
+ * run_in_background returned an id and nothing to wait on: a real DGX run
+ * slept, then polled vcode's own HTTP API with curl to find out whether its
+ * two worktree subagents had finished. This is the tool it was missing.
+ */
+export function createTaskOutputTool(subagentMgr: SubAgentManager): ToolDef {
+  return {
+    name: 'task_output',
+    timeoutMs: null,
+    description: 'Get the result of a background subagent started with task(run_in_background: true). Waits for it to finish by default (up to timeout_seconds). Omit id to list all subagents and their status.',
+    schema: z.object({
+      id: z.string().optional().describe('Subagent id returned by task, e.g. "sa-001"'),
+      wait: z.boolean().optional().describe('Wait for it to finish (default true). false = return its current status at once.'),
+      timeout_seconds: z.number().optional().describe('Longest to wait (default 600).'),
+    }),
+    source: 'local',
+    execute: async (params: Record<string, unknown>): Promise<ToolResult> => {
+      const id = typeof params.id === 'string' ? params.id : undefined;
+      const agents = subagentMgr.listAgents();
+      if (!id) {
+        if (agents.length === 0) return { success: true, output: 'No subagents.' };
+        return { success: true, output: agents.map(a => `${a.id}  ${a.status}  ${a.model}  ${a.description}`).join('\n') };
+      }
+      const tracked = agents.find(a => a.id === id);
+      if (!tracked) return { success: false, output: '', error: `No subagent "${id}". Call task_output with no id to list them.` };
+      if (tracked.status === 'running' && params.wait !== false) {
+        const ms = (typeof params.timeout_seconds === 'number' ? params.timeout_seconds : 600) * 1000;
+        const done = await Promise.race([
+          subagentMgr.waitFor(id).then(() => true),
+          new Promise<boolean>(r => setTimeout(() => r(false), ms)),
+        ]);
+        if (!done) return { success: true, output: `${id} is still running after ${Math.round(ms / 1000)}s.` };
+      }
+      const latest = subagentMgr.listAgents().find(a => a.id === id)!;
+      if (latest.status === 'running') return { success: true, output: `${id} is still running.` };
+      const r = latest.result;
+      const meta = `[subagent ${id} ${latest.status} on ${latest.model}${r ? `, ${r.elapsed}ms, ${r.toolCalls.length} tool calls` : ''}]`;
+      if (!r || !r.success) return { success: false, output: '', error: `${meta}\n${r?.error ?? 'no result'}` };
+      return { success: true, output: `${meta}\n\n${r.content}` };
     },
   };
 }

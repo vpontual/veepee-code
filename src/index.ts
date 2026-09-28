@@ -62,7 +62,7 @@ import { registerDevOpsTools } from './tools/devops.js';
 import { discoverRemoteTools } from './tools/remote.js';
 import { connectAndDiscover as connectMcpServers, closeAll as closeMcpClients, type McpClient } from './mcp.js';
 import { buildSkillInvokeTool } from './skills.js';
-import { createTaskTool } from './tools/task.js';
+import { createTaskTool, createTaskOutputTool } from './tools/task.js';
 import { createExitPlanModeTool } from './tools/plan-gate.js';
 import { createNotebookEditTool } from './tools/notebook.js';
 import { createChatClient, isDirectOnly, primaryEndpoint } from './llm-client.js';
@@ -405,6 +405,7 @@ async function main() {
   // tool is intentionally local (not Claude-Code's namespaced "Task" — keep
   // it discoverable via tab-complete and consistent with other vcode tools).
   registry.register(createTaskTool(agent.getSubAgents()));
+  registry.register(createTaskOutputTool(agent.getSubAgents()));
   // Plan-mode gate. Always registered, but the tool itself enforces that
   // it can only run while agent.getMode() === 'plan'. The model sees it in
   // every mode; tool-pick guidance in the description steers it to plan
