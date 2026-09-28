@@ -5,6 +5,8 @@ import { OpenAIChatClient } from './openai-adapter.js';
 import { answerText } from './llm-answer.js';
 import { parseTextToolCalls, TextToolCallGate } from './text-tool-calls.js';
 import { ollamaNumCtx } from './ollama-context.js';
+import { TodoList, buildTodoTool } from './todo.js';
+import type { ToolResult } from './tools/types.js';
 import { retryDecision } from './retry.js';
 import { killRunningBashCommands } from './tools/coding.js';
 import type { ToolRegistry } from './tools/registry.js';
@@ -390,6 +392,10 @@ export class Agent {
   /** Models the direct (openai-backend) endpoint actually serves. Empty when
    *  the gateway is the primary transport, since it fronts the whole fleet. */
   private directModels = new Set<string>();
+  /** This agent's task list (todo_write) — see todo.ts. */
+  readonly todos = new TodoList();
+  private readonly todoTool = buildTodoTool(this.todos);
+  private todoNudged = false;
   private directModelsListed = false;
   /** Models whose server refused `think` ("does not support thinking"). A
    *  plain Ollama rejects the whole request rather than ignoring the flag, so
@@ -416,6 +422,10 @@ export class Agent {
       this.ollama = new Ollama({ host: config.proxyUrl, headers: { "x-ollama-source": "vcode" } });
     }
     this.context = new ContextManager();
+    // The task list is this agent's own (API sessions each get an Agent but
+    // share one registry); the registry only carries the tool's schema.
+    if (!registry.has(this.todoTool.name)) registry.register(buildTodoTool(new TodoList()));
+    this.context.setExtraVolatile(() => this.todos.contextBlock());
     this.modelManager = modelManager;
     this.registry = registry;
     this.permissions = permissions;
@@ -760,6 +770,16 @@ export class Agent {
       const ids = (((await res.json()) as { data?: Array<{ id?: string }> }).data ?? []).map(m => m.id).filter((x): x is string => !!x);
       if (ids.length > 0) this.directModels = new Set(ids);
     } catch { /* keep the primary assumption */ }
+  }
+
+  /** Tools this agent handles itself (its own task list); the rest go to the registry. */
+  private async runTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+    if (name !== this.todoTool.name) return this.registry.execute(name, args);
+    const parsed = this.todoTool.schema.safeParse(args);
+    if (!parsed.success) {
+      return { success: false, output: '', error: `Invalid arguments for todo_write: ${parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}` };
+    }
+    return this.todoTool.execute(parsed.data as Record<string, unknown>);
   }
 
   /** Fill in an Ollama model's window when no benchmark did (see ollama-context.ts). */
@@ -1181,6 +1201,7 @@ export class Agent {
     // Tier 3 #1: force-act guard — track whether the model has taken ANY action this
     // message, and whether we've already nudged it to stop narrating and act.
     let hasActedThisMessage = false;
+    this.todoNudged = false; // one task-list reminder per user message
     let forcedActCount = 0;
     // Daily-driver #1 (self-repair): true once code is edited, cleared when the model runs
     // something (bash) — so we can force a verify-and-fix turn if it finishes without running it.
@@ -1626,6 +1647,15 @@ export class Agent {
           yield { type: 'info', content: 'Nudged: act instead of narrate' };
           continue;
         }
+        // Ending with task-list items still open: remind once. Small models
+        // declare victory with steps undone; the list says so precisely.
+        const openTodos = this.todos.open();
+        if (this.mode === 'act' && openTodos.length > 0 && !this.todoNudged) {
+          this.todoNudged = true;
+          this.context.addUser(`[SYSTEM] Your task list still has ${openTodos.length} open item${openTodos.length === 1 ? '' : 's'}:\n${openTodos.map(t => `- ${t.content}`).join('\n')}\nFinish them, or if one is no longer needed or already done, update the list with todo_write. Then reply.`);
+          yield { type: 'info', content: `Nudged: ${openTodos.length} task-list item(s) still open` };
+          continue;
+        }
         // Daily-driver #1 (self-repair): changed code but never ran it -> force a
         // verify-and-fix turn rather than shipping an unverified edit.
         if (shouldForceVerify({ mode: this.mode, codeChangedUnverified, alreadyForced: forcedVerifyOnce })) {
@@ -1752,7 +1782,7 @@ export class Agent {
         }
         const executed = await Promise.all(executableCalls.map(async ({ idx, name, args }) => {
           const startedAt = Date.now();
-          const result = await this.registry.execute(name, args);
+          const result = await this.runTool(name, args);
           return { idx, name, args, result, durationMs: Date.now() - startedAt };
         }));
         // Fire PostToolUse for each executed call, in order. Output is purely
@@ -1834,7 +1864,7 @@ export class Agent {
           }
 
           const startedAt = Date.now();
-          const result = await this.registry.execute(toolName, toolArgs);
+          const result = await this.runTool(toolName, toolArgs);
           const durationMs = Date.now() - startedAt;
 
           // PostToolUse hook — informational; cannot abort.

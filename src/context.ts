@@ -313,6 +313,7 @@ If you see "[System: Your previously saved implementation plan...]" in the conve
 ## Coding Workflow
 
 When modifying code, follow this sequence:
+0. **Track:** If the request has 3 or more distinct steps, first call \`todo_write\` with the steps, keep exactly one in_progress, and mark each completed as soon as it is done. Skip it for one- or two-step requests.
 1. **Understand:** Read the target file(s) and any related files (imports, tests, config) before editing.
 2. **Plan:** For multi-file changes, plan the order of edits. Edit dependency files before dependents.
 3. **Edit:** Use edit_file for surgical changes. Match the existing code style exactly (indentation, quotes, semicolons).
@@ -636,7 +637,13 @@ export class ContextManager {
   volatileContextBlock(): string {
     const ks = this.knowledgeState.toSystemPromptBlock();
     const files = this.compactedFilesBlock();
-    return ks + files;
+    return ks + files + (this.extraVolatile?.() ?? '');
+  }
+
+  /** Extra per-turn context owned by the agent (its task list). */
+  private extraVolatile?: () => string;
+  setExtraVolatile(fn: () => string): void {
+    this.extraVolatile = fn;
   }
 
   /** Render a "files touched earlier" section for the system prompt when
