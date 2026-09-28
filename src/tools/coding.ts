@@ -25,6 +25,7 @@ import { formatDiagnostics } from '../lsp/diagnostics.js';
 import { pathToFileUri } from '../lsp/uri.js';
 import { startBackground, adoptBackground, processGroupAlive, buildBashOutputTool, buildKillShellTool } from './background.js';
 import { shellInvocation } from './os-sandbox.js';
+import { buildRepoMapTool } from './repo-map.js';
 
 /** Structured-format extensions we validate at write time. */
 const STRUCTURED_JSON_EXT = new Set(['.json']);
@@ -183,6 +184,7 @@ export function registerCodingTools(ignoreManager?: IgnoreManager, fileTracker?:
     createGrepTool(ignoreManager),
     createBashTool(fileTracker),
     buildBashOutputTool(),
+    buildRepoMapTool(ignoreManager),
     buildKillShellTool(),
     createGitTool(),
     createGithubTool(),

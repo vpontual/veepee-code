@@ -1779,7 +1779,7 @@ export class Agent {
       await this.checkpointOnce(userMessage);
 
       // Execute tool calls — parallelize independent read-only calls
-      const READ_ONLY_TOOLS = new Set(['read_file', 'glob', 'grep', 'list_files', 'system_info', 'web_search', 'web_fetch', 'bash_output']);
+      const READ_ONLY_TOOLS = new Set(['read_file', 'glob', 'grep', 'list_files', 'system_info', 'web_search', 'web_fetch', 'bash_output', 'repo_map']);
 
       // Check if all calls are independent read-only (safe to parallelize)
       // Note: hook plumbing for PreToolUse/PostToolUse is below in both the
