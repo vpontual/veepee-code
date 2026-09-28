@@ -3,6 +3,8 @@ import type { Message, ToolCall } from 'ollama';
 import type { Config } from './config.js';
 import { OpenAIChatClient } from './openai-adapter.js';
 import { answerText } from './llm-answer.js';
+import { parseTextToolCalls } from './text-tool-calls.js';
+import { ollamaNumCtx } from './ollama-context.js';
 import { retryDecision } from './retry.js';
 import { killRunningBashCommands } from './tools/coding.js';
 import type { ToolRegistry } from './tools/registry.js';
@@ -343,6 +345,7 @@ export function shouldForceVerify(opts: {
  * same Agent. Callers that own an HTTP response should surface this as 409
  * before committing any response headers.
  */
+
 export class AgentBusyError extends Error {
   readonly code = 'AGENT_BUSY';
   constructor(message = 'agent busy — a run is already in progress') {
@@ -362,6 +365,8 @@ export class Agent {
   /** True once this turn has taken its snapshot, so we take at most one. */
   private checkpointedThisTurn = false;
   private optimalContextSizes = new Map<string, number>();
+  /** Models whose window has already been asked for (answered or not). */
+  private contextProbed = new Set<string>();
   private mode: AgentMode = 'act';
   private previousModel: string | null = null;
   private roster: ModelRoster | null = null;
@@ -385,6 +390,11 @@ export class Agent {
   /** Models the direct (openai-backend) endpoint actually serves. Empty when
    *  the gateway is the primary transport, since it fronts the whole fleet. */
   private directModels = new Set<string>();
+  /** Models whose server refused `think` ("does not support thinking"). A
+   *  plain Ollama rejects the whole request rather than ignoring the flag, so
+   *  every non-reasoning model failed on the first prompt. Learned on the
+   *  first refusal, then never sent again for that model. */
+  private noThinkModels = new Set<string>();
   /** Lazily-built gateway client, used for models the direct endpoint lacks. */
   private gatewayClient: Ollama | null = null;
 
@@ -729,6 +739,15 @@ export class Agent {
     return this.optimalContextSizes.get(model);
   }
 
+  /** Fill in an Ollama model's window when no benchmark did (see ollama-context.ts). */
+  private async ensureContextSize(model: string): Promise<void> {
+    if (!model || this.optimalContextSizes.has(model) || this.contextProbed.has(model)) return;
+    this.contextProbed.add(model);
+    if (this.clientFor(model).isAdapter) return; // OpenAI servers own their window
+    const size = await ollamaNumCtx(this.config, model);
+    if (size) this.optimalContextSizes.set(model, size);
+  }
+
   getContext(): ContextManager {
     return this.context;
   }
@@ -1058,6 +1077,7 @@ export class Agent {
     this.context.addUser(expandedMessage);
 
     // Set context limit from benchmarks or model metadata
+    await this.ensureContextSize(this.modelManager.getCurrentModel());
     const ctxLimit = this.getOptimalContext(this.modelManager.getCurrentModel());
     if (ctxLimit) {
       this.context.setContextLimit(ctxLimit);
@@ -1234,6 +1254,8 @@ export class Agent {
        *  surface something instead of ending silent. */
       let fullThinking = '';
       let toolCalls: ToolCall[] = [];
+      // Names of the tools offered this turn (chat mode offers a subset).
+      let offeredTools = new Set<string>();
       let inThinking = false;
       let thinkingBuffer = '';
       let evalCount = 0;
@@ -1247,6 +1269,7 @@ export class Agent {
 
       try {
         // Use optimal context size from benchmarks if available
+        await this.ensureContextSize(currentModel); // the model can change mid-turn
         const numCtx = this.getOptimalContext(currentModel);
 
         // Mode-specific settings:
@@ -1286,6 +1309,7 @@ export class Agent {
         if (allowedTools) {
           tools = tools.filter(t => allowedTools.has(t.function?.name || ''));
         }
+        offeredTools = new Set(tools.map(t => t.function?.name || ''));
         const effortOpts = this.outputBudget();
         // Sampling preset: chat mode → conversational/general; act/plan → coding.
         // Both Qwen-recommended; harmless on other Qwen3.x models, only wrong if
@@ -1304,7 +1328,7 @@ export class Agent {
           messages,
           ...(tools.length > 0 ? { tools } : {}),
           stream: true as const,
-          think: useThinking,
+          think: useThinking && !this.noThinkModels.has(currentModel),
           keep_alive: '30m',
           // Only the openai adapter consumes `signal`; never send it to the
           // Ollama client (it would serialize into the request body).
@@ -1330,6 +1354,10 @@ export class Agent {
             } catch (err) {
               // A user interrupt is not a transport fault; never retry it.
               if (this.abortController?.signal.aborted) throw err;
+              if (!this.noThinkModels.has(currentModel) && /does not support thinking/i.test(String((err as Error)?.message ?? err))) {
+                this.noThinkModels.add(currentModel);
+                continue; // same request without `think` (chatRequest reads the set)
+              }
               const decision = retryDecision(err, attempt);
               if (!decision.retry) throw err;
               await new Promise(r => setTimeout(r, decision.delayMs));
@@ -1531,6 +1559,18 @@ export class Agent {
       if (!fullContent.trim() && toolCalls.length === 0 && fullThinking.trim()) {
         fullContent = fullThinking.trim();
         yield { type: 'text', content: fullContent };
+      }
+
+      // A tool call written as text (small local models do this) becomes a
+      // real one — but only if the whole answer is calls to tools offered this
+      // turn. See text-tool-calls.ts for why it is that strict.
+      if (toolCalls.length === 0 && fullContent.trim()) {
+        const recovered = parseTextToolCalls(answerText(fullContent), (n) => offeredTools.has(n));
+        if (recovered) {
+          toolCalls = recovered;
+          fullContent = '';
+          yield { type: 'info', content: 'The model wrote its tool call as text; running it as a tool call.' };
+        }
       }
 
       // Add assistant message to context

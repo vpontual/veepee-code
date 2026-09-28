@@ -6,7 +6,8 @@ import type { Config } from './config.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { ModelRoster } from './benchmark.js';
 import { generationLimiter } from './generation-limit.js';
-import { createChatClient } from './llm-client.js';
+import { createChatClient, isDirectOnly } from './llm-client.js';
+import { ollamaNumCtx } from './ollama-context.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -72,6 +73,7 @@ type LegacyRole = 'search' | 'review' | 'summarize';
 
 export class SubAgent {
   private ollama: Ollama;
+  private numCtxFor: (model: string) => Promise<number | undefined>;
   private registry: ToolRegistry;
   private model: string;
   private role: LegacyRole;
@@ -86,6 +88,8 @@ export class SubAgent {
 
   constructor(config: Config, registry: ToolRegistry, roster: ModelRoster | null, role: LegacyRole) {
     this.ollama = createChatClient(config);
+    // Ollama's default window truncates a subagent's prompt too (ollama-context.ts).
+    this.numCtxFor = (model) => (isDirectOnly(config) ? Promise.resolve(undefined) : ollamaNumCtx(config, model));
     this.registry = registry;
     this.role = role;
     this.maxTurns = role === 'search' ? 3 : 5;
@@ -170,13 +174,14 @@ export class SubAgent {
         // Through the limiter: a background subagent generates while its parent
         // carries on, and parallel() fans several out at once. Same model means
         // same box, so those must not overlap.
+        const numCtx = await this.numCtxFor(this.model);
         const response = await generationLimiter.run(this.model, () => this.ollama.chat({
           model: this.model,
           messages,
           ...(tools.length > 0 ? { tools } : {}),
           stream: false,
           keep_alive: '30m',
-          options: { num_predict: 3072 },
+          options: { num_predict: 3072, ...(numCtx ? { num_ctx: numCtx } : {}) },
         } as never)) as unknown as { message: { content: string; tool_calls?: ToolCall[] } };
 
         const content = nonStreamingAnswer(response);
@@ -251,6 +256,7 @@ export class SubAgent {
 
 class GenericSubAgent {
   private ollama: Ollama;
+  private numCtxFor: (model: string) => Promise<number | undefined>;
   private registry: ToolRegistry;
   private model: string;
   private allowedTools: Set<string> | null;
@@ -267,6 +273,8 @@ class GenericSubAgent {
     permissions: PermissionManager | null = null,
   ) {
     this.ollama = createChatClient(config);
+    // Ollama's default window truncates a subagent's prompt too (ollama-context.ts).
+    this.numCtxFor = (model) => (isDirectOnly(config) ? Promise.resolve(undefined) : ollamaNumCtx(config, model));
     this.registry = registry;
     this.model = model;
     this.allowedTools = allowedTools ? new Set(allowedTools) : null;
@@ -311,13 +319,14 @@ class GenericSubAgent {
         // Through the limiter: a background subagent generates while its parent
         // carries on, and parallel() fans several out at once. Same model means
         // same box, so those must not overlap.
+        const numCtx = await this.numCtxFor(this.model);
         const response = await generationLimiter.run(this.model, () => this.ollama.chat({
           model: this.model,
           messages,
           ...(tools.length > 0 ? { tools } : {}),
           stream: false,
           keep_alive: '30m',
-          options: { num_predict: 3072 },
+          options: { num_predict: 3072, ...(numCtx ? { num_ctx: numCtx } : {}) },
         } as never)) as unknown as { message: { content: string; tool_calls?: ToolCall[] } };
 
         const content = nonStreamingAnswer(response);

@@ -29,6 +29,9 @@ export interface Config {
    *  fast and stop them from blocking the main loop on a large model. */
   summarizerModel: string | null;
   autoSwitch: boolean;
+  /** Context window to request from Ollama (num_ctx). null = the model's own
+   *  maximum, capped at 16384 (see ensureContextSize in agent.ts). */
+  numCtx: number | null;
   maxModelSize: number;  // max parameter count in billions (default 40)
   minModelSize: number;  // min for act mode — skip tiny models (default 12)
   apiPort: number;
@@ -156,6 +159,7 @@ export interface ConfigFile {
   planModel?: string | null;
   summarizerModel?: string | null;
   autoSwitch?: boolean;
+  numCtx?: number | null;
   maxModelSize?: number;
   minModelSize?: number;
   apiPort?: number;
@@ -194,6 +198,7 @@ const DEFAULTS: Config = {
   planModel: null,
   summarizerModel: null,
   autoSwitch: true,
+  numCtx: null,
   maxModelSize: 40,
   minModelSize: 12,
   apiPort: 8484,
@@ -619,6 +624,7 @@ export function loadConfig(configPath?: string): Config {
     planModel: merged.planModel ?? DEFAULTS.planModel,
     summarizerModel: merged.summarizerModel ?? DEFAULTS.summarizerModel,
     autoSwitch: merged.autoSwitch ?? DEFAULTS.autoSwitch,
+    numCtx: merged.numCtx ?? DEFAULTS.numCtx,
     maxModelSize: merged.maxModelSize ?? DEFAULTS.maxModelSize,
     minModelSize: merged.minModelSize ?? DEFAULTS.minModelSize,
     apiPort: merged.apiPort ?? DEFAULTS.apiPort,

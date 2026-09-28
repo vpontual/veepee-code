@@ -66,7 +66,11 @@ const STEPS: WizardStep[] = [
     description: 'Pick how VEEPEE Code handles models. You can lock it to one model (safer with small servers and vLLM endpoints that serve only one), pick a default you can still switch with /models, or skip and let VEEPEE Code auto-pick based on size and benchmarks.',
     tools: ['Default model routing'],
     required: false,
-    envVars: [],
+    // Listed so the summary can show the choice; the flow is customRun.
+    envVars: [
+      { key: 'VEEPEE_CODE_LOCK_MODEL', label: 'Locked model', default: '', secret: false },
+      { key: 'VEEPEE_CODE_MODEL', label: 'Default model', default: '', secret: false },
+    ],
     customRun: runModelStep,
   },
   {
@@ -1058,7 +1062,7 @@ export function needsWizard(): boolean {
   const legacyJsonPath = resolve(configDir, 'vcode.config.json');
   const envPath = resolve(configDir, '.env');
   const jsonPath = existsSync(newPath) ? newPath : legacyJsonPath;
-  // Config exists if either new JSON or legacy .env is present (migration happens at load time)
+  // Config exists if settings.json (or its legacy name) or the .env is present.
   return !existsSync(jsonPath) && !existsSync(envPath);
 }
 
@@ -1223,12 +1227,9 @@ async function renderSummary(values: Record<string, string>, steps: WizardStep[]
 
   row += 1;
   moveTo(row, 5);
-  // Show whichever filename actually exists; new is canonical.
+  // Where the answers go: endpoints and secrets to .env, the rest to settings.json.
   const configDir = resolve(process.env.HOME || '~', '.veepee-code');
-  const newPath = resolve(configDir, 'settings.json');
-  const legacyPath = resolve(configDir, 'vcode.config.json');
-  const configPath = existsSync(newPath) ? newPath : legacyPath;
-  process.stdout.write(theme.dim(`Config: ${configPath}`));
+  process.stdout.write(theme.dim(`Saves to: ${resolve(configDir, '.env')} + settings.json`));
 
   row += 2;
   const shouldSave = await confirm(row, 5, 'Save and start VEEPEE Code?', true);
