@@ -335,7 +335,6 @@ your-project/
 ├── VEEPEE.md               # Project-specific instructions (auto-added to .gitignore by /init)
 ├── .veepeignore            # Optional project-specific ignore patterns
 ├── .veepee/
-│   ├── plan.md             # Auto-saved implementation plan (survives compaction)
 │   └── ralph/              # Ralph engine state files
 └── .veepee-worktrees/      # Git worktrees created by /worktree (auto-added to .gitignore)
 ```

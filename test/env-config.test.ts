@@ -180,3 +180,26 @@ describe('answers (former-default reachability)', () => {
     expect(answers('not a url')).toBe(false);
   });
 });
+
+describe('migrateToEnvFile is a real one-time step', () => {
+  it('does nothing — no backup, no notice — when a cleared block is all there is', async () => {
+    const { mkdtempSync, writeFileSync, readdirSync } = await import('fs');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const home = mkdtempSync(join(tmpdir(), 'vcode-envsplit-'));
+    const prev = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const dir = join(home, '.veepee-code');
+      (await import('fs')).mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, '.env'), 'VEEPEE_CODE_PROXY_URL=http://gw:11434\n');
+      // `"sync": null` (sync switched off) re-triggered the migration on every launch.
+      writeFileSync(join(dir, 'settings.json'), JSON.stringify({ sync: null, model: 'm' }, null, 2) + '\n');
+      expect(migrateToEnvFile()).toBe(false);
+      expect(migrateToEnvFile()).toBe(false);
+      expect(readdirSync(dir).filter(f => f.includes('bak-envsplit'))).toEqual([]);
+    } finally {
+      process.env.HOME = prev;
+    }
+  });
+});

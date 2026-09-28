@@ -17,6 +17,8 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process';
+import { appendFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
 import { z } from 'zod';
 import type { ToolDef, ToolResult } from './tools/types.js';
 import type { McpServerConfig } from './config.js';
@@ -110,10 +112,11 @@ class StdioTransport implements McpTransport {
       throw new Error(`MCP server '${serverName}' failed to spawn (no stdio)`);
     }
 
-    // Stderr goes to vcode's stderr so users see server errors live.
-    this.proc.stderr?.on('data', (d: Buffer) => {
-      process.stderr.write(`[mcp:${serverName}] ${d.toString()}`);
-    });
+    // Server stderr goes to ~/.veepee-code/logs/mcp-<name>.log. Only lines that
+    // look like errors reach the terminal: servers log routine chatter there
+    // ("Processing request of type ListToolsRequest" on every call), which
+    // scribbled over the TUI and was left on screen after exit.
+    this.proc.stderr?.on('data', (d: Buffer) => relayMcpStderr(serverName, d.toString()));
 
     this.proc.stdout.on('data', (chunk: Buffer) => {
       this.buffer += chunk.toString();
@@ -640,4 +643,18 @@ export async function connectAndDiscover(
  *  processes don't get orphaned. */
 export async function closeAll(clients: McpClient[]): Promise<void> {
   await Promise.allSettled(clients.map((c) => c.close()));
+}
+
+/** Log an MCP server's stderr to a file; echo only error-looking lines. */
+export const MCP_STDERR_ALERT = /\b(error|exception|traceback|fatal|panic|denied|refused|failed)\b/i;
+
+export function relayMcpStderr(serverName: string, text: string): void {
+  try {
+    const dir = join(process.env.HOME || '~', '.veepee-code', 'logs');
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, `mcp-${serverName.replace(/[^\w.-]/g, '_')}.log`), text);
+  } catch { /* a log we cannot write must not break the server */ }
+  for (const line of text.split('\n')) {
+    if (line.trim() && MCP_STDERR_ALERT.test(line)) process.stderr.write(`[mcp:${serverName}] ${line}\n`);
+  }
 }

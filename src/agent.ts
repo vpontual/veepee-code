@@ -24,7 +24,7 @@ import type { CheckpointManager } from './checkpoint.js';
 import { signatureOf, callSignatureOf, detectStuckSignature, detectRepeatedFailure, LOOP_WINDOW, LOOP_MAX_REPEATS, REPEATED_FAILURE_LIMIT, detectContentRepetition, CONTENT_REPETITION_LIMIT, type SignedStep2 } from './loop-detection.js';
 import { generationLimiter } from './generation-limit.js';
 import type { PermissionPosture } from './permissions.js';
-import { readFile, readFile as readFileAsync, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, readFile as readFileAsync } from 'node:fs/promises';
 import { resolve, relative } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { createChatClient, isDirectOnly } from './llm-client.js';
@@ -102,6 +102,27 @@ export const QWEN_INSTRUCT_PRESET = {
   presence_penalty: 1.5,
   repeat_penalty: 1.0,
 } as const;
+
+/** What makes a reply a plan worth keeping across compaction: a plan heading,
+ *  or explicit Step/Phase numbering. A numbered bold list is NOT one — that
+ *  pattern saved a four-line answer listing two held commands as "the plan". */
+export const PLAN_CONTENT_PATTERNS = [
+  /^#{1,3}\s+(implementation|action)\s+plan/im,
+  /^#{1,3}\s+plan\b/im,
+  /^#{2,3}\s+(step|phase)\s+\d/im,
+  /(?:^|\n)(?:step|phase)\s+\d+[.:]/im,
+];
+
+export function isPlanContent(content: string): boolean {
+  return !!content && content.length >= 200 && PLAN_CONTENT_PATTERNS.some(p => p.test(content));
+}
+
+/** Prefix for a plan restored after compaction. Reference, never an order: the
+ *  old wording ("immediately execute the next incomplete step without waiting
+ *  for user input") turned any stale list into unapproved actions. */
+export const RESTORED_PLAN_NOTE =
+  '[System: Context was compacted. The last plan you wrote this session is below, for reference. ' +
+  'Carry on with what the user asked for. Do not start a step the user has not asked for or approved.]\n\n';
 
 /** `act` runs on one of two model slots (see setAct); `chat` is web-only and
  *  thinks less. There is no plan mode: the read-only hold is `verify`, which is
@@ -374,6 +395,8 @@ export class Agent {
    *  is left — so a /model choice made in Act 1 is what Act 1 returns to. */
   private primaryModel: string | null = null;
   private primaryAutoSwitch: boolean | null = null;
+  /** The last plan written this session, restored after compaction. Never on disk. */
+  private sessionPlan: string | null = null;
   /** Read-only until approved: edits, shell and subagents are refused until the
    *  user approves a proposal via request_approval. Off by default. */
   private verify = false;
@@ -711,45 +734,19 @@ export class Agent {
     return message + '\n\n' + fileContents.join('\n');
   }
 
-  // ─── Plan Auto-Persistence ───────────────────────────────────────
+  // ─── Plan kept across compaction ─────────────────────────────────
+  //
+  // In memory, for this session only. It used to be `.veepee/plan.md` in the
+  // working tree, re-read from disk after every compaction and injected as
+  // "immediately execute the next incomplete step without waiting for user
+  // input". So a plan from an EARLIER session — or one committed to the repo,
+  // as Nightly Engineer branches did — became an order, and a four-line
+  // numbered answer ("2. rm -rf hello.txt", held under verify) was saved as one.
+  // Step tracking is todo_write's job now; this only keeps the last plan in view.
 
-  private static PLAN_DIR = '.veepee';
-  private static PLAN_FILE = '.veepee/plan.md';
-
-  private static PLAN_CONTENT_PATTERNS = [
-    /^#{1,3}\s+(implementation|action)\s+plan/im,
-    /^#{1,3}\s+plan\b/im,
-    /^##\s+(step|phase)\s+\d/im,
-    /(?:^|\n)\d+\.\s+\*\*.*\*\*.*\n\d+\.\s+\*\*/m,  // numbered bold steps
-    /(?:^|\n)(?:step|phase)\s+\d+[.:]/im,
-  ];
-
-  /** Detect if assistant output contains a plan and auto-save it */
-  private async autoSavePlan(content: string): Promise<boolean> {
-    if (!content || content.length < 200) return false;
-
-    const isPlan = Agent.PLAN_CONTENT_PATTERNS.some(p => p.test(content));
-    if (!isPlan) return false;
-
-    try {
-      const planDir = resolve(process.cwd(), Agent.PLAN_DIR);
-      const planPath = resolve(process.cwd(), Agent.PLAN_FILE);
-      await mkdir(planDir, { recursive: true });
-      await writeFile(planPath, `<!-- Auto-saved by VEEPEE Code — ${new Date().toISOString()} -->\n\n${content}`, 'utf-8');
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /** Load saved plan file if it exists, for injection after compaction */
-  async loadSavedPlan(): Promise<string | null> {
-    try {
-      const planPath = resolve(process.cwd(), Agent.PLAN_FILE);
-      return await readFile(planPath, 'utf-8');
-    } catch {
-      return null;
-    }
+  /** Remember the plan if this reply is one. */
+  private rememberPlan(content: string): void {
+    if (isPlanContent(content)) this.sessionPlan = content;
   }
 
   /** Load optimal context sizes from latest benchmark results */
@@ -1179,24 +1176,17 @@ export class Agent {
       this.context.setContextLimit(ctxLimit);
     }
 
-    // Pre-compaction snapshot: at 90%, save state to disk (costs zero tokens)
-    if (this.context.isContextCritical()) {
-      const existing = await this.loadSavedPlan();
-      if (!existing) {
-        // No plan file yet — save last assistant messages as a recovery snapshot
-        const recentAssistant = this.context.getAllMessages()
-          .filter(m => m.role === 'assistant' && m.content)
-          .slice(-3)
-          .map(m => m.content)
-          .join('\n\n---\n\n');
+    // Pre-compaction snapshot at 90%: with no plan written, keep the recent
+    // assistant turns and knowledge state instead (in memory; costs no tokens).
+    if (this.context.isContextCritical() && !this.sessionPlan) {
+      const recentAssistant = this.context.getAllMessages()
+        .filter(m => m.role === 'assistant' && m.content)
+        .slice(-3)
+        .map(m => m.content)
+        .join('\n\n---\n\n');
+      if (recentAssistant.length > 100) {
         const ks = this.context.getKnowledgeState().serialize();
-        if (recentAssistant.length > 100) {
-          const snapshot = `<!-- Auto-snapshot at 90% context — ${new Date().toISOString()} -->\n\n## Knowledge State\n\n${ks}\n\n## Recent Context\n\n${recentAssistant}`;
-          const planDir = resolve(process.cwd(), '.veepee');
-          const planPath = resolve(process.cwd(), '.veepee/plan.md');
-          await mkdir(planDir, { recursive: true }).catch(() => {});
-          await writeFile(planPath, snapshot, 'utf-8').catch(() => {});
-        }
+        this.sessionPlan = `## Knowledge State\n\n${ks}\n\n## Recent Context\n\n${recentAssistant}`;
       }
     }
 
@@ -1238,10 +1228,9 @@ export class Agent {
         }
 
         // Recover saved plan after compaction so the model doesn't lose it
-        const savedPlan = await this.loadSavedPlan();
-        if (savedPlan) {
-          this.context.addUser('[System: Context was compacted. Your implementation plan from .veepee/plan.md is below — immediately execute the next incomplete step without waiting for user input]\n\n' + savedPlan);
-          yield { type: 'info', content: 'Restored plan from .veepee/plan.md' };
+        if (this.sessionPlan) {
+          this.context.addUser(RESTORED_PLAN_NOTE + this.sessionPlan);
+          yield { type: 'info', content: "Restored this session's plan after compaction" };
         }
       }
     }
@@ -1808,11 +1797,8 @@ export class Agent {
           process.stderr.write(`[knowledge-state] save failed: ${err instanceof Error ? err.message : String(err)}\n`);
         });
 
-        // Auto-save plans to disk so they survive compaction
-        const planSaved = await this.autoSavePlan(fullContent);
-        if (planSaved) {
-          yield { type: 'info', content: 'Plan auto-saved to .veepee/plan.md' };
-        }
+        // Keep the latest plan so it survives compaction (memory only).
+        this.rememberPlan(fullContent);
 
         yield* this._fireHooks('Stop', { cwd: process.cwd(), messageCount: this.context.messageCount() });
 
@@ -2114,10 +2100,9 @@ export class Agent {
             yield { type: 'info', content: `Compacting harder (attempt ${r.attempt}) — projected ${r.projected} > ${Math.round(r.limit * 0.85)} cutoff` };
           }
 
-          const savedPlan = await this.loadSavedPlan();
-          if (savedPlan) {
-            this.context.addUser('[System: Context was compacted. Your implementation plan from .veepee/plan.md is below — immediately execute the next incomplete step without waiting for user input]\n\n' + savedPlan);
-            yield { type: 'info', content: 'Restored plan from .veepee/plan.md' };
+          if (this.sessionPlan) {
+            this.context.addUser(RESTORED_PLAN_NOTE + this.sessionPlan);
+            yield { type: 'info', content: "Restored this session's plan after compaction" };
           }
         }
       }

@@ -521,7 +521,10 @@ export function migrateToEnvFile(): boolean {
       if (!(k in env) && !envVars.has(k) && answers(v)) toWrite[k] = v;
     }
   }
-  if (Object.keys(env).length === 0 && Object.keys(toWrite).length === 0) return changed;
+  // Only when something actually moves. A cleared block (`"sync": null`) counts
+  // as an env key but leaves the file as it is, and it made this "one-time"
+  // migration run, back up and announce itself on every launch.
+  if (Object.keys(toWrite).length === 0 && JSON.stringify(rest) === JSON.stringify(settings)) return changed;
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   writeFileSync(`${settingsPath}.bak-envsplit-${stamp}`, readFileSync(settingsPath, 'utf-8'));
@@ -743,5 +746,5 @@ export function ensureLocalSettingsGitignored(cwd: string = process.cwd()): bool
 }
 
 /** Convenience for callers that need just the project settings dir for
- *  related artifacts (commands/, hooks/, plan.md, etc.). */
+ *  related artifacts (commands/, hooks/, etc.). */
 export { join as joinPath };

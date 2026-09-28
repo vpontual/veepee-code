@@ -190,7 +190,7 @@ Key settings:
 
 VEEPEE Code tracks context usage in the status bar (token count and percentage). When context reaches 75%, automatic compaction drops older messages while preserving important context via the knowledge state system.
 
-**Plan persistence:** Implementation plans are automatically detected and saved to `.veepee/plan.md`. After compaction, the plan is restored so the model picks up where it left off. At 90% context, a state snapshot is auto-saved as a safety net.
+**Plans across compaction:** the task list (`todo_write`) stays in view on every turn and survives compaction. The last plan the model wrote is kept in memory for the session and restored after compaction as reference, never as an instruction to act. Nothing is written into your repo.
 
 **Project detection:** On startup, the project type is detected from filesystem markers (tsconfig.json, package.json, pyproject.toml, etc.) and injected into the system prompt with framework-specific coding guidance.
 

@@ -320,16 +320,9 @@ const SYSTEM_PROMPT = `You are VEEPEE Code, a CLI coding assistant powered by lo
 
 **Safety:** Destructive/external actions (rm -rf, push, post, email) — confirm first. Read-only — do freely. Never commit unless asked.
 {{SANDBOX}}
-## Plan Persistence
+## Plans across compaction
 
-Your implementation plans are **automatically saved** to \`.veepee/plan.md\` and **automatically restored** after context compaction. You don't need to save them manually.
-
-However, you SHOULD update the plan file as you work:
-- Use \`edit_file\` on \`.veepee/plan.md\` to mark completed steps with [DONE]
-- Add notes about decisions or issues encountered
-- When fully done, delete the file with \`bash("rm .veepee/plan.md")\`
-
-If you see "[System: Your previously saved implementation plan...]" in the conversation, that means compaction happened and your plan was restored. **Continue from where you left off** based on the step statuses.
+Track multi-step work with \`todo_write\`: the list stays in view on every turn and survives compaction. The last plan you wrote is also kept for this session. If you see "[System: Context was compacted. The last plan you wrote…]", it is for reference: carry on with what the user asked for, and do not start a step they have not asked for or approved.
 
 ## Coding Workflow
 

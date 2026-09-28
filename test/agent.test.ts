@@ -1,18 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 
-// The Agent class requires Ollama + Config + ToolRegistry + PermissionManager to construct,
-// so we cannot instantiate it in unit tests. Instead we test the static/exported patterns
-// and constants by copying them from the source (they are private static).
-
-// Plan content detection patterns — copied from Agent.PLAN_CONTENT_PATTERNS
-const PLAN_CONTENT_PATTERNS = [
-  /^#{1,3}\s+(implementation|action)\s+plan/im,
-  /^#{1,3}\s+plan\b/im,
-  /^##\s+(step|phase)\s+\d/im,
-  /(?:^|\n)\d+\.\s+\*\*.*\*\*.*\n\d+\.\s+\*\*/m,  // numbered bold steps
-  /(?:^|\n)(?:step|phase)\s+\d+[.:]/im,
-];
+import { PLAN_CONTENT_PATTERNS, isPlanContent, RESTORED_PLAN_NOTE } from '../src/agent.js';
 
 describe('Agent plan content patterns', () => {
   const matchesPlan = (text: string) =>
@@ -38,9 +27,25 @@ describe('Agent plan content patterns', () => {
     expect(matchesPlan('## Phase 3\n\nFinal phase')).toBe(true);
   });
 
-  it('detects numbered bold steps', () => {
-    const content = '1. **Setup project** — init npm\n2. **Install deps** — vitest etc';
-    expect(matchesPlan(content)).toBe(true);
+  it('does NOT treat a numbered bold list as a plan', () => {
+    // The misfire: a four-line answer listing two held commands was saved as
+    // "the plan", then re-injected after compaction as an order to execute.
+    const reply = 'Two actions requested:\n\n1. **Read-only**: `git log --oneline -1` shows the latest commit.\n2. **Destructive**: `rm -rf hello.txt` deletes the file permanently.\n\nBoth are held pending your approval. Want me to proceed with both? '.padEnd(220, '.');
+    expect(isPlanContent(reply)).toBe(false);
+  });
+
+  it('keeps a real plan', () => {
+    expect(isPlanContent('## Implementation Plan\n\n' + 'Step 1: add the column. '.repeat(10))).toBe(true);
+  });
+
+  it('restores a plan as reference, never as an order', () => {
+    expect(RESTORED_PLAN_NOTE).not.toMatch(/immediately execute|without waiting/i);
+    expect(RESTORED_PLAN_NOTE).toMatch(/not asked for or approved/);
+  });
+
+  it('never reads or writes a plan file in the working tree', () => {
+    const src = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
+    expect(src).not.toMatch(/PLAN_FILE|loadSavedPlan|autoSavePlan|writeFile\(planPath/);
   });
 
   it('detects "Step 1:" inline', () => {
