@@ -226,7 +226,11 @@ export function findPinkyRoot(home: string = process.env.HOME || '~'): string | 
   const candidates = [join(home, 'pinky'), join(home, 'Nextcloud', 'pinky')];
   const marked = candidates.find(c => existsSync(join(c, '.this-host')) && existsSync(join(c, 'PINKY.md')));
   if (marked) return marked;
-  return candidates.find(c => existsSync(join(c, 'PINKY.md'))) ?? null;
+  const clone = candidates.find(c => existsSync(join(c, 'PINKY.md')));
+  if (clone) return clone;
+  // No clone here: the mirror vcode keeps from the Pinky MCP server (pinky-remote.ts).
+  const mirror = join(home, '.veepee-code', 'cache', 'pinky');
+  return existsSync(join(mirror, 'PINKY.md')) ? mirror : null;
 }
 
 function loadPinky(): string {

@@ -61,6 +61,8 @@ import { buildAskUserTool } from './tools/interaction.js';
 import { registerDevOpsTools } from './tools/devops.js';
 import { discoverRemoteTools } from './tools/remote.js';
 import { connectAndDiscover as connectMcpServers, closeAll as closeMcpClients, type McpClient } from './mcp.js';
+import { mirrorPinkyFromMcp, pinkyCacheDir } from './pinky-remote.js';
+import { findPinkyRoot } from './context.js';
 import { buildSkillInvokeTool } from './skills.js';
 import { createTaskTool, createTaskOutputTool } from './tools/task.js';
 import { loadAgentDefinitions, withBuiltinAgents } from './agents.js';
@@ -379,6 +381,12 @@ async function main() {
       const { clients, tools: mcpTools } = await connectMcpServers(config.mcpServers);
       mcpClients = clients;
       const result = registry.registerBatch(mcpTools);
+      // No Pinky clone on this machine: mirror it from the Pinky MCP server
+      // (archman) so the operator context is in the prompt anyway.
+      if (!hasLocalPinkyClone()) {
+        const n = await mirrorPinkyFromMcp(clients);
+        if (n > 0) console.error(chalk.dim(`  Pinky context mirrored from MCP (${n} files)`));
+      }
       if (result.registered.length > 0) {
         console.error(chalk.dim(`  ${result.registered.length} MCP tools loaded across ${clients.length} server${clients.length === 1 ? '' : 's'}`));
       }
@@ -4055,4 +4063,10 @@ main().catch((err) => {
 function modeRole(agent: Agent): string {
   const base = agent.getMode() === 'chat' ? 'Chat' : `Act ${agent.getActSlot()}`;
   return agent.getVerify() ? `${base} · verify` : base;
+}
+
+/** A real Pinky clone on this machine (not vcode's own mirror of one). */
+function hasLocalPinkyClone(): boolean {
+  const root = findPinkyRoot();
+  return !!root && root !== pinkyCacheDir();
 }
