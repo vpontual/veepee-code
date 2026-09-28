@@ -126,6 +126,9 @@ What you give up without a gateway: models the server does not serve (a `reviewM
 | Field | Default | Description |
 |----------|---------|-------------|
 | `numCtx` | `null` | Context window requested from **Ollama** (`num_ctx`). `null` = the model's own maximum (from `/api/show`), capped at 16384. Without it Ollama uses its small default window (4096), which vcode's own prompt overflows. Raise it for long sessions if your GPU has room; OpenAI-compatible servers set their own window and ignore it. |
+
+vcode learns each model's context window on its own: Ollama's `/api/show` for Ollama models (capped by `numCtx`), and `max_model_len` from `/v1/models` for vLLM models, directly or through a gateway. If a server still rejects a request as too long, vcode adopts the window it states, compacts if needed, and retries the step once.
+
 | `fallbackModels` | `[]` | Models to continue on, in order, when the current one cannot be reached or drops the connection mid-reply, e.g. `["gemma4:26b-a4b"]`. After two failed attempts (about a minute) the step is redone on the next model instead of retrying for up to ten minutes; a model that failed is skipped for two minutes, then tried again. With a gateway, any model it serves works here. |
 | `mcpDeferAbove` | `12` | When connected MCP servers add more tools than this, their tools are not sent with every request; the model finds and loads them with `tool_search`. `0` defers any MCP tools; a large number turns it off. |
 | `model` | `null` | Force a specific model as default (e.g., `"qwen3.5:35b"`). Overrides the automatic selection algorithm and the model roster. Still switchable at runtime with `/models`. |

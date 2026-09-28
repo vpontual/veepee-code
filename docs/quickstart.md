@@ -64,6 +64,7 @@ vcode -c                           # Continue: resume the last session
 vcode --resume my-session          # Resume a named session
 vcode --host 0.0.0.0 --port 9000  # Bind API server to custom host/port
 vcode --wizard                    # Re-run the guided setup wizard
+vcode -p "…" --model gemma4:26b-a4b  # Use a different model for this run only
 ```
 
 ## First Run
