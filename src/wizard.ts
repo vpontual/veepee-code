@@ -191,25 +191,29 @@ function readLine(opts: {
 
     render();
 
+    const submit = () => {
+      const value = text || opts.default || '';
+      if (opts.required && !value) {
+        // Flash error
+        moveTo(opts.row + 1, opts.col);
+        process.stdout.write(theme.error(`  ${icons.cross} This field is required`));
+        setTimeout(() => {
+          moveTo(opts.row + 1, opts.col);
+          clearLine();
+        }, 1500);
+        return;
+      }
+      hideCursor();
+      process.stdin.removeListener('data', handler);
+      resolve({ value, action: 'submit' });
+    };
+
     const handler = (data: Buffer) => {
       const key = data.toString();
 
       // Enter — submit
       if (key === '\r' || key === '\n') {
-        const value = text || opts.default || '';
-        if (opts.required && !value) {
-          // Flash error
-          moveTo(opts.row + 1, opts.col);
-          process.stdout.write(theme.error(`  ${icons.cross} This field is required`));
-          setTimeout(() => {
-            moveTo(opts.row + 1, opts.col);
-            clearLine();
-          }, 1500);
-          return;
-        }
-        hideCursor();
-        process.stdin.removeListener('data', handler);
-        resolve({ value, action: 'submit' });
+        submit();
         return;
       }
 
@@ -285,12 +289,20 @@ function readLine(opts: {
       // Printable input. A terminal paste arrives as a SINGLE data event
       // containing every character, so testing for length === 1 silently
       // discarded it — the user saw nothing appear and the default was saved.
-      const printable = key.replace(/[\r\n]+/g, '').replace(/[\x00-\x1f]/g, '');
+      //
+      // A newline inside the chunk is Enter: typed-ahead or unbracketed-pasted
+      // "2\r" or "http://host:8000\n" arrives in one event. Stripping it made
+      // the Enter vanish, so the NEXT answer was appended to this one — the
+      // model-server choice became "2http://…" and fell back to the default.
+      const nl = key.search(/[\r\n]/);
+      const typed = nl >= 0 ? key.slice(0, nl) : key;
+      const printable = typed.replace(/[\x00-\x1f]/g, '');
       if (printable) {
         text = text.slice(0, cursor) + printable + text.slice(cursor);
         cursor += printable.length;
         render();
       }
+      if (nl >= 0) submit();
     };
 
     process.stdin.on('data', handler);
@@ -406,12 +418,22 @@ function selectFromList(opts: {
 
     render();
 
+    let done = false;
     const handler = (data: Buffer) => {
+      if (done) return;
       const key = data.toString();
+
+      // Typed-ahead or pasted input ("1\r") arrives as one chunk; take it a key
+      // at a time, or the digit and the Enter are both ignored.
+      if (key.length > 1 && !key.startsWith('\x1b')) {
+        for (const ch of key) handler(Buffer.from(ch));
+        return;
+      }
 
       // Ctrl+C — abort
       if (key === '\x03') {
         hideCursor();
+        done = true;
         process.stdin.removeListener('data', handler);
         exitAltScreen();
         showCursor();
@@ -422,6 +444,7 @@ function selectFromList(opts: {
       // Esc — back
       if (key === '\x1b' && data.length === 1 && opts.allowBack) {
         hideCursor();
+        done = true;
         process.stdin.removeListener('data', handler);
         resolve({ index: null, action: 'back' });
         return;
@@ -430,6 +453,7 @@ function selectFromList(opts: {
       // q or Q — cancel
       if (key === 'q' || key === 'Q') {
         hideCursor();
+        done = true;
         process.stdin.removeListener('data', handler);
         resolve({ index: null, action: 'cancel' });
         return;
@@ -440,7 +464,8 @@ function selectFromList(opts: {
         const n = parseInt(typed, 10);
         if (!isNaN(n) && n >= 1 && n <= items.length) {
           hideCursor();
-          process.stdin.removeListener('data', handler);
+          done = true;
+        process.stdin.removeListener('data', handler);
           resolve({ index: n - 1, action: 'submit' });
         }
         return;
@@ -471,7 +496,8 @@ function selectFromList(opts: {
             // If doubling a digit would overflow, submit now
             if (n * 10 > items.length) {
               hideCursor();
-              process.stdin.removeListener('data', handler);
+              done = true;
+        process.stdin.removeListener('data', handler);
               resolve({ index: n - 1, action: 'submit' });
               return;
             }
