@@ -103,19 +103,11 @@ export const QWEN_INSTRUCT_PRESET = {
   repeat_penalty: 1.0,
 } as const;
 
-// Planning intent detection patterns
-const PLAN_PATTERNS = [
-  /\bplan\b/i, /\bdesign\b/i, /\barchitect\b/i, /\bstrateg/i,
-  /\bthink\s+(about|through)\b/i, /\bbrainstorm\b/i, /\bapproach\b/i,
-  /\bhow\s+(should|would|could)\s+(we|i|you)\b/i,
-  /\bbefore\s+(we|i|you)\s+(start|begin|implement|code|build)\b/i,
-  /\bwhat('s|\s+is)\s+the\s+best\s+way\b/i,
-  /\bbreak\s+(this|it)\s+down\b/i, /\bstep\s+by\s+step\b/i,
-  /\bdeepen\b/i, /\belaborate\b/i, /\bexpand\s+on\b/i,
-  /\blet'?s\s+think\b/i, /\bconsider\b/i,
-];
-
-export type AgentMode = 'act' | 'plan' | 'chat';
+/** `act` runs on one of two model slots (see setAct); `chat` is web-only and
+ *  thinks less. There is no plan mode: the read-only hold is `verify`, which is
+ *  independent of the mode and the model. */
+export type AgentMode = 'act' | 'chat';
+export type ActSlot = 1 | 2;
 export type EffortLevel = 'low' | 'medium' | 'high';
 export type PermissionMode = 'interactive' | 'auto_allow';
 
@@ -376,6 +368,13 @@ export class Agent {
   /** Models whose window has already been asked for (answered or not). */
   private contextProbed = new Set<string>();
   private mode: AgentMode = 'act';
+  /** Which model act mode runs on: 1 = the primary, 2 = the second model. */
+  private actSlot: ActSlot = 1;
+  /** The slot-1 model, captured the first time the user leaves it. */
+  private primaryModel: string | null = null;
+  /** Read-only until approved: edits, shell and subagents are refused until the
+   *  user approves a proposal via request_approval. Off by default. */
+  private verify = false;
   private previousModel: string | null = null;
   private roster: ModelRoster | null = null;
   private subAgents: SubAgentManager;
@@ -501,7 +500,6 @@ export class Agent {
     }
   }
 
-  /** Enter plan mode — thinking ON, best reasoning model from roster (unless model_stick is on) */
   /**
    * The posture in force for a turn.
    *
@@ -521,66 +519,70 @@ export class Agent {
     this.posture = posture;
   }
 
-  enterPlanMode(): { model: string } {
-    this.mode = 'plan';
-    this.previousModel = this.modelManager.getCurrentModel();
+  getActSlot(): ActSlot {
+    return this.actSlot;
+  }
 
-    if (!this.modelStick) {
-      // An explicitly configured plan model wins, and is NOT required to have a
-      // discovered profile.
-      //
-      // This is the only path that works under lockModel, which is the setup
-      // this matters for: lock synthesises exactly one profile and skips
-      // discovery, so every other model on the fleet is unknown to the manager.
-      // Without this, plan mode on a locked install fell through to the
-      // heavy-tier fallback, found only the locked model, and switched to
-      // itself — the user got plan mode's restrictions and the same model,
-      // which is the worst of both. switchTo() does not validate, and a
-      // non-primary model routes via the gateway by design (see clientFor).
-      const configured = this.config.planModel;
-      if (configured) {
-        this.modelManager.switchTo(configured);
-      } else if (this.roster?.plan && this.modelManager.getProfile(this.roster.plan)) {
-        this.modelManager.switchTo(this.roster.plan);
-      } else {
-        // Fallback: best heavy model with thinking
-        const heavyModels = this.modelManager.getModelsByTier('heavy')
-          .filter(m => m.capabilities.includes('tools'))
-          .sort((a, b) => b.score - a.score);
-        const thinker = heavyModels.find(m => m.capabilities.includes('thinking'));
-        const best = thinker || heavyModels[0];
-        if (best) this.modelManager.switchTo(best.name);
-      }
+  getVerify(): boolean {
+    return this.verify;
+  }
+
+  setVerify(on: boolean): void {
+    this.verify = on;
+    this.context.setVerify(on);
+  }
+
+  /** The model each act slot runs on, or null when slot 2 has none. */
+  slotModel(slot: ActSlot): string | null {
+    if (slot === 1) return this.primaryModel ?? this.modelManager.getCurrentModel();
+    return this.config.secondModel ?? this.config.fallbackModels[0] ?? null;
+  }
+
+  /**
+   * Act on slot 1 (the primary model) or slot 2 (the second model).
+   *
+   * The second model is `secondModel`, else the first fallback model. It is
+   * switched to by name and needs no discovered profile: under lockModel
+   * nothing else is discovered, and a non-primary model routes via the gateway
+   * (see clientFor). Returns null when slot 2 has no model configured.
+   */
+  setAct(slot: ActSlot): { model: string } | null {
+    if (this.primaryModel === null) {
+      // Leaving the primary for the first time: remember it, from wherever we are.
+      this.primaryModel = this.mode === 'act' && this.actSlot === 1
+        ? this.modelManager.getCurrentModel()
+        : (this.previousModel ?? this.modelManager.getCurrentModel());
     }
-
-    this.modelManager.setAutoSwitch(false);
+    const target = this.slotModel(slot);
+    if (!target) return null;
+    this.mode = 'act';
+    this.actSlot = slot;
+    this.previousModel = null;
+    this.context.setMode('act');
+    if (!this.modelStick) {
+      this.modelManager.switchTo(target);
+      // Auto-switching would walk away from the model the user just picked.
+      this.modelManager.setAutoSwitch(slot === 1 && this.config.autoSwitch);
+    }
     this.context.setSystemPrompt(this.modelManager.getCurrentModel());
-    this.context.setMode('plan');
-
     return { model: this.modelManager.getCurrentModel() };
   }
 
-  /** Exit plan/chat mode — restore act model from roster (unless model_stick is on) */
-  exitPlanMode(): void {
-    this.mode = 'act';
-    this.context.setMode('act');
-
-    if (!this.modelStick) {
-      // Use roster's act model, or restore previous
-      const actModel = this.roster?.act;
-      if (actModel && this.modelManager.getProfile(actModel)) {
-        this.modelManager.switchTo(actModel);
-      } else if (this.previousModel) {
-        this.modelManager.switchTo(this.previousModel);
-      }
-      this.modelManager.setAutoSwitch(true);
+  /** Shift+Tab: Act 1 -> Act 2 -> Chat -> Act 1. Act 2 is skipped when it has no model. */
+  cycleMode(): { mode: AgentMode; slot: ActSlot; model: string } {
+    if (this.mode === 'chat') {
+      this.setAct(1);
+    } else if (this.actSlot === 1 && this.slotModel(2)) {
+      this.setAct(2);
+    } else {
+      this.enterChatMode();
     }
-    this.previousModel = null;
-    this.context.setSystemPrompt(this.modelManager.getCurrentModel());
+    return { mode: this.mode, slot: this.actSlot, model: this.modelManager.getCurrentModel() };
   }
 
   /** Enter chat mode — web tools only, fastest conversational model from roster (unless model_stick is on) */
   enterChatMode(): { model: string } {
+    if (this.primaryModel === null && this.actSlot === 1) this.primaryModel = this.modelManager.getCurrentModel();
     this.mode = 'chat';
     this.previousModel = this.modelManager.getCurrentModel();
     this.context.setMode('chat');
@@ -603,11 +605,12 @@ export class Agent {
         .sort((a, b) => b.score - a.score);
 
       const best = standardModels[0] || lightModels[0];
-      if (best) {
-        this.modelManager.switchTo(best.name);
-        this.modelManager.setAutoSwitch(false);
-        this.context.setSystemPrompt(best.name);
-      }
+      // No chat model known (e.g. lockModel, which discovers nothing else):
+      // the primary, not whichever act slot we came from.
+      const target = best?.name ?? this.primaryModel ?? this.modelManager.getCurrentModel();
+      this.modelManager.switchTo(target);
+      this.modelManager.setAutoSwitch(false);
+      this.context.setSystemPrompt(target);
     } else {
       this.context.setSystemPrompt(this.modelManager.getCurrentModel());
     }
@@ -739,13 +742,6 @@ export class Agent {
     } catch {
       return null;
     }
-  }
-
-  /** Detect if a message has planning intent */
-  private detectPlanningIntent(message: string): boolean {
-    // Don't auto-detect in chat mode
-    if (this.mode === 'chat') return false;
-    return PLAN_PATTERNS.some(p => p.test(message));
   }
 
   /** Load optimal context sizes from latest benchmark results */
@@ -1153,25 +1149,6 @@ export class Agent {
       }
     }
 
-    // Auto-detect planning intent and switch modes — OFF unless asked for.
-    //
-    // This used to be unconditional, and it moved people out of the mode they
-    // chose based on how they happened to phrase a sentence. A real session:
-    // "so how would we do a round of analyzing and fixing drift? can you do it"
-    // matched /\bhow\s+(should|would|could)\s+(we|i|you)\b/ and silently entered
-    // plan mode. Plan mode filters out bash — so when the model found the
-    // project's own pinky_drift.py and read it, it could not run it, and
-    // reproduced the script's output with ~50 read-only calls across seven
-    // machines. The user, who had never left Act, asked "why did you walk
-    // through it manually if there was a script?".
-    //
-    // Inferring a mode from wording is a guess about intent that the user has
-    // already stated explicitly by choosing a mode. `/plan` is one keystroke.
-    if (this.config.autoPlanMode && this.mode === 'act' && this.detectPlanningIntent(expandedMessage)) {
-      const { model } = this.enterPlanMode();
-      yield { type: 'model_switch', content: `Entering plan mode (thinking enabled)`, from: this.previousModel || '', to: model };
-    }
-
     // SessionStart: once, before the first turn. Its output is context for the
     // model (Claude Code's contract), e.g. memory recalled for this project.
     if (!this.sessionStarted) {
@@ -1397,7 +1374,7 @@ export class Agent {
         if (numCtx && numCtx !== this.context.getContextLimit()) this.context.setContextLimit(numCtx);
 
         // Mode-specific settings:
-        // plan: thinking ON, mutating tools FILTERED OUT, exit_plan_mode required
+        // verify (any mode): mutating tools refused by permissions until request_approval
         // act:  thinking ON (Qwen3.6 needs CoT for reliable tool use — without
         //        it, the model produces "I can't SSH from this environment"
         //        fluff and skips bash calls entirely), all tools, auto-switch
@@ -1428,6 +1405,8 @@ export class Agent {
               return CHAT_TOOLS.includes(name);
             })
           : this.registry.toOllamaTools();
+        // request_approval only means something in verify; elsewhere it is schema tokens for nothing.
+        if (!this.verify) tools = tools.filter(t => t.function?.name !== 'request_approval');
 
         // Filter tools for API requests with client-constrained tool sets
         if (allowedTools) {
@@ -1895,7 +1874,7 @@ export class Agent {
             continue;
           }
           const verdict = await this.permissions.checkWithPosture(
-            this.postureFor(permissionMode), name, args,
+            this.postureFor(permissionMode), name, args, undefined, this.verify,
           );
           const decision = typeof verdict === 'string' ? verdict : verdict.decision;
           if (decision === 'deny') {
@@ -1966,7 +1945,7 @@ export class Agent {
 
           const preview = this._previewToolCall(toolName, toolArgs);
           const verdict = await this.permissions.checkWithPosture(
-            this.postureFor(permissionMode), toolName, toolArgs, preview,
+            this.postureFor(permissionMode), toolName, toolArgs, preview, this.verify,
           );
           const decision = typeof verdict === 'string' ? verdict : verdict.decision;
           if (decision === 'deny') {

@@ -165,7 +165,7 @@ The agent uses `web_search` (via SearXNG) to find current information, then summ
 ### Switch modes
 
 ```
-/plan            # Think through a problem before coding
+/verify          # Read-only until you approve its proposal
 /chat            # Conversational mode with web access, no file editing
 /act             # Back to default execution mode
 ```

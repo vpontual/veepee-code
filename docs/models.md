@@ -91,14 +91,14 @@ After the first-launch benchmark (or any `/benchmark` run), VEEPEE Code builds a
 | Role | Selection Criteria | Used By |
 |------|-------------------|---------|
 | **act** | Best overall score with decent speed (>2 tok/s) | `/act` mode (default) |
-| **plan** | Best reasoning score (>1 tok/s is fine -- can be slower) | `/plan` mode |
+| **plan** | Best reasoning score (>1 tok/s is fine -- can be slower) | MoE, ralph reviewer, subagents |
 | **chat** | Fastest with good instruction following (>3 tok/s preferred, weighted toward speed) | `/chat` mode |
 | **code** | Best code generation + editing combined (60% gen, 40% edit, >2 tok/s) | Future sub-agent use |
 | **search** | Fastest with good tool calling (speed weighted 8x, >3 tok/s) | Future sub-agent use |
 
 The same model can fill multiple roles. For example, if your best model is also the fastest, it might be assigned to act, plan, code, and search.
 
-The roster is saved to `~/.veepee-code/benchmarks/roster.json` and loaded on every subsequent launch. Mode switching (`/plan`, `/chat`, `/act`) uses the roster to select models.
+The roster is saved to `~/.veepee-code/benchmarks/roster.json` and loaded on every subsequent launch. `/chat` uses the roster's chat model; `/act 1` runs on the primary and `/act 2` on `secondModel`.
 
 ## Tier System
 

@@ -43,7 +43,7 @@ export const initialState: AppState = {
   scrollOffset: 0,
   modelName: '',
   modelSize: '',
-  modelRole: 'Act',
+  modelRole: 'Act 1',
   providerName: 'Ollama Fleet',
   toolCount: 0,
   modelCount: 0,

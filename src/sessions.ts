@@ -403,7 +403,7 @@ function projectJsonlToSession(id: string, j: JsonlSession): Session {
     id,
     name: meta.name,
     model: meta.model,
-    mode: meta.mode as AgentMode,
+    mode: (meta.mode === 'chat' ? 'chat' : 'act') as AgentMode, // 'plan' in sessions saved before plan mode was retired
     cwd: meta.cwd,
     messages,
     knowledgeState,

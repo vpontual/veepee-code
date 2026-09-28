@@ -449,7 +449,7 @@ export function registerRcRoutes(
     // Only override if there are RC clients connected
     const originalHandler = permissions['promptHandler'];
 
-    permissions.setPromptHandler(async (toolName, args, reason) => {
+    permissions.setPromptHandler(async (toolName, args, reason, preview) => {
       // If RC clients are connected, send permission request to web UI
       if (sseClients.length > 0) {
         const callId = generateCallId();
@@ -467,13 +467,16 @@ export function registerRcRoutes(
             toolName,
             args,
             reason,
+            preview,
           });
         });
       }
 
-      // Fall back to TUI prompt if no RC clients
+      // Fall back to TUI prompt if no RC clients. Pass the preview on: dropping
+      // it here hid every edit diff (and verify's proposal) from the TUI prompt
+      // whenever RC was enabled.
       if (originalHandler) {
-        return originalHandler(toolName, args, reason);
+        return originalHandler(toolName, args, reason, preview);
       }
       return 'y'; // no handler at all → allow
     });

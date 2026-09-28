@@ -125,22 +125,22 @@ Equivalent to pressing `Ctrl+D`.
 
 ### Mode Switching
 
-#### /plan
+#### /act [1|2]
 
-Enter plan mode. The agent switches to the roster's plan model (best reasoning), enables thinking, and adopts a clarify-first behavior.
+Act on the primary model (`/act 1`, the default) or the second model (`/act 2` — `secondModel` in settings.json, else the first `fallbackModels` entry). `/act` alone returns to the slot you were last on. **Shift+Tab** cycles Act 1 → Act 2 → Chat and names the model.
 
 ```
-/plan
+/act 2
 ```
 
 See [Modes](modes.md) for details.
 
-#### /act
+#### /verify [on|off]
 
-Return to act (execution) mode. Restores the roster's act model, re-enables auto-switching, and disables thinking.
+Read-only until you approve. Edits, shell and subagents are refused with a reason until the agent calls `request_approval` and you approve its proposal, which turns verify off. Off by default; works in any mode.
 
 ```
-/act
+/verify
 ```
 
 #### /chat
@@ -574,15 +574,15 @@ When a permission prompt is active:
 | `/clear` | Clear conversation |
 | `/compact` | Free context space |
 | `/status` | Session info |
-| `/plan` | Enter plan mode |
-| `/act` | Enter act mode |
+| `/act [1\|2]` | Act on the primary (1) or second (2) model |
+| `/verify [on\|off]` | Read-only until you approve |
 | `/chat` | Enter chat mode |
 | `/init` | Create/improve VEEPEE.md |
 | `/setup` | Validate integrations |
 | `/save [name]` | Save session |
 | `/sessions` | List saved sessions |
 | `/resume <name>` | Resume a session |
-| `/permissions` | View permissions |
+| `/permissions [manual\|edits\|auto]` | View or set permissions |
 | `/revoke <tool>` | Revoke always-allow |
 | `/effort low\|medium\|high` | Set response depth |
 | `/worktree [action]` | Git worktree isolation |

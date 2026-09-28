@@ -56,10 +56,10 @@ const COMMANDS: CommandDef[] = [
   { name: '/models auto', args: '', description: 'Re-enable auto model switching' },
   { name: '/review', args: '<prompt>', description: 'Run one turn through reviewModel (different-family second opinion)' },
   { name: '/tools', args: '', description: 'List all available tools' },
-  { name: '/plan', args: '', description: 'Plan mode — thinking ON, heavy model' },
-  { name: '/act', args: '', description: 'Act/Code mode — all tools, coding-ready (default)' },
-  { name: '/code', args: '', description: 'Same as /act — all tools, coding-ready' },
+  { name: '/act', args: '[1|2]', description: 'Act on the primary model (1, default) or the second model (2) — Shift+Tab cycles' },
   { name: '/chat', args: '', description: 'Chat mode — fast model, web search' },
+  { name: '/verify', args: '[on|off]', description: 'Read-only until you approve a proposal (off by default)' },
+  { name: '/permissions', args: '[manual|edits|auto]', description: 'How much to ask before tools run' },
   { name: '/moe', args: '[strategy]', description: 'Mixture of Experts — 3 models discuss your question' },
   { name: '/moe debate', args: '', description: 'MoE debate — models critique each other' },
   { name: '/moe vote', args: '', description: 'MoE vote — show all 3 responses, you pick' },
@@ -347,7 +347,11 @@ export class TUI {
 
     // Check if tool operates on files (offer project-scoped permission)
     const hasFilePath = args.path || args.file;
-    const options: { label: string; value: string }[] = [
+    // An approval is one decision about one proposal: nothing to remember.
+    const options: { label: string; value: string }[] = toolName === 'request_approval' ? [
+      { label: 'Yes — approve and turn verify off', value: 'y' },
+      { label: 'No — keep verify on', value: 'n' },
+    ] : [
       { label: 'Yes', value: 'y' },
       { label: `Yes, allow ${theme.accent(toolName)} for this session`, value: 's' },
       ...(hasFilePath ? [{ label: `Yes, always in this project`, value: 'p' }] : []),
@@ -579,10 +583,10 @@ export class TUI {
   }
 
   /** Invoked on Shift+Tab. Set by index.ts, which owns the agent. */
-  private cyclePostureCb: (() => void) | null = null;
+  private cycleModeCb: (() => void) | null = null;
 
-  onCyclePosture(cb: () => void): void {
-    this.cyclePostureCb = cb;
+  onCycleMode(cb: () => void): void {
+    this.cycleModeCb = cb;
   }
 
   showInfo(msg: string): void {
@@ -660,7 +664,7 @@ export class TUI {
     const tokStr = evalTokens > 1000 ? `${(evalTokens / 1000).toFixed(1)}k` : String(evalTokens);
     const promptStr = promptTokens > 0 ? ` ${icons.dot} ${promptTokens > 1000 ? `${(promptTokens / 1000).toFixed(1)}k` : promptTokens} prompt` : '';
     const tpsStr = tps > 0 ? ` ${icons.dot} ${tps} tok/s` : '';
-    const modelRole = state?.modelRole || 'Act';
+    const modelRole = state?.modelRole || 'Act 1';
 
     this.dispatch({
       type: 'ADD_MESSAGE',
@@ -745,7 +749,7 @@ export class TUI {
     const action = resolveKey(key);
     if (action && REBINDABLE_ACTIONS.has(action)) {
       switch (action) {
-        case 'cyclePosture': this.cyclePostureCb?.(); return;
+        case 'cycleMode': this.cycleModeCb?.(); return;
         case 'clearScreen':
           this.dispatch({ type: 'CLEAR_MESSAGES' });
           // The raw handler also did this — Ctrl+L clears the agent's

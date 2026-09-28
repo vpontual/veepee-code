@@ -205,24 +205,24 @@ try {
   // mcp.ts not present — skip.
 }
 
-// ─── Check 7: PLAN_DISABLED_TOOLS contains real tool names ─────────────
+// ─── Check 7: VERIFY_REFUSED_TOOLS contains real tool names ────────────
 //
-// Plan-mode gate filters tools by name. A typo in PLAN_DISABLED_TOOLS
-// silently lets the wrong tool through. Verify every entry appears as a
-// `name: '<entry>'` somewhere in the tools/ dir or hooks.ts (remote/MCP
-// names are dynamic and excluded).
+// Verify refuses tools by name. A typo in VERIFY_REFUSED_TOOLS silently lets
+// the wrong tool through. Verify every entry appears as a `name: '<entry>'`
+// somewhere in the tools/ dir (remote/MCP names are dynamic and excluded).
 
 try {
-  const planGate = readFileSync(resolve(ROOT, 'src/tools/plan-gate.ts'), 'utf-8');
-  const m = planGate.match(/PLAN_DISABLED_TOOLS\s*=\s*new\s+Set<string>\(\[([\s\S]*?)\]\)/);
-  if (m) {
+  const perms = readFileSync(resolve(ROOT, 'src/permissions.ts'), 'utf-8');
+  const m = perms.match(/VERIFY_REFUSED_TOOLS\s*=\s*new\s+Set\(\[([\s\S]*?)\]\)/);
+  if (!m) {
+    issues.push('permissions.ts: VERIFY_REFUSED_TOOLS not found — the verify hold has no list to check.');
+  } else {
     const declared = [...m[1].matchAll(/'([a-z_]+)'/g)].map((mm) => mm[1]);
     const codingFiles = [
       'src/tools/coding.ts',
       'src/tools/devops.ts',
       'src/tools/web.ts',
       'src/tools/task.ts',
-      'src/tools/plan-gate.ts',
     ];
     const allNames = new Set();
     for (const f of codingFiles) {
@@ -231,19 +231,19 @@ try {
         for (const nm of src.matchAll(/name:\s*'([a-z_]+)'/g)) allNames.add(nm[1]);
       } catch { /* file not present */ }
     }
-    // 'shell' and 'docker' come from the remote bridge — not in tools/. Allow them.
-    const allowDynamic = new Set(['shell']);
-    const orphans = declared.filter((d) => !allNames.has(d) && !allowDynamic.has(d) && d !== 'docker');
+    // 'shell' and 'docker' come from the remote bridge — not in tools/.
+    const allowDynamic = new Set(['shell', 'docker']);
+    const orphans = declared.filter((d) => !allNames.has(d) && !allowDynamic.has(d));
     if (orphans.length > 0) {
       issues.push(
-        'tools/plan-gate.ts: PLAN_DISABLED_TOOLS entries that don\'t match any registered tool name:\n' +
+        'permissions.ts: VERIFY_REFUSED_TOOLS entries that don\'t match any registered tool name:\n' +
           orphans.map((n) => `  - '${n}'`).join('\n') +
           '\n  Either fix the typo or remove if the tool no longer exists.',
       );
     }
   }
-} catch {
-  // plan-gate.ts not yet shipped — skip silently.
+} catch (err) {
+  issues.push(`check 7 failed to run: ${err.message}`);
 }
 
 // ─── Check 8: SubagentConfig exposed in DEFAULTS + loadConfig merge ────

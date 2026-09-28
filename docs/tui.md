@@ -161,7 +161,7 @@ Assistant text streams token-by-token into the message area. During streaming:
 
 ## Thinking Display
 
-When the model uses `<think>` tags (Qwen, DeepSeek) or native thinking (via the `think` API parameter in plan mode):
+When the model uses `<think>` tags (Qwen, DeepSeek) or native thinking (via the `think` API parameter in act mode):
 
 1. A pulsing indicator appears: animated frames ◐ ◓ ◑ ◒ with "Thinking..."
 2. Thinking content accumulates in a buffer

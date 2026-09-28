@@ -360,40 +360,17 @@ Your knowledge state contains everything important from our conversation. Only t
 
 // ─── Mode-specific Prompts ───────────────────────────────────────────────────
 
-const PLAN_PROMPT = `
-## Plan Mode (ACTIVE)
+const VERIFY_PROMPT = `
+## Verify (ACTIVE) — read-only until the user approves
 
-You are in PLANNING mode. Think deeply before acting.
+The user wants to approve changes before they happen.
 
-- DO NOT immediately start coding or making changes.
-- ASK clarifying questions if the request is ambiguous or has multiple valid approaches.
-- Explore the codebase first (read files, check structure) to understand the current state.
-- Break the task into clear, numbered steps with rationale for each decision.
-- Consider trade-offs, edge cases, and potential issues.
-- When the plan involves libraries or frameworks, use web_search to verify current versions and best practices.
-- Present your plan and ASK for user confirmation before implementing.
-- If the user says "deepen" or "elaborate", expand specific sections with more detail and research.
-- Use your thinking capability to reason through complex architectural decisions.
-- Only start implementing when the user explicitly approves (e.g., "looks good", "go ahead").
-
-### You have every tool
-
-Plan mode is a different MODEL, not a smaller toolbox. \`bash\`, \`edit_file\`,
-\`write_file\` and \`multi_edit\` are all available to you here, exactly as in act
-mode, and permissions still prompt before anything mutating runs.
-
-So **never reconstruct by hand what a command would tell you.** If a script
-exists, run it. If a test would answer the question, run it. Reproducing a
-tool's output with a long series of read-only calls is slower, less accurate,
-and the user can see you doing it.
-
-Restraint here is about JUDGEMENT, not capability: explore and verify freely,
-but do not start rewriting the codebase before the user has agreed to a plan.
-
-### Plan Auto-Save
-
-Your plans are automatically saved to \`.veepee/plan.md\` and restored after compaction.
-As you implement, update the plan file to track progress (mark steps [DONE]).
+- Read, search, grep and analyse freely: understand the code before proposing anything.
+- Edits, shell commands and subagents are HELD. Calling one returns a refusal, not an error in your approach.
+- When you know what to do, call \`request_approval\` with the concrete proposal: numbered steps, the files involved, and anything the user must decide.
+- Ask a clarifying question instead when the request is ambiguous.
+- Once approved, every tool is available: carry out exactly what was approved.
+- Never reconstruct by hand what a held command would tell you. Propose running it.
 `;
 
 // Chat mode tool whitelist — only these are available in chat mode
@@ -427,6 +404,7 @@ export class ContextManager {
   private messages: Message[] = [];
   private systemPrompt: string = '';
   private mode: AgentMode = 'act';
+  private verify = false;
   private currentModel = '';
   // Compaction window (tokens). This is when vcode starts summarizing away context — NOT
   // a model limit. The DGX serves the 35B at max-model-len 262144 and its KV cache is
@@ -524,13 +502,13 @@ export class ContextManager {
     this.rebuildSystemPrompt();
   }
 
-  setPlanMode(enabled: boolean): void {
-    this.mode = enabled ? 'plan' : 'act';
+  setVerify(on: boolean): void {
+    this.verify = on;
     this.rebuildSystemPrompt();
   }
 
-  isPlanMode(): boolean {
-    return this.mode === 'plan';
+  isVerify(): boolean {
+    return this.verify;
   }
 
   /** Invalidate project tree cache (e.g., after file creation) */
@@ -547,8 +525,8 @@ export class ContextManager {
 
   private rebuildSystemPrompt(): void {
     const cutoff = estimateCutoff(this.currentModel);
-    const modeLabel = this.mode === 'plan' ? 'Plan (thinking enabled)'
-      : this.mode === 'chat' ? 'Chat (conversational + web search)'
+    const modeLabel = this.mode === 'chat' ? 'Chat (conversational + web search)'
+      : this.verify ? 'Act (verify: read-only until approved)'
       : 'Act (execution)';
 
     // Include project tree on first build (like RooCode's environment_details)
@@ -582,8 +560,8 @@ export class ContextManager {
         ? `\n**Sandbox:** \`${this.sandboxPath}\` — use for scratch files, experiments, temp code. Auto-cleaned on session end.\n`
         : '');
 
-    if (this.mode === 'plan') {
-      this.systemPrompt += PLAN_PROMPT;
+    if (this.verify && this.mode !== 'chat') {
+      this.systemPrompt += VERIFY_PROMPT;
     }
 
     // Inject active output style

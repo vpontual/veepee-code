@@ -146,12 +146,11 @@ The core ReAct (Reasoning + Acting) loop with mode management and roster integra
 
 **Mode management:**
 - Loads the model roster from `~/.veepee-code/benchmarks/roster.json` on construction
-- `/plan` uses `roster.plan` model (fallback: heaviest with thinking)
+- `setAct(1)` runs on the primary model (captured the first time you leave it); `setAct(2)` on `config.secondModel`, else the first `fallbackModels` entry, switched to by name with no profile required
+- `cycleMode()` (Shift+Tab) goes Act 1 → Act 2 → Chat, skipping Act 2 when it has no model
 - `/chat` uses `roster.chat` model (fallback: fast standard-tier)
-- `/act` uses `roster.act` model (fallback: previous model)
-
-**Planning intent auto-detection:**
-In act mode, user messages are tested against regex patterns for planning keywords (plan, design, architect, think through, etc.). If detected, the agent automatically enters plan mode with a model switch event.
+- `verify` is a flag, not a mode: `PermissionManager.checkWithPosture(…, verify)` refuses `VERIFY_REFUSED_TOOLS` with a reason, and `request_approval` (offered to the model only while verify is on) turns it off on approval
+- No mode is ever inferred from the wording of a message
 
 **Loop structure:**
 
@@ -188,7 +187,7 @@ type AgentEvent = {
 This design decouples the agent logic from the rendering. The TUI, API, and `runSync` method all consume the same event stream.
 
 **Thinking detection:**
-The agent detects `<think>` and `</think>` tags in streamed output (used by Qwen, DeepSeek). Content inside think tags is buffered and emitted as `thinking` events. The `think: true` option is sent to Ollama in plan mode for native thinking support.
+The agent detects `<think>` and `</think>` tags in streamed output (used by Qwen, DeepSeek). Content inside think tags is buffered and emitted as `thinking` events. The `think: true` option is sent in act mode (not chat) for native thinking support.
 
 ### Context Manager (`context.ts`)
 

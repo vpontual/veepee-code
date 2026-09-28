@@ -69,10 +69,13 @@ Talk to the AI naturally. It reads and writes files, runs commands, searches the
 
 | Command | Mode | Description |
 |---------|------|-------------|
-| `/act` | Act | Default coding mode — all tools, auto-switches models |
-| `/plan` | Plan | Thinking-first — best reasoning model, clarifying questions |
+| `/act 1` | Act 1 | Default coding mode on the primary model — all tools |
+| `/act 2` | Act 2 | Same, on the second model (`secondModel`) |
 | `/chat` | Chat | Fast conversational — lightweight model, web search only |
+| `/verify` | (any mode) | Read-only until you approve the agent's proposal — off by default |
 | `/moe` | MoE | Mixture of Experts — 3 models discuss your question |
+
+**Shift+Tab** cycles Act 1 → Act 2 → Chat and names the model. `/permissions manual|edits|auto` sets how much it asks.
 
 ### Shell escape
 

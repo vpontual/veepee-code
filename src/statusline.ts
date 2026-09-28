@@ -20,7 +20,7 @@ import { getConfigDir } from './config.js';
 export interface StatuslineState {
   model: string;
   modelSize?: string;
-  mode: 'act' | 'plan' | 'chat';
+  mode: 'act' | 'chat';
   tokens: number;
   tokenPercent: number;
   cwd: string;

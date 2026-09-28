@@ -707,29 +707,113 @@ describe('shouldForceVerify — force verify-and-fix after an unverified code ch
   });
 });
 
-describe('plan mode no longer withholds tools', () => {
-  it('PLAN_DISABLED_TOOLS is not used to filter the tool list', () => {
-    // The set still exists in plan-gate.ts for exit_plan_mode's own docs, but
-    // agent.ts must not filter on it — plan and act differ only by model.
-    const src = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
-    expect(src).not.toMatch(/PLAN_DISABLED_TOOLS\.has/);
-    expect(src).toMatch(/Plan mode gets the SAME tools as act/);
+describe('modes: Act 1, Act 2, Chat — and verify', () => {
+  async function makeAgent(overrides: Record<string, unknown> = {}) {
+    const { loadConfig } = await import('../src/config.js');
+    const { Agent } = await import('../src/agent.js');
+    const { ToolRegistry } = await import('../src/tools/registry.js');
+    const { ModelManager } = await import('../src/models.js');
+    const { PermissionManager } = await import('../src/permissions.js');
+    const config = { ...loadConfig(''), ...overrides } as never;
+    const mm = new ModelManager(config);
+    mm.switchTo('primary-model');
+    return { agent: new Agent(config, new ToolRegistry(), mm, new PermissionManager()), mm };
+  }
+
+  it('starts on Act 1 with verify off', async () => {
+    const { agent } = await makeAgent({ secondModel: 'second-model' });
+    expect(agent.getMode()).toBe('act');
+    expect(agent.getActSlot()).toBe(1);
+    expect(agent.getVerify()).toBe(false);
   });
 
-  it('an explicitly configured planModel wins over the roster', () => {
-    // The only path that works under lockModel, which synthesises one profile
-    // and skips discovery — so a roster-based choice cannot resolve gemma.
-    const src = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
-    const configured = src.indexOf('const configured = this.config.planModel');
-    const roster = src.indexOf('this.roster?.plan && this.modelManager.getProfile');
-    expect(configured).toBeGreaterThan(-1);
-    expect(roster).toBeGreaterThan(-1);
-    expect(configured).toBeLessThan(roster);
+  it('Shift+Tab cycles Act 1 -> Act 2 -> Chat -> Act 1, on the right models', async () => {
+    const { agent, mm } = await makeAgent({ secondModel: 'second-model' });
+    expect(agent.cycleMode()).toMatchObject({ mode: 'act', slot: 2, model: 'second-model' });
+    const chat = agent.cycleMode();
+    expect(chat.mode).toBe('chat');
+    // No chat model is known here, so chat runs on the primary, not on Act 2's model.
+    expect(chat.model).toBe('primary-model');
+    expect(agent.cycleMode()).toMatchObject({ mode: 'act', slot: 1, model: 'primary-model' });
+    expect(mm.getCurrentModel()).toBe('primary-model');
   });
 
-  it('does not require a discovered profile for the configured plan model', () => {
+  it('the second model needs no discovered profile (lockModel skips discovery)', async () => {
+    const { agent, mm } = await makeAgent({ secondModel: 'gemma4:26b-a4b' });
+    expect(agent.setAct(2)).toEqual({ model: 'gemma4:26b-a4b' });
+    expect(mm.getCurrentModel()).toBe('gemma4:26b-a4b');
+  });
+
+  it('falls back to the first fallbackModel, and skips Act 2 when there is none', async () => {
+    const fb = await makeAgent({ secondModel: null, fallbackModels: ['fb-model'] });
+    expect(fb.agent.slotModel(2)).toBe('fb-model');
+    const none = await makeAgent({ secondModel: null, fallbackModels: [] });
+    expect(none.agent.setAct(2)).toBeNull();
+    expect(none.agent.getActSlot()).toBe(1);
+    expect(none.agent.cycleMode().mode).toBe('chat');
+  });
+
+  it('verify is independent of mode and model', async () => {
+    const { agent, mm } = await makeAgent({ secondModel: 'second-model' });
+    agent.setVerify(true);
+    agent.setAct(2);
+    expect(agent.getVerify()).toBe(true);
+    expect(mm.getCurrentModel()).toBe('second-model');
+    agent.setVerify(false);
+    expect(agent.getActSlot()).toBe(2);
+  });
+
+  it('keeps the old lessons: no tool filtering by a plan list, no mode inferred from wording', () => {
     const src = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
-    expect(src).toMatch(/if \(configured\) \{\s*\n\s*this\.modelManager\.switchTo\(configured\);/);
+    expect(src).not.toMatch(/PLAN_DISABLED_TOOLS/);
+    expect(src).not.toMatch(/detectPlanningIntent|PLAN_PATTERNS/);
+  });
+});
+
+describe('request_approval', () => {
+  async function setup(answer: string) {
+    const { loadConfig } = await import('../src/config.js');
+    const { Agent } = await import('../src/agent.js');
+    const { ToolRegistry } = await import('../src/tools/registry.js');
+    const { ModelManager } = await import('../src/models.js');
+    const { PermissionManager } = await import('../src/permissions.js');
+    const { createRequestApprovalTool } = await import('../src/tools/verify-gate.js');
+    const config = loadConfig('');
+    const perms = new PermissionManager();
+    perms.setPromptHandler(async () => answer);
+    const mm = new ModelManager(config);
+    mm.switchTo('m');
+    const agent = new Agent(config, new ToolRegistry(), mm, perms);
+    return { agent, tool: createRequestApprovalTool(agent, perms) };
+  }
+
+  it('turns verify off when approved', async () => {
+    const { agent, tool } = await setup('y');
+    agent.setVerify(true);
+    const r = await tool.execute({ proposal: '1. edit a.ts' });
+    expect(r.success).toBe(true);
+    expect(agent.getVerify()).toBe(false);
+  });
+
+  it('keeps verify on when rejected', async () => {
+    const { agent, tool } = await setup('n');
+    agent.setVerify(true);
+    const r = await tool.execute({ proposal: '1. edit a.ts' });
+    expect(r.success).toBe(false);
+    expect(agent.getVerify()).toBe(true);
+  });
+
+  it('accepts `plan`, which models trained on exit_plan_mode send', async () => {
+    const { agent, tool } = await setup('y');
+    agent.setVerify(true);
+    expect((await tool.execute({ plan: 'do it' })).success).toBe(true);
+  });
+
+  it('says so when verify is already off', async () => {
+    const { tool } = await setup('y');
+    const r = await tool.execute({ proposal: 'x' });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/Verify is off/);
   });
 });
 

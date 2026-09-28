@@ -36,7 +36,7 @@ import { CheckpointManager } from './checkpoint.js';
 import { PreviewManager } from './preview.js';
 import { SyncManager } from './sync.js';
 import { registerRcRoutes, generateRcToken } from './rc.js';
-import { nextPosture, POSTURE_LABEL } from './permissions.js';
+import { POSTURE_LABEL, type PermissionPosture } from './permissions.js';
 import { checkForUpdate } from './update.js';
 import { resolveApiHost } from './api-host.js';
 import { execFile } from 'node:child_process';
@@ -64,7 +64,7 @@ import { connectAndDiscover as connectMcpServers, closeAll as closeMcpClients, t
 import { buildSkillInvokeTool } from './skills.js';
 import { createTaskTool, createTaskOutputTool } from './tools/task.js';
 import { loadAgentDefinitions, withBuiltinAgents } from './agents.js';
-import { createExitPlanModeTool } from './tools/plan-gate.js';
+import { createRequestApprovalTool } from './tools/verify-gate.js';
 import { createNotebookEditTool } from './tools/notebook.js';
 import { createChatClient, isDirectOnly, primaryEndpoint } from './llm-client.js';
 import { enableOsSandbox, disableOsSandbox } from './tools/os-sandbox.js';
@@ -423,11 +423,9 @@ async function main() {
   // it discoverable via tab-complete and consistent with other vcode tools).
   registry.register(createTaskTool(agent.getSubAgents(), withBuiltinAgents(loadAgentDefinitions(), config.reviewModel)));
   registry.register(createTaskOutputTool(agent.getSubAgents()));
-  // Plan-mode gate. Always registered, but the tool itself enforces that
-  // it can only run while agent.getMode() === 'plan'. The model sees it in
-  // every mode; tool-pick guidance in the description steers it to plan
-  // mode only.
-  registry.register(createExitPlanModeTool(agent, permissions));
+  // The way out of /verify. Registered always; the agent only offers it to
+  // the model while verify is on.
+  registry.register(createRequestApprovalTool(agent, permissions));
   // Notebook editing — round-trips cleanly through nbformat instead of
   // letting the model edit raw JSON via edit_file.
   registry.register(createNotebookEditTool(ignoreManager, fileTracker));
@@ -1053,19 +1051,13 @@ async function main() {
   // Initialize TUI
   profiler.mark('api server started');
   const tui = new TUI();
-  // Shift+Tab cycles how much the agent asks: manual -> accept edits -> plan ->
-  // auto. Independent of which model is answering, so any posture works with
-  // either qwen or gemma.
-  tui.onCyclePosture(() => {
-    const next = nextPosture(agent.getPosture());
-    agent.setPosture(next);
-    const blurb: Record<string, string> = {
-      manual: 'asks before anything that is not read-only',
-      accept_edits: 'file edits go through; bash still asks',
-      plan: 'read-only — mutations are refused with a reason',
-      auto: 'everything except rm -rf / force-push / reset --hard',
-    };
-    tui.showInfo(`${theme.accent(`\u21e5 ${POSTURE_LABEL[next]}`)} ${theme.dim('— ' + blurb[next])}`);
+  // Shift+Tab cycles modes: Act 1 (primary model) -> Act 2 (second model) ->
+  // Chat, naming the model each time. Postures are /permissions.
+  tui.onCycleMode(() => {
+    const { model } = agent.cycleMode();
+    const role = modeRole(agent);
+    tui.updateModel(model, undefined, role);
+    tui.showInfo(`${theme.accent(`\u21e5 ${role}`)} ${theme.dim('·')} ${model}`);
   });
   profiler.flush();
   tui.setProgressBar(config.progressBar);
@@ -1256,7 +1248,7 @@ async function main() {
             defaultModel = roster.act;
             defaultProfile = profile;
             agent.setModel(defaultModel);
-            tui.updateModel(defaultModel, defaultProfile.parameterSize, 'Act');
+            tui.updateModel(defaultModel, defaultProfile.parameterSize, 'Act 1');
           }
         }
       }
@@ -1272,7 +1264,7 @@ async function main() {
         defaultModel = existingRoster.act;
         defaultProfile = profile;
         agent.setModel(defaultModel);
-        tui.updateModel(defaultModel, defaultProfile.parameterSize, 'Act');
+        tui.updateModel(defaultModel, defaultProfile.parameterSize, 'Act 1');
       }
     }
   }
@@ -1569,6 +1561,8 @@ async function main() {
           case 'tool_result':
             tui.showToolResult(event.name!, event.success!, event.content || event.error || '');
             turnToolCalls.push({ name: event.name!, success: event.success! });
+            // An approved proposal turns verify off; the label must follow.
+            if (event.name === 'request_approval') tui.updateModel(modelManager.getCurrentModel(), undefined, modeRole(agent));
             refreshStats();
             tui.startStream();
             break;
@@ -1996,12 +1990,14 @@ async function handleCommand(
         `  ${theme.dim('  SessionStart (stdout becomes context), PreCompact, SubagentStop. Claude Code hook config works as-is.')}`,
         '',
         `${theme.textBold('Modes:')}`,
-        `  ${theme.accent('/plan')}   Plan mode — thinking ON, mutating tools BLOCKED until exit_plan_mode approved`,
-        `  ${theme.accent('/act')}    Act mode  — thinking OFF, all tools, auto-switch (default)`,
+        `  ${theme.accent('/act 1')}  Act on the primary model — all tools (default)`,
+        `  ${theme.accent('/act 2')}  Act on the second model (secondModel, else the first fallbackModel)`,
         `  ${theme.accent('/chat')}   Chat mode — fast model, web search only, no file access`,
+        `  ${theme.dim('  Shift+Tab cycles Act 1 → Act 2 → Chat and names the model.')}`,
+        `  ${theme.accent('/verify')} Read-only until you approve its proposal (off by default; works in any mode)`,
+        `  ${theme.accent('/permissions')} manual | edits | auto — how much to ask before tools run`,
         `  ${theme.accent('/moe')}    Mixture of Experts — 3 models discuss your question`,
         `  ${theme.dim('  /moe debate | /moe vote | /moe fastest | /moe (auto-detects)')}`,
-        `  ${theme.dim('  Plan auto-activates on "plan", "think through", "design", etc.')}`,
         '',
         `${theme.textBold('Benchmark:')}`,
         `  ${theme.accent('/benchmark')}        Benchmark all      ${theme.accent('/benchmark heavy')}  Heavy only`,
@@ -2409,9 +2405,30 @@ async function handleCommand(
 
     case '/permissions':
     case '/perms': {
+      const POSTURE_ARG: Record<string, PermissionPosture> = {
+        manual: 'manual', edits: 'accept_edits', accept_edits: 'accept_edits', auto: 'auto',
+      };
+      const POSTURE_BLURB: Record<PermissionPosture, string> = {
+        manual: 'asks before anything that is not read-only',
+        accept_edits: 'file edits go through; bash still asks',
+        auto: 'everything except rm -rf / force-push / reset --hard',
+      };
+      const arg = parts[1]?.toLowerCase();
+      if (arg) {
+        const next = POSTURE_ARG[arg];
+        if (!next) {
+          tui.showInfo('Usage: /permissions [manual|edits|auto]');
+          return false;
+        }
+        agent.setPosture(next);
+        tui.showInfo(`${theme.accent(`Permissions: ${POSTURE_LABEL[next]}`)} ${theme.dim('— ' + POSTURE_BLURB[next])}`);
+        return false;
+      }
       const perms = permissions.listPermissions();
+      const posture = agent.getPosture();
       tui.showInfo([
-        `${theme.textBold('Permissions:')}`,
+        `${theme.textBold('Permissions:')} ${theme.accent(POSTURE_LABEL[posture])} ${theme.dim('— ' + POSTURE_BLURB[posture] + '  (/permissions manual|edits|auto)')}`,
+        `  ${theme.dim('Verify:')} ${agent.getVerify() ? 'on' : 'off'} ${theme.dim('(/verify)')}`,
         `  ${theme.success('Safe (auto-allowed):')} ${perms.safeTools.join(', ')}`,
         `  ${theme.accent('Always allowed:')} ${perms.alwaysAllowed.length > 0 ? perms.alwaysAllowed.join(', ') : '(none)'}`,
         `  ${theme.warning('Session allowed:')} ${perms.sessionAllowed.length > 0 ? perms.sessionAllowed.join(', ') : '(none)'}`,
@@ -2862,37 +2879,26 @@ async function handleCommand(
       return false;
     }
 
-    case '/plan': {
-      if (agent.getMode() === 'plan') {
-        tui.showInfo('Already in plan mode.');
-        return false;
-      }
-      const { model } = agent.enterPlanMode();
-      tui.updateModel(model, undefined, 'Plan');
-      tui.showInfo([
-        `${theme.accent('Plan mode activated')}`,
-        `  ${theme.dim('Model:')} ${model} (heaviest with thinking)`,
-        `  ${theme.dim('Thinking:')} ON — model will reason through decisions`,
-        `  ${theme.dim('Behavior:')} Asks clarifying questions before acting`,
-        `  ${theme.dim('Exit:')} /act to switch back to execution mode`,
-      ].join('\n'));
-      return false;
-    }
-
     case '/act':
     case '/code': {
-      if (agent.getMode() === 'act') {
-        tui.showInfo('Already in act/code mode.');
+      // `/act` alone returns to the act slot you were last on (1 on a fresh start).
+      const arg = parts[1];
+      if (arg && arg !== '1' && arg !== '2') {
+        tui.showInfo('Usage: /act [1|2] — 1 = primary model (default), 2 = second model');
         return false;
       }
-      agent.exitPlanMode();
-      tui.updateModel(modelManager.getCurrentModel(), undefined, 'Act');
-      tui.showInfo([
-        `${theme.accent('Act mode activated')} (all tools, coding-ready)`,
-        `  ${theme.dim('Model:')} ${modelManager.getCurrentModel()}`,
-        `  ${theme.dim('Thinking:')} OFF — fast execution`,
-        `  ${theme.dim('Tools:')} All ${registry.count()} tools available`,
-      ].join('\n'));
+      const slot = arg === '2' ? 2 : arg === '1' ? 1 : agent.getActSlot();
+      const switched = agent.setAct(slot);
+      if (!switched) {
+        tui.showInfo([
+          `${theme.warning('No second model configured.')}`,
+          `  ${theme.dim('Set "secondModel" in ~/.veepee-code/settings.json (or add one to "fallbackModels").')}`,
+        ].join('\n'));
+        return false;
+      }
+      const role = modeRole(agent);
+      tui.updateModel(switched.model, undefined, role);
+      tui.showInfo(`${theme.accent(role)} ${theme.dim('·')} ${switched.model}`);
       return false;
     }
 
@@ -2902,16 +2908,30 @@ async function handleCommand(
         return false;
       }
       const { model: chatModel } = agent.enterChatMode();
-      tui.updateModel(chatModel, undefined, 'Chat');
+      tui.updateModel(chatModel, undefined, modeRole(agent));
       // Show only actually registered chat tools
       const chatToolNames = ['web_search', 'web_fetch', 'http_request', 'weather', 'news']
         .filter(t => registry.has(t));
       tui.showInfo([
-        `${theme.accent('Chat mode activated')}`,
-        `  ${theme.dim('Model:')} ${chatModel} (fast, conversational)`,
+        `${theme.accent('Chat')} ${theme.dim('·')} ${chatModel}`,
         `  ${theme.dim('Tools:')} ${chatToolNames.length > 0 ? chatToolNames.join(', ') : '(none — configure SearXNG for web search)'}`,
-        `  ${theme.dim('Exit:')} /act to switch back to coding mode`,
+        `  ${theme.dim('Back:')} /act or Shift+Tab`,
       ].join('\n'));
+      return false;
+    }
+
+    case '/verify': {
+      const arg = parts[1]?.toLowerCase();
+      if (arg && arg !== 'on' && arg !== 'off') {
+        tui.showInfo('Usage: /verify [on|off] — no argument toggles');
+        return false;
+      }
+      const on = arg ? arg === 'on' : !agent.getVerify();
+      agent.setVerify(on);
+      tui.updateModel(modelManager.getCurrentModel(), undefined, modeRole(agent));
+      tui.showInfo(on
+        ? `${theme.accent('Verify on')} ${theme.dim('— reads freely; edits, shell and subagents wait until you approve its proposal')}`
+        : `${theme.accent('Verify off')} ${theme.dim('— tools run under your /permissions setting')}`);
       return false;
     }
 
@@ -4030,3 +4050,9 @@ main().catch((err) => {
   console.error(chalk.red('Fatal error:'), err);
   process.exit(1);
 });
+
+/** The mode as the user sees it: "Act 1", "Act 2" or "Chat", plus "· verify" while it is on. */
+function modeRole(agent: Agent): string {
+  const base = agent.getMode() === 'chat' ? 'Chat' : `Act ${agent.getActSlot()}`;
+  return agent.getVerify() ? `${base} · verify` : base;
+}

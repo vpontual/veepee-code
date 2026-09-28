@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PermissionManager, PLAN_REFUSED_TOOLS } from '../src/permissions.js';
+import { PermissionManager, VERIFY_REFUSED_TOOLS } from '../src/permissions.js';
 import { readFileSync } from 'fs';
 
 /**
@@ -33,10 +33,10 @@ describe('unattended runs still refuse dangerous commands', () => {
 });
 
 describe('subagents are not a way around the gate', () => {
-  it('refuses `task` in plan mode', () => {
-    // Spawning a subagent with tools:['bash'] reproduced everything plan mode
+  it('refuses `task` under verify', () => {
+    // Spawning a subagent with tools:['bash'] reproduced everything the hold
     // exists to prevent, out of sight of the user.
-    expect(PLAN_REFUSED_TOOLS.has('task')).toBe(true);
+    expect(VERIFY_REFUSED_TOOLS.has('task')).toBe(true);
   });
 
   it('checks permissions before executing a subagent tool call', () => {

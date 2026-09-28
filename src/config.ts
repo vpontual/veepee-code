@@ -22,9 +22,10 @@ export interface Config {
   model: string | null;
   lockModel: string | null;
   reviewModel: string | null;
-  /** Model used in plan mode. Set explicitly because lockModel skips discovery,
-   *  so a roster-based choice cannot work on a locked install. */
-  planModel: string | null;
+  /** The model `/act 2` runs on (Shift+Tab's second stop). Falls back to the
+   *  first of fallbackModels. Read from `planModel` too, its old name from
+   *  when this was plan mode's model. */
+  secondModel: string | null;
   /** Model used for compaction summaries. Falls back to the current chat
    *  model when null. Pin a smaller/cheaper model here to keep summaries
    *  fast and stop them from blocking the main loop on a large model. */
@@ -60,9 +61,6 @@ export interface Config {
   remote: { url: string; apiKey: string; allow?: string[] } | null;
   langfuse: { secretKey: string; publicKey: string; host?: string } | null;
   shellHistoryContext: boolean;
-  /** Infer plan mode from the wording of a message. Off by default: it moved
-   *  users out of the mode they had chosen, and plan mode filters out bash. */
-  autoPlanMode: boolean;
   fleet: Array<{ name: string; url: string }>;
   hooks: HooksConfig | null;
   /** MCP servers, keyed by name. Tools register as `[mcp:<name>]` source.
@@ -166,6 +164,8 @@ export interface ConfigFile {
   model?: string | null;
   lockModel?: string | null;
   reviewModel?: string | null;
+  secondModel?: string | null;
+  /** Old name of secondModel. */
   planModel?: string | null;
   summarizerModel?: string | null;
   autoSwitch?: boolean;
@@ -187,7 +187,6 @@ export interface ConfigFile {
   remote?: { url: string; apiKey: string; allow?: string[] } | null;
   langfuse?: { secretKey: string; publicKey: string; host?: string } | null;
   shellHistoryContext?: boolean;
-  autoPlanMode?: boolean;
   fleet?: Array<{ name: string; url: string }>;
   hooks?: HooksConfig | null;
   mcpServers?: Record<string, McpServerConfig> | null;
@@ -207,7 +206,7 @@ const DEFAULTS: Config = {
   model: null,
   lockModel: null,
   reviewModel: null,
-  planModel: null,
+  secondModel: null,
   summarizerModel: null,
   autoSwitch: true,
   numCtx: null,
@@ -231,7 +230,6 @@ const DEFAULTS: Config = {
   remote: null,
   langfuse: null,
   shellHistoryContext: false,
-  autoPlanMode: false,
   fleet: [],
   hooks: null,
   mcpServers: null,
@@ -653,7 +651,7 @@ export function loadConfig(configPath?: string): Config {
     model: merged.model ?? DEFAULTS.model,
     lockModel: merged.lockModel ?? DEFAULTS.lockModel,
     reviewModel: merged.reviewModel ?? DEFAULTS.reviewModel,
-    planModel: merged.planModel ?? DEFAULTS.planModel,
+    secondModel: merged.secondModel ?? merged.planModel ?? DEFAULTS.secondModel,
     summarizerModel: merged.summarizerModel ?? DEFAULTS.summarizerModel,
     autoSwitch: merged.autoSwitch ?? DEFAULTS.autoSwitch,
     numCtx: merged.numCtx ?? DEFAULTS.numCtx,
@@ -674,7 +672,6 @@ export function loadConfig(configPath?: string): Config {
     remote: merged.remote ?? DEFAULTS.remote,
     langfuse: merged.langfuse ?? DEFAULTS.langfuse,
     shellHistoryContext: merged.shellHistoryContext ?? DEFAULTS.shellHistoryContext,
-    autoPlanMode: merged.autoPlanMode ?? DEFAULTS.autoPlanMode,
     fleet: merged.fleet ?? DEFAULTS.fleet,
     hooks: merged.hooks ?? DEFAULTS.hooks,
     mcpServers: merged.mcpServers ?? DEFAULTS.mcpServers,

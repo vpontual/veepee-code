@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { nextPosture, PERMISSION_POSTURES, PermissionManager, EDIT_TOOLS, PLAN_REFUSED_TOOLS } from '../src/permissions.js';
+import { nextPosture, PERMISSION_POSTURES, PermissionManager, EDIT_TOOLS, VERIFY_REFUSED_TOOLS } from '../src/permissions.js';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -11,13 +11,13 @@ function isolated(): PermissionManager {
   try { return new PermissionManager(); } finally { if (prev) process.env.HOME = prev; }
 }
 
-describe('the Shift+Tab ring', () => {
-  it('cycles manual -> accept edits -> plan -> auto -> manual', () => {
-    expect(PERMISSION_POSTURES).toEqual(['manual', 'accept_edits', 'plan', 'auto']);
+describe('postures', () => {
+  it('are manual, accept edits and auto — the read-only hold is verify, not a posture', () => {
+    expect(PERMISSION_POSTURES).toEqual(['manual', 'accept_edits', 'auto']);
     let p = PERMISSION_POSTURES[0];
     const seen = [p];
-    for (let i = 0; i < 4; i++) { p = nextPosture(p); seen.push(p); }
-    expect(seen).toEqual(['manual', 'accept_edits', 'plan', 'auto', 'manual']);
+    for (let i = 0; i < 3; i++) { p = nextPosture(p); seen.push(p); }
+    expect(seen).toEqual(['manual', 'accept_edits', 'auto', 'manual']);
   });
 });
 
@@ -47,22 +47,41 @@ describe('posture behaviour', () => {
     expect(asked).toBe(true);
   });
 
-  it('plan refuses mutations WITH a reason the model can read', async () => {
+  it('verify refuses mutations WITH a reason the model can read, in every posture', async () => {
     const perms = isolated();
-    for (const t of PLAN_REFUSED_TOOLS) {
-      const r = await perms.checkWithPosture('plan', t, { command: 'x', path: 'a.ts' });
-      expect(typeof r).toBe('object');
-      expect((r as { decision: string }).decision).toBe('deny');
-      expect((r as { reason: string }).reason).toMatch(/plan mode/i);
-      // The lesson from the drift incident: never silently substitute.
-      expect((r as { reason: string }).reason).toMatch(/Do NOT reproduce by hand/);
+    for (const posture of PERMISSION_POSTURES) {
+      for (const t of VERIFY_REFUSED_TOOLS) {
+        const r = await perms.checkWithPosture(posture, t, { command: 'x', path: 'a.ts' }, undefined, true);
+        expect(typeof r).toBe('object');
+        expect((r as { decision: string }).decision).toBe('deny');
+        expect((r as { reason: string }).reason).toMatch(/request_approval/);
+        // The lesson from the drift incident: never silently substitute.
+        expect((r as { reason: string }).reason).toMatch(/Do NOT reproduce by hand/);
+      }
     }
   });
 
-  it('plan still allows reading', async () => {
+  it('verify still allows reading, and asking for approval', async () => {
     const perms = isolated();
-    expect(await perms.checkWithPosture('plan', 'read_file', { path: 'a.ts' })).toBe('allow');
-    expect(await perms.checkWithPosture('plan', 'grep', { pattern: 'x' })).toBe('allow');
+    expect(await perms.checkWithPosture('manual', 'read_file', { path: 'a.ts' }, undefined, true)).toBe('allow');
+    expect(await perms.checkWithPosture('manual', 'grep', { pattern: 'x' }, undefined, true)).toBe('allow');
+    expect(await perms.checkWithPosture('manual', 'request_approval', { proposal: 'x' }, undefined, true)).toBe('allow');
+  });
+
+  it('verify off changes nothing', async () => {
+    const perms = isolated();
+    expect(await perms.checkWithPosture('auto', 'bash', { command: 'npm test' }, undefined, false)).toBe('allow');
+  });
+
+  it('approval always asks: an "always" answer is not remembered', async () => {
+    const perms = isolated();
+    let asked = 0;
+    perms.setPromptHandler(async () => { asked++; return 'a'; });
+    expect(await perms.approve('request_approval', 'the proposal')).toBe(true);
+    expect(await perms.approve('request_approval', 'the proposal')).toBe(true);
+    expect(asked).toBe(2);
+    perms.setPromptHandler(async () => 'n');
+    expect(await perms.approve('request_approval', 'the proposal')).toBe(false);
   });
 
   it('manual defers to the normal check', async () => {

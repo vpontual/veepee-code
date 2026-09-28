@@ -14,7 +14,7 @@ interface StatusBarProps {
   // `model` is unknown at render time (early boot), the built-in display
   // is used regardless of script presence.
   model?: string;
-  mode?: 'act' | 'plan' | 'chat';
+  mode?: 'act' | 'chat';
 }
 
 export function StatusBar({

@@ -70,7 +70,7 @@ function buildConfigOptions(session: AcpSession): object[] {
   const mm = session.agent.getModelManager();
   const currentModel = mm.getCurrentModel();
   const allModels = mm.getAllModels();
-  const currentMode = session.agent.getMode();
+  const currentMode = acpModeId(session);
   const currentEffort = session.agent.getEffort();
 
   return [
@@ -82,9 +82,7 @@ function buildConfigOptions(session: AcpSession): object[] {
       type: 'select',
       currentValue: currentMode,
       options: [
-        { value: 'act',  name: 'Act',  description: 'Code and use tools' },
-        { value: 'plan', name: 'Plan', description: 'Plan without mutating tools' },
-        { value: 'chat', name: 'Chat', description: 'Conversation and read-only context' },
+        ...acpModes(session).map(m => ({ value: m.id, name: m.name, description: m.description })),
       ],
     },
     {
@@ -110,14 +108,25 @@ function buildConfigOptions(session: AcpSession): object[] {
   ];
 }
 
+/** Act 1 / Act 2 / Chat, as in the TUI's Shift+Tab ring. */
+function acpModes(session: AcpSession): Array<{ id: string; name: string; description: string }> {
+  const second = session.agent.slotModel(2);
+  return [
+    { id: 'act', name: 'Act', description: 'Code and use tools on the primary model' },
+    ...(second ? [{ id: 'act2', name: 'Act 2', description: `Code and use tools on ${second}` }] : []),
+    { id: 'chat', name: 'Chat', description: 'Conversation and read-only context' },
+  ];
+}
+
+function acpModeId(session: AcpSession): string {
+  if (session.agent.getMode() === 'chat') return 'chat';
+  return session.agent.getActSlot() === 2 ? 'act2' : 'act';
+}
+
 function buildModes(session: AcpSession): object {
   return {
-    currentModeId: session.agent.getMode(),
-    availableModes: [
-      { id: 'act',  name: 'Act',  description: 'Code and use tools' },
-      { id: 'plan', name: 'Plan', description: 'Plan without mutating tools' },
-      { id: 'chat', name: 'Chat', description: 'Conversation and read-only context' },
-    ],
+    currentModeId: acpModeId(session),
+    availableModes: acpModes(session),
   };
 }
 
@@ -573,9 +582,10 @@ async function handleSessionSetConfigOption(
         break;
       }
       case 'mode':
-        if (value === 'plan') session.agent.enterPlanMode();
-        else if (value === 'chat') session.agent.enterChatMode();
-        else session.agent.exitPlanMode();
+        if (value === 'chat') session.agent.enterChatMode();
+        else if (value === 'act2') {
+          if (!session.agent.setAct(2)) { sendError(id, -32602, 'No second model configured (secondModel)'); return; }
+        } else session.agent.setAct(1); // 'act', and 'plan' from older clients
         break;
       case 'effort':
         if (value === 'low' || value === 'medium' || value === 'high') {

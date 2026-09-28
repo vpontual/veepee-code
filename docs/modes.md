@@ -1,31 +1,27 @@
 ---
 title: "Modes"
-description: "Five operating modes: act, plan, chat, and MoE -- how they work, roster-based model selection, effort levels, and when to use each."
+description: "Act 1, Act 2 and Chat (cycled with Shift+Tab), the /verify hold, MoE, effort levels, and when to use each."
 weight: 4
 ---
 
 # Modes
 
-VEEPEE Code has four operating modes, each optimized for a different workflow. Each mode uses its roster-assigned model (from the first-launch benchmark). Switch between them with slash commands, or let the agent auto-detect planning intent.
+VEEPEE Code has three everyday modes — **Act 1**, **Act 2** and **Chat** — which **Shift+Tab** cycles in that order, naming the model each time. Separately, **`/verify`** holds any change until you approve it, and **`/moe`** asks three models at once.
 
-## /act -- Execution Mode (Default)
+```
+⇥ Act 2 · gemma4:26b-a4b
+```
 
-Act mode is the default. The agent reads, writes, and executes -- getting things done with minimal overhead.
+There is no plan mode any more (retired 2026-09-28). It bundled three things — a different model, a prompt, and a read-only gate — that are now separate: the other model is `/act 2`, and the gate is `/verify`. Current models plan on their own when a task needs it; `todo_write` keeps the steps.
 
-**Characteristics:**
-- **Thinking:** OFF -- the model generates output directly without explicit reasoning steps
-- **Model:** Uses the roster's **act** model (best overall with decent speed). Auto-switching enabled -- the agent can upgrade to a heavier model for complex tasks.
-- **Tools:** All registered tools available
-- **Behavior:** Execute first, explain after. The agent calls tools proactively and gives concise answers.
+## /act 1 -- the primary model (default)
 
-**Best for:**
-- Writing and editing code
-- Running builds, tests, and deployments
-- File system operations
-- Quick questions about your codebase
-- Any task where you want the agent to just do the work
+Act is where work happens: the agent reads, writes and runs things.
 
-**Example:**
+- **Model:** your primary model (`lockModel` / `model`, or the one auto-selected at startup).
+- **Thinking:** ON — Qwen3.6 needs it for reliable tool use.
+- **Tools:** everything registered, under your `/permissions` setting.
+- **Behaviour:** execute first, explain after. The nudges (act-don't-narrate, verify-after-edit, finish-the-task-list) run here.
 
 ```
 > Fix the TypeScript error in src/api.ts
@@ -34,78 +30,41 @@ Act mode is the default. The agent reads, writes, and executes -- getting things
   ✓ (45 lines)
   ◆ edit_file path=src/api.ts old_string="..." new_string="..."
   ✓ Edited src/api.ts: -1 +1 lines
-
-Fixed the type mismatch on line 23 -- `string` should be `string | undefined`.
 ```
 
-## /plan -- Planning Mode
+## /act 2 -- the second model
 
-Plan mode activates deep thinking. The agent reasons through problems before acting, asks clarifying questions, and presents a step-by-step plan for your approval.
+The same act mode on a different model, for a second opinion or when the primary is busy or down.
 
-**Characteristics:**
-- **Thinking:** ON -- the model uses `<think>` tags (Qwen, DeepSeek) or native thinking (via the `think` API parameter) to reason through decisions. Thinking blocks are displayed collapsed in the TUI.
-- **Model:** Uses the roster's **plan** model (best reasoning score). If no roster exists, falls back to the heaviest model with thinking support. Auto-switching is disabled (locked to the plan model).
-- **Tools:** All registered tools available, but the agent prefers reading and exploring over writing.
-- **Behavior:** Asks clarifying questions before acting. Presents numbered plans with rationale. Waits for explicit approval before implementing.
+- **Model:** `secondModel` in settings.json, else the first of `fallbackModels`. (`planModel`, the old name, is still read.) With neither set, Act 2 is skipped by Shift+Tab and `/act 2` says how to configure it.
+- It is switched to by name and needs no discovered profile, so it works on a `lockModel` install; a model the direct server does not serve is routed through the gateway.
+- Everything else is as Act 1.
 
-**Best for:**
-- Architecture decisions ("How should I structure the auth system?")
-- Complex refactoring that touches many files
-- Debugging difficult issues
-- Evaluating tradeoffs between approaches
-- Any task where the cost of getting it wrong is high
+`/act` on its own returns to whichever act slot you were last on.
 
-**Example:**
+## /verify -- read-only until you approve
 
-```
-/plan
-> Design the database schema for multi-tenant support
+Off by default; toggled with `/verify` (or `/verify on|off`). It works in any mode and on either model, and shows as `· verify` beside the mode.
 
-  ◐ Thinking...
-  ◆ glob pattern="**/*.ts"
-  ✓ Found 47 files
-  ◆ read_file path=src/db/schema.ts
-  ✓ (120 lines)
-  ◆ web_search query="multi-tenant database patterns PostgreSQL 2026"
-  ✓ 5 results
+While it is on:
 
-Before implementing, here are some questions:
+- Reading, searching, grep, web and the task list work normally.
+- Edits, shell commands and subagents are **refused with a reason the model can read** ("held: verify is on… call request_approval"). The tools stay visible: an older plan mode hid them, and the model — unable to see bash — rebuilt a script's output with ~50 read-only calls instead of saying it could not run it.
+- When it knows what to do, the model calls `request_approval` with a concrete proposal. You see it in the normal approval prompt. **Approve and verify turns off**; reject and it stays on for a revised proposal.
+- An "always" answer to that prompt is not remembered — every proposal is asked.
 
-1. Do you need **row-level** (shared tables with tenant_id) or **schema-level** (separate schema per tenant) isolation?
-2. How many tenants do you expect? 10? 10,000? 1M?
-3. Does any tenant data need to be queryable across tenants (e.g., analytics)?
+Use it for changes where getting it wrong is expensive: schema migrations, multi-file refactors, anything touching production.
 
-Based on your current schema, here's my recommended approach:
+## /permissions -- how much to ask
 
-**Plan:**
-1. Add a `tenant_id` column to all user-facing tables...
-2. Create a Row-Level Security policy...
-3. ...
-
-Should I proceed with this plan?
-```
-
-### Auto-Detection of Planning Intent
-
-When in act mode, VEEPEE Code watches for planning-intent signals in your messages and automatically switches to plan mode. These patterns trigger auto-detection:
-
-- "plan", "design", "architect", "strategy"
-- "think about", "think through"
-- "brainstorm", "approach"
-- "how should we...", "how would I...", "how could you..."
-- "before we start/begin/implement/code/build"
-- "what's the best way to..."
-- "break this down", "step by step"
-- "deepen", "elaborate", "expand on"
-- "let's think", "consider"
-
-When auto-detected, you will see a model switch notification:
+Unchanged in meaning, moved off Shift+Tab:
 
 ```
-  ◐ Model: qwen3:8b → qwen3.5:35b (Entering plan mode)
+/permissions manual   # ask before anything that is not read-only (default)
+/permissions edits    # file edits go through; bash still asks
+/permissions auto     # everything except rm -rf / force-push / reset --hard
+/permissions          # show the current setting and what is allowed
 ```
-
-To return to act mode: type `/act`.
 
 ## /chat -- Conversational Mode
 
@@ -185,7 +144,7 @@ MoE mode queries 3 models in parallel and combines their responses using an auto
 
 ## Effort Levels
 
-The `/effort` command controls how much work the agent puts into each response. Effort levels work across all modes (act, plan, chat, and MoE).
+The `/effort` command controls how much work the agent puts into each response. Effort levels work across all modes (Act 1, Act 2, Chat and MoE).
 
 ```
 /effort low        # Minimal -- short answers, fewer tool calls, skip exploration
@@ -203,31 +162,25 @@ Effort level persists for the session. It does not affect model selection -- onl
 
 ## Mode Comparison
 
-| Feature | /act (default) | /plan | /chat | /moe |
-|---------|---------------|-------|-------|------|
-| Thinking | OFF | ON | OFF | OFF |
-| Model source | Roster: act | Roster: plan | Roster: chat | 3 models (parallel) |
-| Auto-switch | Yes | No | No | No |
+| Feature | Act 1 (default) | Act 2 | Chat | /moe |
+|---------|-----------------|-------|------|------|
+| Model | primary | `secondModel` / first fallback | roster: chat | 3 models (parallel) |
+| Thinking | ON | ON | OFF | OFF |
 | All tools | Yes | Yes | No (web only) | Yes |
-| File access | Yes | Yes | No | Yes |
-| Shell commands | Yes | Yes | No | Yes |
-| Web search | Yes | Yes | Yes | Yes |
-| Behavior | Execute first | Think first | Converse | Multi-model synthesis |
+| `/verify` applies | Yes | Yes | n/a (nothing to hold) | — |
 | Default | Yes | No | No | No |
 
 ## Switching Modes
 
 ```
-/plan       # Enter plan mode
-/act        # Return to act/execution mode
-/chat       # Enter chat mode
-/moe        # Enter mixture of experts mode
-/effort low|medium|high  # Set effort level (works in any mode)
+Shift+Tab   # Act 1 -> Act 2 -> Chat -> Act 1, naming the model
+/act 1      # primary model
+/act 2      # second model
+/act        # back to the act slot you were last on
+/chat       # chat mode
+/verify     # toggle the read-only hold (any mode)
+/moe        # mixture of experts
+/effort low|medium|high  # works in any mode
 ```
 
-When you switch back to `/act` from plan, chat, or MoE mode:
-- The roster's act model is restored (or the previous model if no roster exists)
-- Auto-switching is re-enabled
-- The system prompt is rebuilt for execution mode
-
-Mode state is maintained for the session -- it does not persist across restarts (though sessions saved with `/save` record the active mode). Effort level also persists for the session.
+Mode state lasts for the session; it does not persist across restarts.

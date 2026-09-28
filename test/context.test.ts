@@ -115,16 +115,11 @@ describe('ContextManager', () => {
     const ctx = new ContextManager('test');
     ctx.setSystemPrompt('test-model');
 
-    ctx.setMode('plan');
-    expect(ctx.isPlanMode()).toBe(true);
-    expect(ctx.getSystemPrompt()).toContain('PLANNING');
-
     ctx.setMode('chat');
-    expect(ctx.isPlanMode()).toBe(false);
     expect(ctx.getSystemPrompt()).toContain('CHAT');
 
     ctx.setMode('act');
-    expect(ctx.isPlanMode()).toBe(false);
+    expect(ctx.getSystemPrompt()).not.toContain('CHAT mode');
   });
 
   it('estimates tokens based on sliding window', () => {
@@ -220,45 +215,29 @@ describe('ContextManager', () => {
   });
 });
 
-describe('plan mode is a model switch, not a smaller toolbox', () => {
-  // The gate used to filter bash/edit_file/write_file/multi_edit out of the
-  // tool list. That produced the worst failure mode available: the model could
-  // not see the tools, so it could neither use them NOR tell the user they were
-  // unavailable — it silently improvised. Asked to analyse config drift, it
-  // found the project's own pinky_drift.py, READ it, and then rebuilt its
-  // output with ~50 read-only calls across seven machines.
-  //
-  // Permissions are the right layer for "do not let it mutate things": they
-  // prompt per call and the model can see them. A mode is a poor access
-  // control, because it is invisible to the thing being controlled.
+describe('verify is a hold the model can see, not a smaller toolbox', () => {
+  // Plan mode used to filter bash/edit_file/write_file/multi_edit out of the
+  // tool list. The model could not see them, so it could neither use them NOR
+  // say they were unavailable — asked to analyse config drift, it READ the
+  // project's own pinky_drift.py and rebuilt its output with ~50 read-only calls.
+  // Verify keeps every tool visible; permissions refuse with a reason.
   const cm = new ContextManager({} as never);
-  cm.setMode('plan');
+  cm.setVerify(true);
   const prompt = cm.getSystemPrompt();
 
-  it('tells the model it has every tool', () => {
-    expect(prompt).toMatch(/Plan mode is a different MODEL, not a smaller toolbox/);
+  it('tells the model what is held and how to ask', () => {
+    expect(prompt).toMatch(/Verify \(ACTIVE\)/);
+    expect(prompt).toContain('request_approval');
   });
 
-  it('names the tools that are available, not withheld', () => {
-    for (const tool of ['bash', 'edit_file', 'write_file', 'multi_edit']) {
-      expect(prompt).toContain(tool);
-    }
-    expect(prompt).not.toMatch(/gated, not missing/i);
-    expect(prompt).not.toMatch(/NOT in your tool list/i);
+  it('tells the model not to reproduce a held command by hand', () => {
+    expect(prompt).toMatch(/Never reconstruct by hand/);
   });
 
-  it('tells the model to run the script rather than reproduce it by hand', () => {
-    expect(prompt).toMatch(/never reconstruct by hand/i);
-    expect(prompt).toMatch(/If a script\s+exists, run it/i);
-  });
-
-  it('frames the restraint as judgement, not capability', () => {
-    expect(prompt).toMatch(/JUDGEMENT, not capability/);
-  });
-
-  it('does not add any of this in act mode', () => {
-    const act = new ContextManager({} as never);
-    act.setMode('act');
-    expect(act.getSystemPrompt()).not.toMatch(/not a smaller toolbox/i);
+  it('adds nothing when verify is off', () => {
+    const off = new ContextManager({} as never);
+    expect(off.getSystemPrompt()).not.toMatch(/Verify \(ACTIVE\)/);
+    cm.setVerify(false);
+    expect(cm.getSystemPrompt()).not.toMatch(/Verify \(ACTIVE\)/);
   });
 });

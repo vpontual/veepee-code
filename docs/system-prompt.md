@@ -168,25 +168,18 @@ behaviors but cannot override safety rules.
 
 ## Mode-Specific Additions
 
-### Plan Mode
+### Verify
 
-When in `/plan` mode, an additional section is appended:
+While `/verify` is on (any act slot), an additional section is appended:
 
 ```
-## Plan Mode (ACTIVE)
+## Verify (ACTIVE) — read-only until the user approves
 
-You are in PLANNING mode. Think deeply before acting.
-
-- DO NOT immediately start coding or making changes.
-- ASK clarifying questions if the request is ambiguous.
-- Explore the codebase first (read files, check structure).
-- Break the task into clear, numbered steps with rationale.
-- Consider trade-offs, edge cases, and potential issues.
-- Verify frameworks/libraries with web_search.
-- Present your plan and ASK for user confirmation.
-- If the user says "deepen" or "elaborate", expand with more detail.
-- Use your thinking capability for complex architectural decisions.
-- Only start implementing when the user explicitly approves.
+- Read, search, grep and analyse freely.
+- Edits, shell commands and subagents are HELD. Calling one returns a refusal.
+- When you know what to do, call `request_approval` with the concrete proposal.
+- Once approved, every tool is available: carry out exactly what was approved.
+- Never reconstruct by hand what a held command would tell you. Propose running it.
 ```
 
 ### Chat Mode

@@ -121,7 +121,7 @@ export function Conversation({ state, rows, cols, hasResolveInput }: Conversatio
         apiConnected={state.apiConnected}
         version={state.version}
         model={state.modelName}
-        mode={state.modelRole === 'Plan' ? 'plan' : state.modelRole === 'Chat' ? 'chat' : 'act'}
+        mode={state.modelRole.startsWith('Chat') ? 'chat' : 'act'}
       />
     </Box>
   );

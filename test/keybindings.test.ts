@@ -37,8 +37,9 @@ describe('the binding map is actually wired', () => {
 });
 
 describe('resolveKey', () => {
-  it('maps Shift+Tab to the posture cycle', () => {
-    expect(resolveKey('\x1b[Z')).toBe('cyclePosture');
+  it('maps Shift+Tab to the mode cycle', () => {
+    expect(resolveKey('\x1b[Z')).toBe('cycleMode');
+    expect(resolveKey('\x1b[27;2;9~')).toBe('cycleMode');
   });
 
   it('maps the scroll keys', () => {

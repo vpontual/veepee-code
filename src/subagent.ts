@@ -255,9 +255,9 @@ export class SubAgent {
           const toolArgs = (call.function.arguments || {}) as Record<string, unknown>;
           // Subagents used to call `registry.execute` directly — no permission
           // check of any kind, with the model-supplied `tools` array as the only
-          // gate. Since `task` was also absent from PLAN_REFUSED_TOOLS, "spawn a
+          // gate. Since `task` was also absent from the refused list, "spawn a
           // subagent with bash" was a complete bypass of both the dangerous-
-          // command list and plan mode. The allowlist above stays (it is the
+          // command list and the read-only hold. The allowlist above stays (it is the
           // parent's intent); this is the safety layer underneath it.
           if (this.permissions) {
             const verdict = await this.permissions.check(toolName, toolArgs);
@@ -411,9 +411,9 @@ class GenericSubAgent {
           }
           // Subagents used to call `registry.execute` directly — no permission
           // check of any kind, with the model-supplied `tools` array as the only
-          // gate. Since `task` was also absent from PLAN_REFUSED_TOOLS, "spawn a
+          // gate. Since `task` was also absent from the refused list, "spawn a
           // subagent with bash" was a complete bypass of both the dangerous-
-          // command list and plan mode. The allowlist stays (it is the parent's
+          // command list and the read-only hold. The allowlist stays (it is the parent's
           // intent); this is the safety layer underneath it.
           if (this.permissions) {
             const verdict = await this.permissions.check(toolName, toolArgs);

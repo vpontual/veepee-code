@@ -6,39 +6,38 @@ import { whileBlocked } from './agentstate.js';
 export type PermissionDecision = 'allow' | 'allow_always' | 'deny';
 
 /**
- * How much the user wants to be asked. Cycled with Shift+Tab.
- *
- * Modelled on Claude Code's ring, with one deliberate difference noted below.
+ * How much the user wants to be asked. Set with `/permissions`. (Shift+Tab
+ * cycles modes and models in vcode, not postures — unlike Claude Code.)
  *
  *  manual       — ask before anything that is not read-only. The default.
  *  accept_edits — file edits go through; bash and everything else still ask.
  *                 Edits are reviewable after the fact (checkpoints, git); a
  *                 shell command is not.
- *  plan         — mutations are REFUSED, with a reason the model can read.
- *                 Not by hiding the tools: vcode used to filter them out of the
- *                 tool list, and the model, unable to see bash, silently
- *                 reproduced a script's output with ~50 read-only calls instead
- *                 of saying it could not run it. A refusal it can read is
- *                 recoverable; an absence is not.
  *  auto         — approve everything except the DANGEROUS_PATTERNS.
  *
- * On `auto`: Claude Code keeps full bypass OUT of the shift-tab ring and behind
+ * `verify` is separate and stacks on any posture: mutations are REFUSED, with a
+ * reason the model can read, until the user approves a proposal
+ * (request_approval). Not by hiding the tools: vcode used to filter them out,
+ * and the model, unable to see bash, silently reproduced a script's output with
+ * ~50 read-only calls instead of saying it could not run it. A refusal it can
+ * read is recoverable; an absence is not.
+ *
+ * On `auto`: Claude Code keeps full bypass OUT of its Shift+Tab ring and behind
  * a startup flag, on the reasoning that a keystroke away from "approve
- * everything" is how accidents happen. This ring includes it because it was
+ * everything" is how accidents happen. vcode offers it because it was
  * asked for, but the dangerous patterns — rm -rf, git push --force, git reset
  * --hard, docker rm/prune — still prompt. That is the line: auto removes
  * friction, it does not remove the guard on the handful of things that are not
  * undoable.
  */
-export type PermissionPosture = 'manual' | 'accept_edits' | 'plan' | 'auto';
+export type PermissionPosture = 'manual' | 'accept_edits' | 'auto';
 
-export const PERMISSION_POSTURES: PermissionPosture[] = ['manual', 'accept_edits', 'plan', 'auto'];
+export const PERMISSION_POSTURES: PermissionPosture[] = ['manual', 'accept_edits', 'auto'];
 
 /** Short labels for the status bar. */
 export const POSTURE_LABEL: Record<PermissionPosture, string> = {
   manual: 'manual',
   accept_edits: 'accept edits',
-  plan: 'plan',
   auto: 'auto',
 };
 
@@ -51,12 +50,11 @@ export function nextPosture(current: PermissionPosture): PermissionPosture {
 /** Tools that change the workspace. */
 export const EDIT_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'notebook_edit']);
 
-/** Tools plan mode refuses outright — edits plus anything that can run. */
-/** Tools plan mode refuses outright — edits plus anything that can run.
- *  `task` is here because a subagent is a general-purpose executor: spawning one
- *  with `tools: ['bash']` reproduced everything plan mode exists to prevent, and
- *  did it out of sight of the user. */
-export const PLAN_REFUSED_TOOLS = new Set([...EDIT_TOOLS, 'bash', 'shell', 'task']);
+/** Refused while verify is on, until the user approves — edits plus anything
+ *  that can run. `task` is here because a subagent is a general-purpose
+ *  executor: spawning one with `tools: ['bash']` reproduced everything the hold
+ *  exists to prevent, and did it out of sight of the user. */
+export const VERIFY_REFUSED_TOOLS = new Set([...EDIT_TOOLS, 'bash', 'shell', 'docker', 'task']);
 
 /** Split on shell separators so `ls; rm -rf /` is inspected segment by segment. */
 function segments(command: string): string[] {
@@ -265,6 +263,8 @@ export class PermissionManager {
     'task_output',
     'tool_search',
     'repo_map',
+    // Its own prompt is the approval (approve()); gating the call too would ask twice.
+    'request_approval',
   ]);
 
   /** Git subcommands with no write form — auto-allowed so routine inspection
@@ -400,7 +400,7 @@ export class PermissionManager {
    * posture including auto — those are the operations that cannot be undone by
    * a checkpoint or a git reset, so the one prompt they cost is worth it.
    *
-   * Returns a refusal REASON for plan mode rather than a bare 'deny', so the
+   * Returns a refusal REASON under verify rather than a bare 'deny', so the
    * model is told why and can adjust — that is the whole difference between
    * this and the tool-filtering it replaces.
    */
@@ -409,18 +409,19 @@ export class PermissionManager {
     toolName: string,
     args: Record<string, unknown>,
     preview?: string,
+    verify = false,
   ): Promise<PermissionDecision | { decision: 'deny'; reason: string }> {
     const dangerous = PermissionManager.DANGEROUS_PATTERNS.find(
       p => p.tool === toolName && p.check(args)
     );
     if (dangerous) return this.prompt(toolName, args, dangerous.reason, preview);
 
-    if (posture === 'plan' && PLAN_REFUSED_TOOLS.has(toolName)) {
+    if (verify && VERIFY_REFUSED_TOOLS.has(toolName)) {
       return {
         decision: 'deny',
         reason:
-          `${toolName} is not available in plan mode — you are working out an approach, not applying it. ` +
-          `Read, search and analyse freely, then present the plan and let the user switch mode to run it. ` +
+          `${toolName} is held: verify is on, so nothing changes until the user approves. ` +
+          `Read, search and analyse freely, then call request_approval with exactly what you intend to change and why. ` +
           `Do NOT reproduce by hand what this tool would have told you.`,
       };
     }
@@ -520,6 +521,16 @@ export class PermissionManager {
     }
 
     return 'deny';
+  }
+
+  /**
+   * Ask the user to approve a proposal. Always asks: an "always"/"session"
+   * answer is not remembered, or one approval would switch verify off for good.
+   */
+  async approve(what: string, preview: string): Promise<boolean> {
+    if (!this.promptHandler) return false;
+    const answer = await whileBlocked(`approve: ${what}`, () => this.promptHandler!(what, {}, undefined, preview));
+    return ['y', 'yes', 's', 'session', 'a', 'always', 'p', 'project'].includes(answer.trim().toLowerCase());
   }
 
   revoke(toolName: string): boolean {
