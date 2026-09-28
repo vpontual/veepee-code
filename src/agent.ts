@@ -4,7 +4,7 @@ import type { Config } from './config.js';
 import { OpenAIChatClient } from './openai-adapter.js';
 import { answerText } from './llm-answer.js';
 import { parseTextToolCalls, TextToolCallGate } from './text-tool-calls.js';
-import { ollamaNumCtx } from './ollama-context.js';
+import { ollamaNumCtx, vllmMaxModelLen } from './ollama-context.js';
 import { TodoList, buildTodoTool } from './todo.js';
 import type { ToolResult } from './tools/types.js';
 import { retryDecision, isTransportFailure, describeError } from './retry.js';
@@ -828,8 +828,11 @@ export class Agent {
   private async ensureContextSize(model: string): Promise<void> {
     if (!model || this.optimalContextSizes.has(model) || this.contextProbed.has(model)) return;
     this.contextProbed.add(model);
-    if (this.clientFor(model).isAdapter) return; // OpenAI servers own their window
-    const size = await ollamaNumCtx(this.config, model);
+    // A direct OpenAI-compatible server sets its own window, but vcode still
+    // has to KNOW it to size output and compaction; it publishes max_model_len.
+    const size = this.clientFor(model).isAdapter
+      ? await vllmMaxModelLen(this.config.openaiBaseUrl ?? '', model, this.config.openaiApiKey)
+      : await ollamaNumCtx(this.config, model);
     if (size) this.optimalContextSizes.set(model, size);
   }
 
@@ -1260,6 +1263,7 @@ export class Agent {
     // message, and whether we've already nudged it to stop narrating and act.
     let hasActedThisMessage = false;
     const announcedFallback = new Set<string>();
+    let contextWindowRetried = false;
     this.todoNudged = false; // one task-list reminder per user message
     let forcedActCount = 0;
     // Daily-driver #1 (self-repair): true once code is edited, cleared when the model runs
@@ -1382,6 +1386,8 @@ export class Agent {
         // Use optimal context size from benchmarks if available
         await this.ensureContextSize(currentModel); // the model can change mid-turn
         const numCtx = this.getOptimalContext(currentModel);
+        // …and so can its window (a fallback to a smaller model).
+        if (numCtx && numCtx !== this.context.getContextLimit()) this.context.setContextLimit(numCtx);
 
         // Mode-specific settings:
         // plan: thinking ON, mutating tools FILTERED OUT, exit_plan_mode required
@@ -1621,6 +1627,23 @@ export class Agent {
         if (wasAborted) {
           yield { type: 'error', error: 'Response timed out or interrupted' };
           return;
+        }
+        // The server told us its real window ("maximum context length is N") —
+        // we had assumed a bigger one. Adopt it, compact if the conversation no
+        // longer fits, and redo the step once instead of failing the run.
+        const windowMatch = /maximum context length is (\d+)/i.exec(describeError(err));
+        if (windowMatch && !contextWindowRetried) {
+          contextWindowRetried = true;
+          const window = Number(windowMatch[1]);
+          this.optimalContextSizes.set(currentModel, window);
+          this.context.setContextLimit(window);
+          yield { type: 'reset_stream' };
+          yield { type: 'info', content: `${currentModel} has a ${window}-token window; resizing the request and retrying` };
+          if (this.context.projectedTokens() > window * 0.85) {
+            yield* this._fireHooks('PreCompact', { cwd: process.cwd(), messageCount: this.context.messageCount() });
+            await this.context.compactWithRetry(createChatClient(this.config), currentModel, this.config.summarizerModel);
+          }
+          continue;
         }
         // The server could not be reached, or dropped the connection mid-reply
         // (a Jetson resetting under load did exactly this and killed the run).

@@ -43,3 +43,20 @@ describe('ollamaNumCtx', () => {
     expect(calls).toBe(1);
   });
 });
+
+import { vllmMaxModelLen } from '../src/ollama-context.js';
+
+describe('vLLM windows (max_model_len)', () => {
+  it('uses the full max_model_len of a vLLM model behind a gateway, uncapped', async () => {
+    globalThis.fetch = (async (url: string) => String(url).endsWith('/api/show')
+      ? new Response('{"error":"not found"}', { status: 404 })
+      : new Response(JSON.stringify({ data: [{ id: 'gemma4:26b-a4b', max_model_len: 32768 }] }), { status: 200 })) as typeof fetch;
+    expect(await ollamaNumCtx({ proxyUrl: 'http://gw:11434', numCtx: null }, 'gemma4:26b-a4b')).toBe(32768);
+  });
+
+  it('reads max_model_len from a direct server, with or without /v1 in the URL', async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ data: [{ id: 'm', max_model_len: 131072 }] }), { status: 200 })) as typeof fetch;
+    expect(await vllmMaxModelLen('http://gpu:8000/v1', 'm')).toBe(131072);
+    expect(await vllmMaxModelLen('http://gpu:8000', 'other')).toBeUndefined();
+  });
+});
