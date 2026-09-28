@@ -67,3 +67,60 @@ export function parseTextToolCalls(answer: string, known: (name: string) => bool
   if (text.startsWith('{') || text.startsWith('[')) return parseCalls(text, known);
   return null;
 }
+
+/**
+ * Holds back streamed text while it could still be a tool call written as
+ * text, so a recovered call never flashes on screen as raw JSON first.
+ *
+ * Only an answer that STARTS like a call is held — `{`, `[`, `<tool_call>`,
+ * or a fence whose first line is ``` or ```json followed by `{`/`[`. Anything
+ * else is released the moment that is clear, so ordinary answers, including
+ * ones that open with a ```ts block, stream exactly as before. What is held is
+ * either dropped (it was a call) or released at the end of the turn.
+ */
+export class TextToolCallGate {
+  private held = '';
+  private passing: boolean;
+
+  constructor(private readonly enabled: boolean) {
+    this.passing = !enabled;
+  }
+
+  /** Text to show now for this chunk ('' while holding). */
+  push(text: string): string {
+    if (this.passing) return text;
+    this.held += text;
+    if (this.couldBeCall(this.held.trimStart())) return '';
+    this.passing = true;
+    const out = this.held;
+    this.held = '';
+    return out;
+  }
+
+  /** The stream was reset (a reasoning trace reclassified): the answer
+   *  starts now, so judge it afresh. */
+  reset(): void {
+    this.held = '';
+    this.passing = !this.enabled;
+  }
+
+  /** End of turn: whatever is still held, for the caller to show or drop. */
+  end(): string {
+    const out = this.held;
+    this.held = '';
+    return out;
+  }
+
+  private couldBeCall(t: string): boolean {
+    if (t === '') return true; // leading whitespace: nothing to decide yet
+    if (t.startsWith('{') || t.startsWith('[')) return true;
+    if (t.startsWith('<tool_call>') || '<tool_call>'.startsWith(t)) return true;
+    if ('```'.startsWith(t)) return true;
+    if (!t.startsWith('```')) return false;
+    const nl = t.indexOf('\n');
+    if (nl < 0) return /^```(json)?$/i.test(t) || /^```j(s(on?)?)?$/i.test(t);
+    if (!/^```(json)?\s*$/i.test(t.slice(0, nl))) return false;
+    const body = t.slice(nl + 1).trimStart();
+    return body === '' || body.startsWith('{') || body.startsWith('[');
+  }
+}

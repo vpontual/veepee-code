@@ -36,3 +36,55 @@ describe('parseTextToolCalls', () => {
     expect(parseTextToolCalls('', known)).toBeNull();
   });
 });
+
+import { TextToolCallGate } from '../src/text-tool-calls.js';
+
+/** Feed chunks; return what was shown during the stream and what was held at the end. */
+function run(chunks: string[], enabled = true) {
+  const gate = new TextToolCallGate(enabled);
+  const shown = chunks.map(c => gate.push(c)).join('');
+  return { shown, held: gate.end() };
+}
+
+describe('TextToolCallGate', () => {
+  it('holds a bare JSON call so it never reaches the screen', () => {
+    expect(run(['{"name": "read_', 'file", "arguments": {"path": "a"}}'])).toEqual({ shown: '', held: '{"name": "read_file", "arguments": {"path": "a"}}' });
+  });
+
+  it('holds <tool_call> and ```json calls, even split mid-token', () => {
+    expect(run(['<tool', '_call>{"name":"x"}</tool_call>']).shown).toBe('');
+    expect(run(['``', '`js', 'on\n', '{"name":"x"}\n```']).shown).toBe('');
+  });
+
+  it('streams ordinary prose at once', () => {
+    expect(run(['The secret ', 'word is PELICAN.'])).toEqual({ shown: 'The secret word is PELICAN.', held: '' });
+  });
+
+  it('releases a ```ts block as soon as the fence line shows it is code', () => {
+    const gate = new TextToolCallGate(true);
+    expect(gate.push('```')).toBe('');
+    expect(gate.push('ts\nconst x = 1;\n')).toBe('```ts\nconst x = 1;\n');
+    expect(gate.push('```')).toBe('```');
+  });
+
+  it('releases a plain fence whose body is not JSON', () => {
+    expect(run(['```\n', 'npm test\n```']).shown).toBe('```\nnpm test\n```');
+  });
+
+  it('holds leading whitespace until there is something to judge', () => {
+    const gate = new TextToolCallGate(true);
+    expect(gate.push('\n\n')).toBe('');
+    expect(gate.push('Hello')).toBe('\n\nHello');
+  });
+
+  it('judges afresh after a reset (reasoning reclassified)', () => {
+    const gate = new TextToolCallGate(true);
+    expect(gate.push('Let me think')).toBe('Let me think');
+    gate.reset();
+    expect(gate.push('{"name":"x"}')).toBe('');
+  });
+
+  it('passes everything through when no tools were offered', () => {
+    expect(run(['{"a":1}'], false)).toEqual({ shown: '{"a":1}', held: '' });
+  });
+});

@@ -3,7 +3,7 @@ import type { Message, ToolCall } from 'ollama';
 import type { Config } from './config.js';
 import { OpenAIChatClient } from './openai-adapter.js';
 import { answerText } from './llm-answer.js';
-import { parseTextToolCalls } from './text-tool-calls.js';
+import { parseTextToolCalls, TextToolCallGate } from './text-tool-calls.js';
 import { ollamaNumCtx } from './ollama-context.js';
 import { retryDecision } from './retry.js';
 import { killRunningBashCommands } from './tools/coding.js';
@@ -1256,6 +1256,8 @@ export class Agent {
       let toolCalls: ToolCall[] = [];
       // Names of the tools offered this turn (chat mode offers a subset).
       let offeredTools = new Set<string>();
+      // Holds back text that may be a tool call written as text (see gate).
+      let gate = new TextToolCallGate(false);
       let inThinking = false;
       let thinkingBuffer = '';
       let evalCount = 0;
@@ -1310,6 +1312,7 @@ export class Agent {
           tools = tools.filter(t => allowedTools.has(t.function?.name || ''));
         }
         offeredTools = new Set(tools.map(t => t.function?.name || ''));
+        gate = new TextToolCallGate(offeredTools.size > 0);
         const effortOpts = this.outputBudget();
         // Sampling preset: chat mode → conversational/general; act/plan → coding.
         // Both Qwen-recommended; harmless on other Qwen3.x models, only wrong if
@@ -1380,6 +1383,8 @@ export class Agent {
           // Check for abort
           if (this.abortController?.signal.aborted) {
             if (stallTimer) clearTimeout(stallTimer);
+            const held = gate.end();
+            if (held) yield { type: 'text', content: held };
             yield { type: 'error', error: 'Interrupted by user' };
             this.abortController = null;
             return;
@@ -1417,7 +1422,7 @@ export class Agent {
               inThinking = true;
               // Extract any text before <think> tag
               const before = text.split('<think>')[0];
-              if (before) yield { type: 'text', content: before };
+              if (before) { const shown = gate.push(before); if (shown) yield { type: 'text', content: shown }; }
               // Start thinking buffer
               thinkingBuffer = text.split('<think>').slice(1).join('<think>');
               yield { type: 'thinking', content: '...' }; // signal thinking started
@@ -1439,8 +1444,9 @@ export class Agent {
               const reasoningText = (streamedBefore + beforeClose).trim();
 
               yield { type: 'reset_stream' };
+              gate.reset();
               if (reasoningText) yield { type: 'thinking', content: reasoningText };
-              if (afterClose) yield { type: 'text', content: afterClose };
+              if (afterClose) { const shown = gate.push(afterClose); if (shown) yield { type: 'text', content: shown }; }
               continue;
             }
 
@@ -1457,7 +1463,7 @@ export class Agent {
 
                 // Any text after </think> is regular output
                 const after = parts.slice(1).join('</think>');
-                if (after) yield { type: 'text', content: after };
+                if (after) { const shown = gate.push(after); if (shown) yield { type: 'text', content: shown }; }
               } else {
                 thinkingBuffer += text;
                 // Periodically update thinking indicator
@@ -1468,7 +1474,8 @@ export class Agent {
               continue;
             }
 
-            yield { type: 'text', content: text };
+            const shown = gate.push(text);
+            if (shown) yield { type: 'text', content: shown };
           }
 
           if (chunk.message.tool_calls && chunk.message.tool_calls.length > 0) {
@@ -1491,6 +1498,9 @@ export class Agent {
         }
       } catch (err) {
         if (stallTimer) clearTimeout(stallTimer);
+        // Whatever the gate was holding is part of the answer; do not lose it.
+        const heldOnError = gate.end();
+        if (heldOnError) yield { type: 'text', content: heldOnError };
         const wasAborted = this.abortController?.signal.aborted;
         this.abortController = null;
         if (wasAborted) {
@@ -1564,13 +1574,17 @@ export class Agent {
       // A tool call written as text (small local models do this) becomes a
       // real one — but only if the whole answer is calls to tools offered this
       // turn. See text-tool-calls.ts for why it is that strict.
-      if (toolCalls.length === 0 && fullContent.trim()) {
-        const recovered = parseTextToolCalls(answerText(fullContent), (n) => offeredTools.has(n));
-        if (recovered) {
-          toolCalls = recovered;
-          fullContent = '';
-          yield { type: 'info', content: 'The model wrote its tool call as text; running it as a tool call.' };
-        }
+      const heldText = gate.end();
+      const recovered = toolCalls.length === 0 && fullContent.trim()
+        ? parseTextToolCalls(answerText(fullContent), (n) => offeredTools.has(n))
+        : null;
+      if (recovered) {
+        // The held text WAS the call: it is run, never shown.
+        toolCalls = recovered;
+        fullContent = '';
+      } else if (heldText) {
+        // It only looked like one: show it now, unchanged.
+        yield { type: 'text', content: heldText };
       }
 
       // Add assistant message to context
