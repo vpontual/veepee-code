@@ -8,6 +8,7 @@ import type { ModelRoster } from './benchmark.js';
 import { generationLimiter } from './generation-limit.js';
 import { createChatClient, isDirectOnly } from './llm-client.js';
 import { ollamaNumCtx } from './ollama-context.js';
+import { pinkyShortRules } from './context.js';
 import { createWorktree, type WorktreeInfo } from './worktree.js';
 import { runHooks } from './hooks.js';
 import { execFileSync } from 'child_process';
@@ -166,6 +167,11 @@ export class SubAgent {
 
   /** Get the system prompt for this sub-agent role */
   private getSystemPrompt(): string {
+    const rules = pinkyShortRules();
+    return this.rolePrompt() + (rules ? `\n\n${rules}` : '');
+  }
+
+  private rolePrompt(): string {
     switch (this.role) {
       case 'search':
         return `You are a search sub-agent. Your job is to find information using web_search, web_fetch, and news tools. Be thorough but fast. Return only the relevant findings — no commentary.`;
@@ -356,7 +362,8 @@ class GenericSubAgent {
           'You have your own conversation context. Use the tools available to ' +
           'complete the task, then return a concise final answer. ' +
           'Do not delegate further — finish the task yourself.' +
-          (this.instructions ? `\n\n${this.instructions}` : ''),
+          (this.instructions ? `\n\n${this.instructions}` : '') +
+          withRules(),
       },
       { role: 'user', content: prompt },
     ];
@@ -780,4 +787,10 @@ export class SubAgentManager {
       total: this.tracked.size,
     };
   }
+}
+
+/** The operator's short rules, as a prompt suffix ('' without Pinky). */
+function withRules(): string {
+  const rules = pinkyShortRules();
+  return rules ? `\n\n${rules}` : '';
 }

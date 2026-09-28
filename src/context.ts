@@ -233,6 +233,44 @@ export function findPinkyRoot(home: string = process.env.HOME || '~'): string | 
   return existsSync(join(mirror, 'PINKY.md')) ? mirror : null;
 }
 
+/**
+ * VP's hard rules, short: each rule's bold lead line under its section heading,
+ * from identity/rules.md (clone or mirror), plus a pointer to the full file.
+ * For subagents, which used to get no operator context at all — the full
+ * identity set is ~30k characters, too much for a focused helper's prompt.
+ * Derived on each call, so it follows the file; '' when there is no Pinky.
+ */
+export function pinkyShortRules(home: string = process.env.HOME || '~'): string {
+  const root = findPinkyRoot(home);
+  if (!root) return '';
+  const path = join(root, 'identity', 'rules.md');
+  let text = '';
+  try { text = readFileSync(path, 'utf-8'); } catch { return ''; }
+  const out: string[] = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const heading = /^##\s+(.+)/.exec(lines[i]);
+    if (heading) { out.push(`\n${heading[1].trim()}:`); continue; }
+    if (!/^\s*-\s+\*\*/.test(lines[i])) continue;
+    // The bullet with its wrapped continuation lines, then the bold lead plus
+    // the first sentence after it: the lead alone ("VP is the only developer")
+    // can drop the rule itself ("never attribute commits to agents").
+    let bullet = lines[i].replace(/^\s*-\s+/, '');
+    while (i + 1 < lines.length && /^\s{2,}\S/.test(lines[i + 1])) bullet += ' ' + lines[++i].trim();
+    const m = /^\*\*(.+?)\*\*\s*(.*)$/.exec(bullet);
+    if (!m) continue;
+    const next = /^(.*?[.!?])(\s|$)/.exec(m[2].replace(/`/g, ''));
+    const tail = next && next[1].length <= 220 ? ` ${next[1]}` : '';
+    out.push(`- ${m[1].trim()}${tail}`);
+  }
+  // Drop headings that ended up with no rules under them.
+  const kept = out.filter((l, i) => !l.endsWith(':') || (out[i + 1] ?? '').startsWith('- '));
+  if (!kept.some(l => l.startsWith('- '))) return '';
+  let body = kept.join('\n').trim();
+  if (body.length > 6_000) body = body.slice(0, 6_000).replace(/\n[^\n]*$/, '');
+  return `## Operator rules (Pinky, short form)\n\nThe user's hard rules. The full text is in ${path}.\n\n${body}`;
+}
+
 function loadPinky(): string {
   const root = findPinkyRoot();
   if (!root) return '';

@@ -44,3 +44,41 @@ describe('Pinky from the MCP server when there is no local clone', () => {
     expect(existsSync(pinkyCacheDir(home))).toBe(false);
   });
 });
+
+import { pinkyShortRules } from '../src/context.js';
+
+describe('short rules for subagents', () => {
+  function homeWithRules(rules: string): string {
+    const home = mkdtempSync(join(tmpdir(), 'vcode-rules-'));
+    mkdirSync(join(home, 'pinky', 'identity'), { recursive: true });
+    writeFileSync(join(home, 'pinky', 'PINKY.md'), '# index');
+    writeFileSync(join(home, 'pinky', 'identity', 'rules.md'), rules);
+    return home;
+  }
+
+  it('keeps each rule\'s lead and first sentence, under its heading, with a pointer to the full file', () => {
+    const home = homeWithRules([
+      '# Hard rules', '', '## Working with VP', '',
+      '- **VP is the only developer.** Never attribute commits to',
+      '  agents or imaginary collaborators. Longer explanation follows here.',
+      '- **Test before presenting.** Verify it yourself.',
+      '', '## Empty section', 'prose only', '',
+    ].join('\n'));
+    const r = pinkyShortRules(home);
+    expect(r).toContain('Working with VP:');
+    expect(r).toContain('- VP is the only developer. Never attribute commits to agents or imaginary collaborators.');
+    expect(r).not.toContain('Longer explanation');
+    expect(r).not.toContain('Empty section');
+    expect(r).toContain(join(home, 'pinky', 'identity', 'rules.md'));
+  });
+
+  it('is empty without Pinky, so subagent prompts stay as they were', () => {
+    expect(pinkyShortRules(mkdtempSync(join(tmpdir(), 'vcode-none-')))).toBe('');
+  });
+
+  it('is added to both kinds of subagent prompt', () => {
+    const src = readFileSync(new URL('../src/subagent.ts', import.meta.url), 'utf-8');
+    expect(src).toMatch(/return this\.rolePrompt\(\) \+ \(rules \?/);
+    expect(src).toMatch(/\(this\.instructions \? `\\n\\n\$\{this\.instructions\}` : ''\) \+\s*withRules\(\)/);
+  });
+});
