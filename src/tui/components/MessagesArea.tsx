@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { theme, icons } from '../theme.js';
-import { formatMessage } from './MessageBlock.js';
+import { formatMessage, formatStreamingAssistant } from './MessageBlock.js';
 import type { Message, PermissionOption } from '../types.js';
 
 function stripAnsi(str: string): string {
@@ -84,9 +84,8 @@ export function MessagesArea({
   // Add stream buffer if active — render as assistant message for consistent styling
   if (streamActive && streamBuffer) {
     renderedLines.push(' ');
-    const streamMsg = { role: 'assistant' as const, content: streamBuffer };
-    const streamLines = formatMessage(streamMsg, maxWidth, renderTick);
-    renderedLines.push(...streamLines);
+    // Incremental: only the still-changing tail is re-formatted per chunk.
+    renderedLines.push(...formatStreamingAssistant(streamBuffer, maxWidth));
   }
 
   // Add permission menu if active

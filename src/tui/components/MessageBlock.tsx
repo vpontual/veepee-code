@@ -172,6 +172,57 @@ export function formatMessage(msg: Message, maxWidth: number, spinnerFrame = 0):
   return lines;
 }
 
+/**
+ * The reply being streamed, formatted incrementally.
+ *
+ * The streaming message is a new object on every chunk, so the identity cache
+ * above never hits it: each chunk re-ran markdown parsing and highlighting over
+ * the WHOLE reply. Measured: ~2ms per render at 500 chars, ~22ms at 16k — with
+ * one render per chunk, a long answer at 60-100 chunks/s cost more drawing time
+ * than it had, and streaming stuttered as the reply grew.
+ *
+ * formatAssistantMarkdown works line by line and its only state is "inside a
+ * code fence", so complete lines up to a point where no fence is open format
+ * identically on their own. Those settled lines are formatted once and kept;
+ * only the unsettled tail (the current line, or an open code block) is
+ * re-formatted per chunk. The output is exactly formatMessage's.
+ */
+let streamCache: { width: number; settledText: string; settledLines: string[] } | null = null;
+
+export function formatStreamingAssistant(content: string, maxWidth: number): string[] {
+  const width = maxWidth - 4;
+  if (!streamCache || streamCache.width !== width || !content.startsWith(streamCache.settledText)) {
+    streamCache = { width, settledText: '', settledLines: [] };
+  }
+  // Find the furthest line boundary after which no code fence is open.
+  const rest = content.slice(streamCache.settledText.length);
+  let settleAt = 0;
+  let inFence = false;
+  let lineStart = 0;
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] !== '\n') continue;
+    if (/^\s*```(\w*)\s*$/.test(rest.slice(lineStart, i))) inFence = !inFence;
+    lineStart = i + 1;
+    if (!inFence) settleAt = i + 1;
+  }
+  if (settleAt > 0) {
+    // Settled text always ends in '\n'; format it without that final newline so
+    // it yields exactly the lines the full text would (split('\n') boundary).
+    const chunk = rest.slice(0, settleAt - 1);
+    streamCache.settledLines.push(...formatAssistantMarkdown(chunk, width));
+    streamCache.settledText += rest.slice(0, settleAt);
+  }
+  const tail = content.slice(streamCache.settledText.length);
+  const lines = streamCache.settledText
+    ? [...streamCache.settledLines, ...formatAssistantMarkdown(tail, width)]
+    : formatAssistantMarkdown(tail, width);
+  return lines.map((l, i) =>
+    i === 0
+      ? `${theme.accent(icons.dot)} ${l}`
+      : `  ${l}`
+  );
+}
+
 function formatMessageUncached(msg: Message, maxWidth: number, spinnerFrame: number): string[] {
   switch (msg.role) {
     case 'user': {

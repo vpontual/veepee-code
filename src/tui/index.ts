@@ -140,6 +140,10 @@ function getAllCommands(): CommandDef[] {
 
 // ─── TUI Class ───────────────────────────────────────────────────────────────
 
+
+/** Minimum time between stream renders (~30 fps). */
+const STREAM_FRAME_MS = 33;
+
 export class TUI {
   private inkInstance: Instance | null = null;
   private appHandle: AppHandle | null = null;
@@ -249,7 +253,26 @@ export class TUI {
 
   // ─── Dispatch helper ──────────────────────────────────────────────
 
+  /** Streamed text waiting for the next frame (see appendStream). */
+  private pendingStreamText = '';
+  private streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private flushStream(): void {
+    if (this.streamFlushTimer) { clearTimeout(this.streamFlushTimer); this.streamFlushTimer = null; }
+    if (!this.pendingStreamText) return;
+    const text = this.pendingStreamText;
+    this.pendingStreamText = '';
+    this.dispatchNow({ type: 'APPEND_STREAM', text });
+  }
+
   private dispatch(action: import('./types.js').AppAction): void {
+    // Anything else that changes the screen lands AFTER the text streamed
+    // before it, so flush first: batching must never reorder output.
+    if (action.type !== 'APPEND_STREAM') this.flushStream();
+    this.dispatchNow(action);
+  }
+
+  private dispatchNow(action: import('./types.js').AppAction): void {
     if (this.appHandle) {
       this.appHandle.dispatch(action);
     } else {
@@ -397,8 +420,17 @@ export class TUI {
     this.dispatch({ type: 'START_STREAM' });
   }
 
+  /**
+   * Streamed text is batched to at most one render per STREAM_FRAME_MS. Each
+   * chunk used to trigger its own render, so a model streaming 60-100 chunks a
+   * second asked for 60-100 full redraws a second — more than a long reply can
+   * be drawn in. The eye cannot tell 30 frames a second from 100.
+   */
   appendStream(text: string): void {
-    this.dispatch({ type: 'APPEND_STREAM', text });
+    this.pendingStreamText += text;
+    if (!this.streamFlushTimer) {
+      this.streamFlushTimer = setTimeout(() => this.flushStream(), STREAM_FRAME_MS);
+    }
   }
 
   endStream(): void {
