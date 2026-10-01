@@ -32,6 +32,28 @@ export function detectTestCommand(packageJsonText: string): string | null {
 }
 
 /**
+ * The repair loop's test command: the caller's explicit choice, else package.json.
+ *
+ * VCODE_TEST_CMD lets a caller that knows the right check say so. Added 2026-10-01: the
+ * Nightly Engineer gates state-revenue on its data validators because its `npm test` is a
+ * Playwright e2e suite that cannot pass on archman (no browsers, no running app), but the
+ * loop only knew `scripts.test` and spent three rounds making the model chase it, ending
+ * in `playwright install-deps` trying to become root and a weakened playwright.config.
+ * `VCODE_TEST_CMD=none` turns the loop off. Unset, behaviour is exactly as before.
+ */
+export function resolveTestCommand(
+  packageJsonText: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const explicit = env.VCODE_TEST_CMD;
+  if (explicit !== undefined) {
+    const cmd = explicit.trim();
+    return cmd === '' || cmd.toLowerCase() === 'none' ? null : cmd;
+  }
+  return packageJsonText === null ? null : detectTestCommand(packageJsonText);
+}
+
+/**
  * Decision: should we attempt another repair turn?
  *
  * A null exitCode means the test run itself did not complete (timeout,

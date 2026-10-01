@@ -433,6 +433,32 @@ Cite sources briefly when you search. For timeless topics — answer directly.
 Be conversational, natural, and helpful.
 `;
 
+// ─── Per-run context cap ─────────────────────────────────────────────────────
+
+/** Floor for VCODE_CONTEXT_LIMIT: below this, system prompt + tools leave no room to work. */
+export const MIN_CONTEXT_CAP = 16384;
+
+/**
+ * VCODE_CONTEXT_LIMIT as a token count, or null when unset or invalid.
+ *
+ * It is a CAP, never a raise: a caller that knows its task is narrow (the Nightly
+ * Engineer: "orient in 3-4 tool calls, one focused change") asks for a smaller window
+ * so compaction starts sooner and prompts stay small. Values below MIN_CONTEXT_CAP are
+ * ignored rather than clamped, so a typo cannot silently cripple a run.
+ */
+export function contextCapFromEnv(env: NodeJS.ProcessEnv = process.env): number | null {
+  const raw = env.VCODE_CONTEXT_LIMIT?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return null;
+  const n = Number(raw);
+  return n >= MIN_CONTEXT_CAP ? n : null;
+}
+
+/** A model-derived window, lowered to the per-run cap when one is set. */
+export function applyContextCap(tokens: number, env: NodeJS.ProcessEnv = process.env): number {
+  const cap = contextCapFromEnv(env);
+  return cap === null ? tokens : Math.min(tokens, cap);
+}
+
 // ─── Context Manager ─────────────────────────────────────────────────────────
 
 export class ContextManager {
@@ -442,13 +468,16 @@ export class ContextManager {
   private verify = false;
   private currentModel = '';
   // Compaction window (tokens). This is when vcode starts summarizing away context — NOT
-  // a model limit. The DGX serves the 35B at max-model-len 262144 and its KV cache is
-  // preallocated for that regardless, so a bigger window costs only prefill latency on
-  // large contexts, never DGX stability. 32K made vcode compact real repos away almost
-  // immediately (the daily-driver bottleneck); 128K holds multi-file work while leaving 2×
-  // headroom under the 262K hard limit for the compaction math. Models with a benchmarked
+  // a model limit. 32K made vcode compact real repos away almost immediately (the
+  // daily-driver bottleneck); 128K holds multi-file work. Models with a benchmarked
   // optimalContextSize still override this via setContextLimit().
-  private contextLimit = 131072; // daily-driver window; DGX serves up to 262144
+  // ⚠ CORRECTED 2026-10-01: this used to say a bigger window "costs only prefill latency,
+  // never DGX stability". The DGX now serves max-model-len 131072 with a byte-capped KV
+  // cache, and prefill is its hottest work: a 60-100K-token prompt draws ~90 W and takes
+  // the chip to ~94 C (critical 104 C). Compaction starts at 75% of this window (~98K).
+  // A caller that knows its task is narrow (the Nightly Engineer) can cap the window for
+  // one run with VCODE_CONTEXT_LIMIT; unset, nothing changes.
+  private contextLimit = applyContextCap(131072); // daily-driver window
   private lastPromptTokens = 0; // actual prompt tokens from last Ollama response
   private lastPromptChars = 0;  // chars we sent for that same request — the calibration pair
   /** Set when the sliding window dropped messages. Cleared by compaction. */
@@ -768,7 +797,7 @@ Modified: ${renderList(writes)}
 
   /** Set the model's context window size in tokens */
   setContextLimit(tokens: number): void {
-    this.contextLimit = tokens;
+    this.contextLimit = applyContextCap(tokens);
   }
 
   /** Get the model's context window size in tokens */

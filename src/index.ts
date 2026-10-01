@@ -43,7 +43,7 @@ import { execFile } from 'node:child_process';
 import { readdir, stat, readFile as readFs } from 'node:fs/promises';
 import { resolve as resolvePath } from 'node:path';
 import {
-  detectTestCommand,
+  resolveTestCommand,
   shouldAttemptRepair,
   buildRepairPrompt,
   clipOutput,
@@ -777,11 +777,12 @@ async function main() {
       // ─── Print-mode: run tests, self-repair if they fail ────────────────
       if (!process.env.VCODE_NO_REPAIR) {
         const pkgPath = resolve(process.cwd(), 'package.json');
-        let testCmd: string | null = null;
+        let pkgText: string | null = null;
         try {
-          const pkgText = await readFs(pkgPath, 'utf-8');
-          testCmd = detectTestCommand(pkgText);
+          pkgText = await readFs(pkgPath, 'utf-8');
         } catch { /* no package.json */ }
+        // VCODE_TEST_CMD (a caller's explicit check, or "none") wins over scripts.test.
+        const testCmd: string | null = resolveTestCommand(pkgText);
 
         if (testCmd) {
           const runResult = agent.getRunResult();

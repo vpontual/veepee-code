@@ -135,3 +135,29 @@ describe('diffTestFiles', () => {
     expect(diffTestFiles(before, after).deleted).toEqual(['a', 'z']);
   });
 });
+
+// ─── resolveTestCommand: the caller's VCODE_TEST_CMD (2026-10-01) ─────────────
+import { resolveTestCommand } from '../src/repair-loop.js';
+
+describe('resolveTestCommand', () => {
+  const pkg = JSON.stringify({ scripts: { test: 'npm run test:e2e' } });
+
+  it('falls back to scripts.test when VCODE_TEST_CMD is unset (unchanged behaviour)', () => {
+    expect(resolveTestCommand(pkg, {})).toBe('npm run test:e2e');
+    expect(resolveTestCommand(null, {})).toBeNull();
+  });
+
+  it('uses the caller\'s command over scripts.test', () => {
+    expect(resolveTestCommand(pkg, { VCODE_TEST_CMD: '  npm run validate  ' })).toBe('npm run validate');
+  });
+
+  it('works without a package.json (e.g. a python repo)', () => {
+    expect(resolveTestCommand(null, { VCODE_TEST_CMD: 'python3 -m pytest -q' })).toBe('python3 -m pytest -q');
+  });
+
+  it('"none" or empty turns the repair loop off even when scripts.test exists', () => {
+    expect(resolveTestCommand(pkg, { VCODE_TEST_CMD: 'none' })).toBeNull();
+    expect(resolveTestCommand(pkg, { VCODE_TEST_CMD: 'NONE' })).toBeNull();
+    expect(resolveTestCommand(pkg, { VCODE_TEST_CMD: '' })).toBeNull();
+  });
+});
