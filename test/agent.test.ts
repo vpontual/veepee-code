@@ -778,6 +778,21 @@ describe('the output ceiling is a budget, not a constant', () => {
     expect(src).toMatch(/const room = limit - prompt - RESERVE;/);
     expect(src).toMatch(/if \(room >= ceiling\) return \{ num_predict: ceiling \};/);
   });
+
+  it('sizes the prompt by what will be sent, not what the last request cost', () => {
+    // The last measurement excludes the reply and tool results added since; a
+    // big test log after it overflowed the window (2026-10-01, Nightly Engineer).
+    const src = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
+    expect(src).toContain('const prompt = this.context.currentPromptTokens() + toolSchemaTokens');
+  });
+
+  it('compacts on an overflow of a window it already knew', () => {
+    // vLLM counts "at least N" prompt tokens and stops; when the window was
+    // already right, only compaction can make the retry fit.
+    const src = readFileSync(new URL('../src/agent.ts', import.meta.url), 'utf-8');
+    expect(src).toContain('const knewWindow = this.context.getContextLimit() === window;');
+    expect(src).toContain('if (knewWindow || this.context.projectedTokens() > window * 0.85) {');
+  });
 });
 
 describe('the coding preset defends against degenerate repetition', () => {

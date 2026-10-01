@@ -891,7 +891,7 @@ export class Agent {
     // ~30 tools they are several thousand tokens on their own — far more than a
     // flat reserve covered. gemma4 (32k window) was asked for 15k of output on
     // a prompt vLLM counted ~2k larger than our estimate, every attempt.
-    const prompt = (this.context.getLastPromptTokens() || this.context.projectedTokens()) + toolSchemaTokens + this.promptUndercount;
+    const prompt = this.context.currentPromptTokens() + toolSchemaTokens + this.promptUndercount;
     const RESERVE = 1_024; // chat template overhead and residual estimate error
     const room = limit - prompt - RESERVE;
     if (room >= ceiling) return { num_predict: ceiling };
@@ -1621,6 +1621,11 @@ export class Agent {
         if (windowMatch && contextWindowRetries < 2) {
           contextWindowRetries++;
           const window = Number(windowMatch[1]);
+          // Did we already know this window? Then resizing changes nothing: our size
+          // estimate was wrong, and vLLM's "at least N" is a floor (it stops counting
+          // at window - requested + 1), so the real overshoot is unknown. Compact
+          // rather than retry the same request with a smaller output ceiling.
+          const knewWindow = this.context.getContextLimit() === window;
           this.optimalContextSizes.set(currentModel, window);
           this.context.setContextLimit(window);
           // vLLM also states the prompt's real size ("prompt contains at least N
@@ -1635,7 +1640,7 @@ export class Agent {
           }
           yield { type: 'reset_stream' };
           yield { type: 'info', content: `${currentModel} has a ${window}-token window; resizing the request and retrying` };
-          if (this.context.projectedTokens() > window * 0.85) {
+          if (knewWindow || this.context.projectedTokens() > window * 0.85) {
             yield* this._fireHooks('PreCompact', { cwd: process.cwd(), messageCount: this.context.messageCount() });
             await this.context.compactWithRetry(createChatClient(this.config), currentModel, this.config.summarizerModel);
           }

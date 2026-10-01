@@ -479,6 +479,9 @@ export class ContextManager {
   // one run with VCODE_CONTEXT_LIMIT; unset, nothing changes.
   private contextLimit = applyContextCap(131072); // daily-driver window
   private lastPromptTokens = 0; // actual prompt tokens from last Ollama response
+  /** projectedTokens() at the moment lastPromptTokens was measured, so the content
+   *  added (or removed) since can be counted on top of the measurement. */
+  private projectedAtRecord = 0;
   private lastPromptChars = 0;  // chars we sent for that same request — the calibration pair
   /** Set when the sliding window dropped messages. Cleared by compaction. */
   private windowTruncated = false;
@@ -816,6 +819,7 @@ Modified: ${renderList(writes)}
       if (calls) { try { chars += JSON.stringify(calls).length; } catch { /* ignore */ } }
     }
     this.lastPromptChars = chars;
+    this.projectedAtRecord = this.projectedTokens();
   }
 
   /** Get the last recorded prompt token count */
@@ -1091,10 +1095,27 @@ Modified: ${renderList(writes)}
     return tokens;
   }
 
+  /**
+   * What the NEXT request will cost: the server's last measurement, adjusted by
+   * what has been added or removed since.
+   *
+   * The measurement alone is what the PREVIOUS request cost. It does not include
+   * the reply to that request or the tool results that came after it, and every
+   * size check used it as if it did. A 40 KB test log appended after the last
+   * request was invisible to compaction and to the output budget, so the next
+   * request asked vLLM for 114K+ prompt tokens plus 16K of output on a 131K
+   * window and was refused outright — two Nightly Engineer jobs on 2026-10-01 and
+   * every AGX job on 09-29 and 09-30 ended that way. The delta is an estimate on
+   * the measured chars-per-token scale; the bulk stays measured. Pruning and
+   * compaction shrink the projection, so they now shrink this too.
+   */
+  currentPromptTokens(): number {
+    if (this.lastPromptTokens <= 0) return this.projectedTokens();
+    return Math.max(0, this.lastPromptTokens + this.projectedTokens() - this.projectedAtRecord);
+  }
+
   estimateTokens(): number {
-    // What the last request actually cost, when we know it.
-    if (this.lastPromptTokens > 0) return this.lastPromptTokens;
-    return this.projectedTokens();
+    return this.currentPromptTokens();
   }
 
   /** Check if context is approaching the limit and needs compaction.
@@ -1105,7 +1126,7 @@ Modified: ${renderList(writes)}
    *  `getMessages()` will start dropping messages. Silent truncation must never
    *  be how a long session ends up smaller. */
   needsCompaction(): boolean {
-    const used = this.lastPromptTokens > 0 ? this.lastPromptTokens : this.projectedTokens();
+    const used = this.currentPromptTokens();
     if (used > this.contextLimit * 0.75) return true;
     if (this.windowTruncated) return true;
     return this.projectedTokens() > this.messageBudget() * 0.9;
@@ -1215,7 +1236,7 @@ Modified: ${renderList(writes)}
 
   /** Check if context is critically full (pre-compaction snapshot trigger) */
   isContextCritical(): boolean {
-    const used = this.lastPromptTokens > 0 ? this.lastPromptTokens : this.projectedTokens();
+    const used = this.currentPromptTokens();
     return used > this.contextLimit * 0.90;
   }
 
